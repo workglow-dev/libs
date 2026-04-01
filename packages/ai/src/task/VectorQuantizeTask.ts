@@ -7,8 +7,21 @@
 import type { IRunConfig, TaskConfig } from "@workglow/task-graph";
 import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, TypedArray } from "@workglow/util/schema";
-import { normalizeNumberArray, TensorType, TypedArraySchema } from "@workglow/util/schema";
+import {
+  normalizeNumberArray,
+  TensorType,
+  turboDequantize,
+  turboQuantize,
+  TypedArraySchema,
+} from "@workglow/util/schema";
 import type { Capability } from "../capability/Capabilities";
+
+export const QuantizationMethod = {
+  LINEAR: "linear",
+  TURBO: "turbo",
+} as const;
+
+export type QuantizationMethod = (typeof QuantizationMethod)[keyof typeof QuantizationMethod];
 
 const inputSchema = {
   type: "object",
@@ -42,6 +55,30 @@ const inputSchema = {
       title: "Normalize",
       description: "Normalize vector before quantization",
       default: true,
+    },
+    method: {
+      type: "string",
+      enum: Object.values(QuantizationMethod),
+      title: "Method",
+      description:
+        "Quantization method: 'linear' for simple min-max scaling, 'turbo' for TurboQuant (rotation + optimal scalar quantization with near-optimal distortion)",
+      default: QuantizationMethod.LINEAR,
+    },
+    turboBits: {
+      type: "number",
+      title: "TurboQuant Bits",
+      description:
+        "Bits per dimension for TurboQuant method (1-8). Lower = more compression. 4 bits gives ~8x compression with near-lossless quality.",
+      default: 4,
+      minimum: 1,
+      maximum: 8,
+    },
+    turboSeed: {
+      type: "number",
+      title: "TurboQuant Seed",
+      description:
+        "Seed for the random rotation in TurboQuant. All vectors in the same collection must use the same seed for similarity search to work.",
+      default: 42,
     },
   },
   required: ["vector", "targetType"],
@@ -89,6 +126,9 @@ export type VectorQuantizeTaskInput = {
   normalize?: boolean | undefined;
   vector: TypedArray | TypedArray[];
   targetType: "float16" | "float32" | "float64" | "int8" | "uint8" | "int16" | "uint16";
+  method?: QuantizationMethod | undefined;
+  turboBits?: number | undefined;
+  turboSeed?: number | undefined;
 };
 export type VectorQuantizeTaskOutput = {
   vector: TypedArray | TypedArray[];
@@ -128,12 +168,28 @@ export class VectorQuantizeTask extends Task<
   }
 
   override async executePreview(input: VectorQuantizeTaskInput): Promise<VectorQuantizeTaskOutput> {
-    const { vector, targetType, normalize = true } = input;
+    const {
+      vector,
+      targetType,
+      normalize = true,
+      method = QuantizationMethod.LINEAR,
+      turboBits = 4,
+      turboSeed = 42,
+    } = input;
     const isArray = Array.isArray(vector);
     const vectors = isArray ? vector : [vector];
     const originalType = this.getVectorType(vectors[0]);
 
-    const quantized = vectors.map((v) => this.vectorQuantize(v, targetType, normalize));
+    let quantized: TypedArray[];
+
+    if (method === QuantizationMethod.TURBO) {
+      quantized = vectors.map((v) => {
+        const result = turboQuantize(v, { bits: turboBits, seed: turboSeed });
+        return turboDequantize(result);
+      });
+    } else {
+      quantized = vectors.map((v) => this.vectorQuantize(v, targetType, normalize));
+    }
 
     return {
       vector: isArray ? quantized : quantized[0],
