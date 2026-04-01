@@ -23,7 +23,6 @@
  */
 
 import type { TypedArray } from "./TypedArray";
-import { normalize } from "./VectorUtils";
 
 /**
  * Configuration for TurboQuant quantization.
