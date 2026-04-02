@@ -22,6 +22,7 @@
  * - Preserves inner products for accurate similarity search
  */
 
+import { TensorType } from "./Tensor";
 import type { TypedArray } from "./TypedArray";
 
 /**
@@ -457,6 +458,97 @@ export function turboQuantizedCosineSimilarity(
   // Inner product of unit vectors = cosine similarity
   // turboQuantizedInnerProduct includes norm scaling, so divide it out
   return turboQuantizedInnerProduct(a, b) / (a.norm * b.norm);
+}
+
+/** Integer target types supported by turboQuantizeToTypedArray */
+const INTEGER_TARGET_RANGES = {
+  [TensorType.INT8]: { signed: true, max: 127 },
+  [TensorType.UINT8]: { signed: false, max: 255 },
+  [TensorType.INT16]: { signed: true, max: 32767 },
+  [TensorType.UINT16]: { signed: false, max: 65535 },
+} as const;
+
+/**
+ * Quantizes a vector using TurboQuant rotation directly into a byte-aligned TypedArray.
+ *
+ * Unlike the packed `turboQuantize`, this outputs a standard TypedArray (Int8Array,
+ * Uint8Array, Int16Array, Uint16Array) with the **same `.length`** as the input vector.
+ * This means the output works transparently with existing storage backends and
+ * similarity search (cosineSimilarity requires matching lengths).
+ *
+ * The rotation spreads information across all coordinates and concentrates their
+ * distribution, yielding better distortion than naive linear quantization at the
+ * same byte width.
+ *
+ * Note: The vector norm is not preserved (cosine similarity is scale-invariant,
+ * so this is fine for similarity search).
+ *
+ * @param vector - Input vector (any TypedArray)
+ * @param targetType - Target integer type (INT8, UINT8, INT16, UINT16)
+ * @param seed - Seed for the random rotation (default: 42). All vectors in the
+ *   same collection must use the same seed for similarity search to work.
+ * @returns TypedArray of the target type with `.length === vector.length`
+ */
+export function turboQuantizeToTypedArray(
+  vector: TypedArray,
+  targetType: TensorType,
+  seed: number = DEFAULT_SEED
+): TypedArray {
+  const range = INTEGER_TARGET_RANGES[targetType as keyof typeof INTEGER_TARGET_RANGES];
+  if (!range) {
+    throw new Error(
+      `turboQuantizeToTypedArray only supports integer target types (int8, uint8, int16, uint16), got "${targetType}"`
+    );
+  }
+
+  const d = vector.length;
+  if (d === 0) {
+    throw new Error("Cannot quantize an empty vector");
+  }
+
+  // Step 1: Normalize to unit vector
+  let norm = 0;
+  for (let i = 0; i < d; i++) {
+    norm += vector[i] * vector[i];
+  }
+  norm = Math.sqrt(norm);
+
+  const values = new Float64Array(d);
+  if (norm > 0) {
+    for (let i = 0; i < d; i++) {
+      values[i] = vector[i] / norm;
+    }
+  }
+
+  // Step 2: Random rotation (spreads information, concentrates distribution)
+  // randomRotate returns all paddedLen coordinates; we only use the first d.
+  const paddedLen = nextPowerOf2(d);
+  const rotated = randomRotate(values, seed);
+
+  // Step 3: Map rotated coordinates to target integer range
+  // After rotation in paddedLen-dimensional space, coordinates have std dev ≈ 1/sqrt(paddedLen).
+  const coverage = 3.0;
+  const scale = coverage / Math.sqrt(paddedLen);
+
+  if (range.signed) {
+    // Map [-scale, scale] → [-max, max]
+    const max = range.max;
+    const result = targetType === TensorType.INT8 ? new Int8Array(d) : new Int16Array(d);
+    for (let i = 0; i < d; i++) {
+      const clamped = Math.max(-scale, Math.min(scale, rotated[i]));
+      result[i] = Math.round((clamped / scale) * max);
+    }
+    return result;
+  } else {
+    // Map [-scale, scale] → [0, max]
+    const max = range.max;
+    const result = targetType === TensorType.UINT8 ? new Uint8Array(d) : new Uint16Array(d);
+    for (let i = 0; i < d; i++) {
+      const clamped = Math.max(-scale, Math.min(scale, rotated[i]));
+      result[i] = Math.round(((clamped + scale) / (2 * scale)) * max);
+    }
+    return result;
+  }
 }
 
 /**

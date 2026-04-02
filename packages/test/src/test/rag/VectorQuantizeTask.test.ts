@@ -241,23 +241,21 @@ describe("VectorQuantizeTask", () => {
   });
 
   describe("turbo method", () => {
-    test("should return Float32Array and report targetType as FLOAT32", async () => {
+    test("should return target TypedArray type directly", async () => {
       const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
 
       const result = await vectorQuantize({
         vector,
         targetType: TensorType.INT8,
         method: "turbo",
-        turboBits: 4,
         turboSeed: 42,
       });
 
       expect(result).toBeDefined();
-      expect(result.vector).toBeInstanceOf(Float32Array);
-      // targetType must reflect the actual output, not the requested type
-      expect(result.targetType).toBe(TensorType.FLOAT32);
+      expect(result.vector).toBeInstanceOf(Int8Array);
+      expect(result.targetType).toBe(TensorType.INT8);
       expect(result.originalType).toBe(TensorType.FLOAT32);
-      expect((result.vector as Float32Array).length).toBe(vector.length);
+      expect((result.vector as Int8Array).length).toBe(vector.length);
     });
 
     test("should be deterministic for a fixed seed", async () => {
@@ -265,22 +263,20 @@ describe("VectorQuantizeTask", () => {
 
       const r1 = await vectorQuantize({
         vector,
-        targetType: TensorType.FLOAT32,
+        targetType: TensorType.INT8,
         method: "turbo",
-        turboBits: 4,
         turboSeed: 99,
       });
 
       const r2 = await vectorQuantize({
         vector,
-        targetType: TensorType.FLOAT32,
+        targetType: TensorType.INT8,
         method: "turbo",
-        turboBits: 4,
         turboSeed: 99,
       });
 
-      const v1 = r1.vector as Float32Array;
-      const v2 = r2.vector as Float32Array;
+      const v1 = r1.vector as Int8Array;
+      const v2 = r2.vector as Int8Array;
       expect(v1.length).toBe(v2.length);
       for (let i = 0; i < v1.length; i++) {
         expect(v1[i]).toBe(v2[i]);
@@ -297,15 +293,14 @@ describe("VectorQuantizeTask", () => {
         vector: vectors,
         targetType: TensorType.INT8,
         method: "turbo",
-        turboBits: 4,
         turboSeed: 42,
       });
 
       expect(Array.isArray(result.vector)).toBe(true);
-      const out = result.vector as Float32Array[];
+      const out = result.vector as Int8Array[];
       expect(out.length).toBe(2);
-      out.forEach((v) => expect(v).toBeInstanceOf(Float32Array));
-      expect(result.targetType).toBe(TensorType.FLOAT32);
+      out.forEach((v) => expect(v).toBeInstanceOf(Int8Array));
+      expect(result.targetType).toBe(TensorType.INT8);
     });
   });
 });

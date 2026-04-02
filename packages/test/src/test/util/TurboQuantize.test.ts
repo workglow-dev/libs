@@ -8,10 +8,12 @@ import { setLogger } from "@workglow/util";
 import {
   turboQuantize,
   turboDequantize,
+  turboQuantizeToTypedArray,
   turboQuantizedInnerProduct,
   turboQuantizedCosineSimilarity,
   turboQuantizeStorageBytes,
   turboQuantizeCompressionRatio,
+  TensorType,
   cosineSimilarity,
   inner,
   magnitude,
@@ -300,6 +302,146 @@ describe("TurboQuantize", () => {
 
       // At 1 bit: ratio = (512 * 4) / (512 * 1 / 8) = 32
       expect(turboQuantizeCompressionRatio(512, 1)).toBe(32);
+    });
+  });
+
+  describe("turboQuantizeToTypedArray", () => {
+    test("should produce Int8Array for INT8 target", () => {
+      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+      const result = turboQuantizeToTypedArray(vector, TensorType.INT8);
+      expect(result).toBeInstanceOf(Int8Array);
+      expect(result.length).toBe(vector.length);
+    });
+
+    test("should produce Uint8Array for UINT8 target", () => {
+      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+      const result = turboQuantizeToTypedArray(vector, TensorType.UINT8);
+      expect(result).toBeInstanceOf(Uint8Array);
+      expect(result.length).toBe(vector.length);
+    });
+
+    test("should produce Int16Array for INT16 target", () => {
+      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+      const result = turboQuantizeToTypedArray(vector, TensorType.INT16);
+      expect(result).toBeInstanceOf(Int16Array);
+      expect(result.length).toBe(vector.length);
+    });
+
+    test("should produce Uint16Array for UINT16 target", () => {
+      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+      const result = turboQuantizeToTypedArray(vector, TensorType.UINT16);
+      expect(result).toBeInstanceOf(Uint16Array);
+      expect(result.length).toBe(vector.length);
+    });
+
+    test("should reject float target types", () => {
+      const vector = new Float32Array([1, 2, 3, 4]);
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.FLOAT32)).toThrow(
+        "integer target types"
+      );
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.FLOAT64)).toThrow(
+        "integer target types"
+      );
+    });
+
+    test("should reject empty vectors", () => {
+      expect(() => turboQuantizeToTypedArray(new Float32Array(0), TensorType.INT8)).toThrow();
+    });
+
+    test("should be deterministic with same seed", () => {
+      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+      const r1 = turboQuantizeToTypedArray(vector, TensorType.INT8, 123);
+      const r2 = turboQuantizeToTypedArray(vector, TensorType.INT8, 123);
+      expect(r1).toEqual(r2);
+    });
+
+    test("should produce different results with different seeds", () => {
+      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+      const r1 = turboQuantizeToTypedArray(vector, TensorType.INT8, 1);
+      const r2 = turboQuantizeToTypedArray(vector, TensorType.INT8, 2);
+      expect(r1).not.toEqual(r2);
+    });
+
+    test("should preserve cosine similarity between vectors (Int8)", () => {
+      const d = 128;
+      const a = new Float32Array(d);
+      const b = new Float32Array(d);
+      for (let i = 0; i < d; i++) {
+        a[i] = Math.sin(i * 0.1);
+        b[i] = Math.sin(i * 0.1 + 0.5);
+      }
+
+      const trueSim = cosineSimilarity(a, b);
+      const qa = turboQuantizeToTypedArray(a, TensorType.INT8, 42);
+      const qb = turboQuantizeToTypedArray(b, TensorType.INT8, 42);
+      const quantSim = cosineSimilarity(qa, qb);
+
+      // Turbo Int8 should preserve similarity well
+      expect(Math.abs(quantSim - trueSim)).toBeLessThan(0.15);
+    });
+
+    test("should preserve cosine similarity between vectors (Int16)", () => {
+      const d = 128;
+      const a = new Float32Array(d);
+      const b = new Float32Array(d);
+      for (let i = 0; i < d; i++) {
+        a[i] = Math.sin(i * 0.1);
+        b[i] = Math.sin(i * 0.1 + 0.5);
+      }
+
+      const trueSim = cosineSimilarity(a, b);
+      const qa = turboQuantizeToTypedArray(a, TensorType.INT16, 42);
+      const qb = turboQuantizeToTypedArray(b, TensorType.INT16, 42);
+      const quantSim = cosineSimilarity(qa, qb);
+
+      // Int16 should be very close
+      expect(Math.abs(quantSim - trueSim)).toBeLessThan(0.05);
+    });
+
+    test("should give high similarity for identical vectors", () => {
+      const d = 128;
+      const v = new Float32Array(d);
+      for (let i = 0; i < d; i++) v[i] = Math.sin(i);
+
+      const qa = turboQuantizeToTypedArray(v, TensorType.INT8, 42);
+      const qb = turboQuantizeToTypedArray(v, TensorType.INT8, 42);
+
+      // Identical input + same seed = identical output
+      expect(cosineSimilarity(qa, qb)).toBeCloseTo(1, 10);
+    });
+
+    test("should handle zero vectors", () => {
+      const vector = new Float32Array([0, 0, 0, 0]);
+      const result = turboQuantizeToTypedArray(vector, TensorType.INT8);
+      expect(result.length).toBe(4);
+      // All values should be 0 (or the midpoint for unsigned)
+      for (let i = 0; i < result.length; i++) {
+        expect(result[i]).toBe(0);
+      }
+    });
+
+    test("should produce values within type range for Int8", () => {
+      const d = 256;
+      const vector = new Float32Array(d);
+      for (let i = 0; i < d; i++) vector[i] = Math.random() * 10 - 5;
+
+      const result = turboQuantizeToTypedArray(vector, TensorType.INT8);
+      for (let i = 0; i < result.length; i++) {
+        expect(result[i]).toBeGreaterThanOrEqual(-128);
+        expect(result[i]).toBeLessThanOrEqual(127);
+      }
+    });
+
+    test("should produce values within type range for Uint8", () => {
+      const d = 256;
+      const vector = new Float32Array(d);
+      for (let i = 0; i < d; i++) vector[i] = Math.random() * 10 - 5;
+
+      const result = turboQuantizeToTypedArray(vector, TensorType.UINT8);
+      for (let i = 0; i < result.length; i++) {
+        expect(result[i]).toBeGreaterThanOrEqual(0);
+        expect(result[i]).toBeLessThanOrEqual(255);
+      }
     });
   });
 
