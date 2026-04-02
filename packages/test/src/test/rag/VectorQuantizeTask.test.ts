@@ -239,4 +239,73 @@ describe("VectorQuantizeTask", () => {
     expect(result).toBeDefined();
     expect(result.vector).toBeInstanceOf(Int8Array);
   });
+
+  describe("turbo method", () => {
+    test("should return Float32Array and report targetType as FLOAT32", async () => {
+      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+
+      const result = await vectorQuantize({
+        vector,
+        targetType: TensorType.INT8,
+        method: "turbo",
+        turboBits: 4,
+        turboSeed: 42,
+      });
+
+      expect(result).toBeDefined();
+      expect(result.vector).toBeInstanceOf(Float32Array);
+      // targetType must reflect the actual output, not the requested type
+      expect(result.targetType).toBe(TensorType.FLOAT32);
+      expect(result.originalType).toBe(TensorType.FLOAT32);
+      expect((result.vector as Float32Array).length).toBe(vector.length);
+    });
+
+    test("should be deterministic for a fixed seed", async () => {
+      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+
+      const r1 = await vectorQuantize({
+        vector,
+        targetType: TensorType.FLOAT32,
+        method: "turbo",
+        turboBits: 4,
+        turboSeed: 99,
+      });
+
+      const r2 = await vectorQuantize({
+        vector,
+        targetType: TensorType.FLOAT32,
+        method: "turbo",
+        turboBits: 4,
+        turboSeed: 99,
+      });
+
+      const v1 = r1.vector as Float32Array;
+      const v2 = r2.vector as Float32Array;
+      expect(v1.length).toBe(v2.length);
+      for (let i = 0; i < v1.length; i++) {
+        expect(v1[i]).toBe(v2[i]);
+      }
+    });
+
+    test("should handle array of vectors with turbo method", async () => {
+      const vectors = [
+        new Float32Array([1, 2, 3, 4]),
+        new Float32Array([5, 6, 7, 8]),
+      ];
+
+      const result = await vectorQuantize({
+        vector: vectors,
+        targetType: TensorType.INT8,
+        method: "turbo",
+        turboBits: 4,
+        turboSeed: 42,
+      });
+
+      expect(Array.isArray(result.vector)).toBe(true);
+      const out = result.vector as Float32Array[];
+      expect(out.length).toBe(2);
+      out.forEach((v) => expect(v).toBeInstanceOf(Float32Array));
+      expect(result.targetType).toBe(TensorType.FLOAT32);
+    });
+  });
 });

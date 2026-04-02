@@ -51,10 +51,13 @@ describe("TurboQuantize", () => {
       const result4bit = turboQuantize(vector, { bits: 4, seed: 42 });
       const result2bit = turboQuantize(vector, { bits: 2, seed: 42 });
 
-      // 4-bit: 768 * 4 / 8 = 384 bytes
-      expect(result4bit.codes.length).toBe(384);
-      // 2-bit: 768 * 2 / 8 = 192 bytes
-      expect(result2bit.codes.length).toBe(192);
+      // 768 pads to 1024 (next power of 2):
+      // 4-bit: 1024 * 4 / 8 = 512 bytes
+      expect(result4bit.codes.length).toBe(512);
+      expect(result4bit.paddedDimensions).toBe(1024);
+      // 2-bit: 1024 * 2 / 8 = 256 bytes
+      expect(result2bit.codes.length).toBe(256);
+      expect(result2bit.paddedDimensions).toBe(1024);
     });
 
     test("should reject invalid bit widths", () => {
@@ -262,35 +265,41 @@ describe("TurboQuantize", () => {
 
   describe("turboQuantizeStorageBytes", () => {
     test("should calculate correct storage for common configurations", () => {
-      // 768-dim at 4 bits = 768 * 4 / 8 = 384 bytes
-      expect(turboQuantizeStorageBytes(768, 4)).toBe(384);
+      // 768-dim pads to 1024 (next power of 2):
+      // At 4 bits: 1024 * 4 / 8 = 512 bytes
+      expect(turboQuantizeStorageBytes(768, 4)).toBe(512);
 
-      // 768-dim at 2 bits = 768 * 2 / 8 = 192 bytes
-      expect(turboQuantizeStorageBytes(768, 2)).toBe(192);
+      // At 2 bits: 1024 * 2 / 8 = 256 bytes
+      expect(turboQuantizeStorageBytes(768, 2)).toBe(256);
 
-      // 768-dim at 8 bits = 768 * 8 / 8 = 768 bytes
-      expect(turboQuantizeStorageBytes(768, 8)).toBe(768);
+      // At 8 bits: 1024 * 8 / 8 = 1024 bytes
+      expect(turboQuantizeStorageBytes(768, 8)).toBe(1024);
 
-      // 768-dim at 1 bit = 768 * 1 / 8 = 96 bytes
-      expect(turboQuantizeStorageBytes(768, 1)).toBe(96);
+      // At 1 bit: 1024 * 1 / 8 = 128 bytes
+      expect(turboQuantizeStorageBytes(768, 1)).toBe(128);
+
+      // Power-of-2 dimension: no extra padding
+      // 512-dim at 4 bits: 512 * 4 / 8 = 256 bytes
+      expect(turboQuantizeStorageBytes(512, 4)).toBe(256);
     });
 
     test("should ceil for non-byte-aligned sizes", () => {
-      // 3 dimensions at 3 bits = 9 bits = 2 bytes (rounded up)
+      // 3 dimensions pads to 4 (next power of 2), 3 bits: 4 * 3 / 8 = 1.5 -> 2 bytes
       expect(turboQuantizeStorageBytes(3, 3)).toBe(2);
     });
   });
 
   describe("turboQuantizeCompressionRatio", () => {
     test("should calculate correct compression ratios", () => {
-      // Float32 = 4 bytes/dim. At 4 bits/dim = 0.5 bytes/dim. Ratio = 8x
-      expect(turboQuantizeCompressionRatio(768, 4)).toBe(8);
+      // Float32 = 4 bytes/dim.
+      // 512-dim (already power-of-2) at 4 bits: ratio = (512 * 4) / (512 * 4 / 8) = 8
+      expect(turboQuantizeCompressionRatio(512, 4)).toBe(8);
 
-      // At 2 bits/dim = 0.25 bytes/dim. Ratio = 16x
-      expect(turboQuantizeCompressionRatio(768, 2)).toBe(16);
+      // At 2 bits: ratio = (512 * 4) / (512 * 2 / 8) = 16
+      expect(turboQuantizeCompressionRatio(512, 2)).toBe(16);
 
-      // At 1 bit/dim = 0.125 bytes/dim. Ratio = 32x
-      expect(turboQuantizeCompressionRatio(768, 1)).toBe(32);
+      // At 1 bit: ratio = (512 * 4) / (512 * 1 / 8) = 32
+      expect(turboQuantizeCompressionRatio(512, 1)).toBe(32);
     });
   });
 

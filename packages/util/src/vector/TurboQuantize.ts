@@ -29,9 +29,9 @@ import type { TypedArray } from "./TypedArray";
  */
 export interface TurboQuantizeOptions {
   /** Number of bits per dimension (1-8). Lower = more compression, higher distortion. */
-  readonly bits: number;
+  readonly bits?: number;
   /** Seed for deterministic random rotation. If omitted, uses a fixed default seed. */
-  readonly seed: number | undefined;
+  readonly seed?: number;
 }
 
 /**
@@ -44,6 +44,12 @@ export interface TurboQuantizeResult {
   readonly bits: number;
   /** Original vector dimensionality */
   readonly dimensions: number;
+  /**
+   * Padded dimensionality used during rotation (next power of 2 >= dimensions).
+   * The codes array covers this many coordinates; the extra coordinates beyond
+   * `dimensions` are discarded during dequantization.
+   */
+  readonly paddedDimensions: number;
   /** The seed used for the random rotation (needed for dequantization) */
   readonly seed: number;
   /** L2 norm of the original vector (needed to reconstruct scale) */
@@ -55,9 +61,16 @@ const DEFAULT_SEED = 42;
 /**
  * Simple deterministic PRNG (xorshift32) for generating rotation seeds.
  * Produces deterministic sequences given a seed, suitable for reproducible rotations.
+ *
+ * Note: the seed is XOR-mixed with a constant before use so that every distinct
+ * integer seed (including 0) maps to a distinct, non-zero initial PRNG state.
  */
 function createPrng(seed: number): () => number {
-  let state = seed | 0 || 1;
+  // XOR-mix the seed with the golden-ratio constant so that seed=0 does not
+  // collapse to the same state as seed=1 (xorshift32 requires a non-zero state).
+  // The `|| 1` guards the one theoretical edge-case where the XOR result is 0
+  // (i.e. the caller passed seed = 0x616c8647).
+  let state = ((seed ^ 0x9e3779b9) >>> 0) || 1;
   return () => {
     state ^= state << 13;
     state ^= state >> 17;
@@ -72,8 +85,10 @@ function createPrng(seed: number): () => number {
  * combined with random sign flips. This is an approximation of a random orthogonal
  * rotation that runs in O(d log d) time instead of O(d²).
  *
- * The rotation causes coordinates to concentrate around a Beta distribution,
- * enabling optimal per-coordinate scalar quantization.
+ * The input is zero-padded to the next power of 2 before the transform. All
+ * `paddedLen` coordinates are returned so that the transform is fully invertible.
+ * Dropping the extra coordinates would break orthogonality for non-power-of-2
+ * input dimensions.
  *
  * We apply 3 rounds of (sign-flip + WHT) for good isometry properties.
  */
@@ -99,16 +114,16 @@ function randomRotate(values: Float64Array, seed: number): Float64Array {
     fastWalshHadamard(result);
   }
 
-  // Return only the first d dimensions (drop padding)
-  return result.subarray(0, d);
+  // Return ALL paddedLen coordinates to preserve full invertibility.
+  return result;
 }
 
 /**
  * Inverse of randomRotate: undoes the rotation to reconstruct the original vector direction.
+ * The input must be the full paddedLen array returned by randomRotate.
  */
 function inverseRandomRotate(values: Float64Array, seed: number): Float64Array {
-  const d = values.length;
-  const paddedLen = nextPowerOf2(d);
+  const paddedLen = values.length;
   const result = new Float64Array(paddedLen);
   result.set(values);
 
@@ -137,7 +152,7 @@ function inverseRandomRotate(values: Float64Array, seed: number): Float64Array {
     }
   }
 
-  return result.subarray(0, d);
+  return result;
 }
 
 /**
@@ -172,23 +187,25 @@ function nextPowerOf2(n: number): number {
 }
 
 /**
- * Computes optimal quantization boundaries and reconstruction points for
- * coordinates of a rotated unit vector.
+ * Returns quantization parameters for uniform scalar quantization over the range
+ * [-scale, scale].
  *
- * After random rotation, each coordinate of a d-dimensional unit vector follows
- * approximately N(0, 1/d). For practical purposes with moderate dimensions (>50),
- * we use uniform quantization over the range [-c/sqrt(d), c/sqrt(d)] where c
- * controls the coverage (we use c ≈ 3 for 99.7% coverage).
+ * After random rotation in paddedLen-dimensional space, each coordinate of a
+ * d-dimensional unit vector (zero-padded to paddedLen) has variance 1/paddedLen.
+ * We use a fixed range of ±3 standard deviations (coverage ≈ 99.7%) as the
+ * clipping boundary for a uniform quantizer with `levels = 2^bits` levels.
+ * This is a simple, practical uniform quantizer; no non-uniform or
+ * distribution-fitted quantization is performed.
  */
 function getQuantizationParams(
   bits: number,
-  dimensions: number
+  paddedLen: number
 ): { readonly levels: number; readonly scale: number } {
   const levels = 1 << bits; // 2^bits quantization levels
-  // After rotation, coordinates are approximately N(0, 1/d).
-  // Standard deviation is 1/sqrt(d). Cover ±3 standard deviations.
+  // After rotation, coordinates have std dev ≈ 1/sqrt(paddedLen).
+  // Cover ±3 standard deviations.
   const coverage = 3.0;
-  const scale = coverage / Math.sqrt(dimensions);
+  const scale = coverage / Math.sqrt(paddedLen);
   return { levels, scale };
 }
 
@@ -244,8 +261,15 @@ function packCodes(codes: number[], bits: number): Uint8Array {
 
 /**
  * Unpacks codes from a compact Uint8Array back to an array of integers.
+ * Throws if the buffer is too small for the requested count and bit width.
  */
 function unpackCodes(packed: Uint8Array, bits: number, count: number): number[] {
+  const expectedBytes = Math.ceil((count * bits) / 8);
+  if (packed.length < expectedBytes) {
+    throw new Error(
+      `unpackCodes: buffer too small - need ${expectedBytes} bytes for ${count} codes at ${bits} bits, got ${packed.length}`
+    );
+  }
   const codes: number[] = new Array(count);
 
   let bitPos = 0;
@@ -312,13 +336,14 @@ export function turboQuantize(
     }
   }
 
-  // Step 2: Random rotation
+  // Step 2: Random rotation — returns all paddedLen coordinates
+  const paddedLen = nextPowerOf2(d);
   const rotated = randomRotate(values, seed);
 
-  // Step 3: Scalar quantization per coordinate
-  const { levels, scale } = getQuantizationParams(bits, d);
-  const codes: number[] = new Array(d);
-  for (let i = 0; i < d; i++) {
+  // Step 3: Scalar quantization per coordinate (all paddedLen)
+  const { levels, scale } = getQuantizationParams(bits, paddedLen);
+  const codes: number[] = new Array(paddedLen);
+  for (let i = 0; i < paddedLen; i++) {
     codes[i] = quantizeScalar(rotated[i], scale, levels);
   }
 
@@ -329,6 +354,7 @@ export function turboQuantize(
     codes: packed,
     bits,
     dimensions: d,
+    paddedDimensions: paddedLen,
     seed,
     norm,
   };
@@ -347,22 +373,22 @@ export function turboQuantize(
  * @returns Reconstructed vector as Float32Array
  */
 export function turboDequantize(quantized: TurboQuantizeResult): Float32Array {
-  const { codes, bits, dimensions, seed, norm } = quantized;
+  const { codes, bits, dimensions, paddedDimensions, seed, norm } = quantized;
 
-  // Step 1: Unpack codes
-  const unpacked = unpackCodes(codes, bits, dimensions);
+  // Step 1: Unpack all paddedDimensions codes
+  const unpacked = unpackCodes(codes, bits, paddedDimensions);
 
-  // Step 2: Reconstruct rotated coordinates
-  const { levels, scale } = getQuantizationParams(bits, dimensions);
-  const rotated = new Float64Array(dimensions);
-  for (let i = 0; i < dimensions; i++) {
+  // Step 2: Reconstruct rotated coordinates (all paddedDimensions)
+  const { levels, scale } = getQuantizationParams(bits, paddedDimensions);
+  const rotated = new Float64Array(paddedDimensions);
+  for (let i = 0; i < paddedDimensions; i++) {
     rotated[i] = dequantizeScalar(unpacked[i], scale, levels);
   }
 
-  // Step 3: Inverse rotation
+  // Step 3: Inverse rotation (returns full paddedDimensions array)
   const unrotated = inverseRandomRotate(rotated, seed);
 
-  // Step 4: Scale by original norm
+  // Step 4: Crop to original dimensions and scale by original norm
   const result = new Float32Array(dimensions);
   for (let i = 0; i < dimensions; i++) {
     result[i] = unrotated[i] * norm;
@@ -395,18 +421,18 @@ export function turboQuantizedInnerProduct(
     throw new Error("Vectors must use the same rotation seed");
   }
 
-  const d = a.dimensions;
-  const { levels, scale } = getQuantizationParams(a.bits, d);
+  const paddedLen = a.paddedDimensions;
+  const { levels, scale } = getQuantizationParams(a.bits, paddedLen);
 
-  // Unpack both code arrays
-  const codesA = unpackCodes(a.codes, a.bits, d);
-  const codesB = unpackCodes(b.codes, b.bits, d);
+  // Unpack both code arrays (paddedLen codes each)
+  const codesA = unpackCodes(a.codes, a.bits, paddedLen);
+  const codesB = unpackCodes(b.codes, b.bits, paddedLen);
 
   // Compute dot product in the rotated (quantized) domain.
   // Since rotation is orthogonal, inner products are preserved:
   // <Ra, Rb> = <a, b> (for orthogonal R)
   let dot = 0;
-  for (let i = 0; i < d; i++) {
+  for (let i = 0; i < paddedLen; i++) {
     const va = dequantizeScalar(codesA[i], scale, levels);
     const vb = dequantizeScalar(codesB[i], scale, levels);
     dot += va * vb;
@@ -436,12 +462,16 @@ export function turboQuantizedCosineSimilarity(
 /**
  * Calculates the storage size in bytes for a TurboQuant-quantized vector.
  *
+ * Because the Walsh-Hadamard transform requires a power-of-2 length, the vector
+ * is zero-padded to the next power of 2 before quantization. The codes buffer
+ * therefore covers `nextPowerOf2(dimensions)` coordinates, not `dimensions`.
+ *
  * @param dimensions - Vector dimensionality
  * @param bits - Bits per dimension
  * @returns Storage size in bytes (codes only, excluding metadata)
  */
 export function turboQuantizeStorageBytes(dimensions: number, bits: number): number {
-  return Math.ceil((dimensions * bits) / 8);
+  return Math.ceil((nextPowerOf2(dimensions) * bits) / 8);
 }
 
 /**

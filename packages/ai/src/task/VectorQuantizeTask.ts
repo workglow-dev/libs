@@ -65,7 +65,7 @@ const inputSchema = {
       default: QuantizationMethod.LINEAR,
     },
     turboBits: {
-      type: "number",
+      type: "integer",
       title: "TurboQuant Bits",
       description:
         "Bits per dimension for TurboQuant method (1-8). Lower = more compression. 4 bits gives ~8x compression with near-lossless quality.",
@@ -74,7 +74,7 @@ const inputSchema = {
       maximum: 8,
     },
     turboSeed: {
-      type: "number",
+      type: "integer",
       title: "TurboQuant Seed",
       description:
         "Seed for the random rotation in TurboQuant. All vectors in the same collection must use the same seed for similarity search to work.",
@@ -187,9 +187,15 @@ export class VectorQuantizeTask extends Task<
         const result = turboQuantize(v, { bits: turboBits, seed: turboSeed });
         return turboDequantize(result);
       });
-    } else {
-      quantized = vectors.map((v) => this.vectorQuantize(v, targetType, normalize));
+      // TurboQuant quantize+dequantize always produces Float32; report the
+      // actual returned type so the caller is never misled.
+      return {
+        vector: isArray ? quantized : quantized[0],
+        originalType,
+        targetType: TensorType.FLOAT32,
+      };
     }
+    quantized = vectors.map((v) => this.vectorQuantize(v, targetType, normalize));
 
     return {
       vector: isArray ? quantized : quantized[0],
