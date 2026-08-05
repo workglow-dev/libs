@@ -107,7 +107,11 @@ export class WebhookNotifyTask<
   }
 
   public override entitlements(): TaskEntitlements {
-    return webhookPrivateEntitlements(WebhookNotifyTask.entitlements(), this.runInputData?.url);
+    return webhookPrivateEntitlements(
+      WebhookNotifyTask.entitlements(),
+      this.runInputData?.url,
+      this.runInputData?.credential_key
+    );
   }
 
   public static override inputSchema() {

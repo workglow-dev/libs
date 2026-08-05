@@ -227,6 +227,10 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
 
   if (response.ok) {
     if (!request.readSuccessBody) {
+      // Slack answers 200 with a short `ok` body even though we don't want it.
+      // An unconsumed body keeps the underlying connection out of the agent's
+      // pool until GC, so cancel it explicitly instead of dropping it.
+      await response.body?.cancel().catch(() => {});
       return { status: response.status, body: "" };
     }
     const text = await readBodyText(response);
@@ -269,18 +273,31 @@ export function webhookBaseEntitlements(reason: string): TaskEntitlements {
 
 /**
  * Adds a scoped `network:private` requirement when the configured URL targets
- * a private host. Fails closed when the URL is not yet known at entitlement
- * evaluation time (including when it will come from a credential), so a
- * private destination can never slip through unchecked.
+ * a private host. Fails closed when the destination is not knowable at
+ * entitlement evaluation time, so a private destination can never slip
+ * through unchecked.
+ *
+ * `credentialKey` must be threaded in: {@link resolveWebhookUrl} prefers the
+ * resolved credential OVER the `url` port, so classifying `url` alone would
+ * grade a decoy public URL while the request actually goes wherever the
+ * credential points — and {@link postWebhookJson} self-grants `allowPrivate`
+ * from the URL it really uses. Whenever a credential is configured the
+ * destination is unknown here, whatever `url` says.
  */
-export function webhookPrivateEntitlements(base: TaskEntitlements, url: unknown): TaskEntitlements {
-  if (typeof url !== "string" || url.length === 0) {
+export function webhookPrivateEntitlements(
+  base: TaskEntitlements,
+  url: unknown,
+  credentialKey: unknown
+): TaskEntitlements {
+  const credentialWins = typeof credentialKey === "string" && credentialKey.length > 0;
+  if (credentialWins || typeof url !== "string" || url.length === 0) {
     return mergeEntitlements(base, {
       entitlements: [
         {
           id: Entitlements.NETWORK_PRIVATE,
-          reason:
-            "Runtime webhook URL is not yet available during entitlement evaluation; private/internal destinations must be explicitly allowed",
+          reason: credentialWins
+            ? "The webhook URL comes from the credential store and overrides the `url` port, so the destination is unknown during entitlement evaluation; private/internal destinations must be explicitly allowed"
+            : "Runtime webhook URL is not yet available during entitlement evaluation; private/internal destinations must be explicitly allowed",
         },
       ],
     });

@@ -110,7 +110,11 @@ export class SlackNotifyTask<
   }
 
   public override entitlements(): TaskEntitlements {
-    return webhookPrivateEntitlements(SlackNotifyTask.entitlements(), this.runInputData?.url);
+    return webhookPrivateEntitlements(
+      SlackNotifyTask.entitlements(),
+      this.runInputData?.url,
+      this.runInputData?.credential_key
+    );
   }
 
   public static override inputSchema() {

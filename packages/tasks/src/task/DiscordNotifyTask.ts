@@ -111,7 +111,11 @@ export class DiscordNotifyTask<
   }
 
   public override entitlements(): TaskEntitlements {
-    return webhookPrivateEntitlements(DiscordNotifyTask.entitlements(), this.runInputData?.url);
+    return webhookPrivateEntitlements(
+      DiscordNotifyTask.entitlements(),
+      this.runInputData?.url,
+      this.runInputData?.credential_key
+    );
   }
 
   public static override inputSchema() {

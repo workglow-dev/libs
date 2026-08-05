@@ -390,4 +390,40 @@ describe("Webhook notification tasks", () => {
       expect(typeof workflow.discordNotify).toBe("function");
     });
   });
+
+  describe("private-destination entitlements", () => {
+    const requiresPrivate = (task: WebhookNotifyTask): boolean =>
+      task.entitlements().entitlements.some((e) => e.id === "network:private");
+
+    test("a public URL needs no network:private entitlement", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = { url: WEBHOOK_URL, payload: {} } as any;
+      expect(requiresPrivate(task)).toBe(false);
+    });
+
+    test("a private URL requires network:private", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = { url: "http://127.0.0.1:9200/ingest", payload: {} } as any;
+      expect(requiresPrivate(task)).toBe(true);
+    });
+
+    // Regression: the credential OVERRIDES `url` at execute time, so grading
+    // entitlements on a public-looking `url` while the request actually goes
+    // to whatever the credential holds is an entitlement bypass.
+    test("a credential key forces network:private even beside a public url", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = {
+        url: WEBHOOK_URL,
+        payload: {},
+        credential_key: "internal-hook",
+      } as any;
+      expect(requiresPrivate(task)).toBe(true);
+    });
+
+    test("an absent url still fails closed", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = { payload: {} } as any;
+      expect(requiresPrivate(task)).toBe(true);
+    });
+  });
 });
