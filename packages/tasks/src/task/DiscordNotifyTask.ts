@@ -52,12 +52,12 @@ const inputSchema = {
       title: "Embeds",
       description: "Discord embed objects",
     },
-    credential_key: {
+    url_credential_key: {
       type: "string",
       format: "credential",
       title: "Credential Key",
       description:
-        "Key to look up in the credential store. The resolved value is the webhook URL itself, and takes precedence over the url input.",
+        "Key to look up in the credential store. The resolved value is the entire webhook URL — the secret itself, not a bearer token — and takes precedence over the url input.",
       "x-ui-hidden": true,
     },
   },
@@ -100,7 +100,7 @@ export class DiscordNotifyTask<
   Config extends TaskConfig = TaskConfig,
 > extends Task<Input, Output, Config> {
   public static override readonly type = "DiscordNotifyTask";
-  public static override readonly category = "Utility";
+  public static override readonly category = "Notification";
   public static override title = "Discord Notify";
   public static override description = "Sends a message to a Discord webhook";
   public static override cachePolicy: CachePolicy = { kind: "none" };
@@ -114,7 +114,7 @@ export class DiscordNotifyTask<
     return webhookPrivateEntitlements(
       DiscordNotifyTask.entitlements(),
       this.runInputData?.url,
-      this.runInputData?.credential_key
+      this.runInputData?.url_credential_key
     );
   }
 
@@ -127,7 +127,7 @@ export class DiscordNotifyTask<
   }
 
   override async execute(input: Input, context: IExecuteContext): Promise<Output> {
-    const url = resolveWebhookUrl(input.url, input.credential_key, "DiscordNotifyTask");
+    const url = resolveWebhookUrl(input.url, input.url_credential_key, "DiscordNotifyTask");
     const result = await postWebhookJson({
       url,
       payload: compactPayload({

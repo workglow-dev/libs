@@ -415,7 +415,7 @@ describe("Webhook notification tasks", () => {
       task.runInputData = {
         url: WEBHOOK_URL,
         payload: {},
-        credential_key: "internal-hook",
+        url_credential_key: "internal-hook",
       } as any;
       expect(requiresPrivate(task)).toBe(true);
     });

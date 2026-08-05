@@ -74,7 +74,7 @@ export function resolveWebhookUrl(
   if (resolved === undefined || resolved.length === 0) {
     throw createFetchUrlJobError(
       FetchUrlErrorCode.CONFIGURATION,
-      `${label}: no webhook URL provided. Set the 'url' input or a credential key.`
+      `${label}: no webhook URL provided. Set the 'url' input or the 'url_credential_key' input.`
     );
   }
   return resolved;

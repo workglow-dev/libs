@@ -144,7 +144,7 @@ output schema and error messages report only the endpoint's origin.
 - `payload` (object, required): JSON body to send
 - `headers` (object, optional): Additional headers, merged over the JSON content type
 - `timeout` (number, optional): Request timeout in milliseconds
-- `credential_key` (string, optional): Credential store key whose resolved value is the webhook URL. Takes precedence over `url`.
+- `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
 
 **Output Schema:**
 
@@ -187,7 +187,7 @@ Sends a message to a Slack incoming webhook.
 - `blocks` (array, optional): Slack Block Kit blocks
 - `username` (string, optional): Overrides the display name of the posting bot
 - `icon_emoji` (string, optional): Overrides the bot icon, e.g. `:rocket:`
-- `credential_key` (string, optional): Credential store key whose resolved value is the webhook URL. Takes precedence over `url`.
+- `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
 
 **Output Schema:**
 
@@ -236,7 +236,7 @@ Sends a message to a Discord webhook.
 - `username` (string, optional): Overrides the display name of the webhook
 - `avatar_url` (string, optional): Overrides the avatar of the webhook
 - `embeds` (array, optional): Discord embed objects
-- `credential_key` (string, optional): Credential store key whose resolved value is the webhook URL. Takes precedence over `url`.
+- `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
 
 **Output Schema:**
 

@@ -45,12 +45,12 @@ const inputSchema = {
       title: "Timeout",
       description: "Request timeout in milliseconds",
     },
-    credential_key: {
+    url_credential_key: {
       type: "string",
       format: "credential",
       title: "Credential Key",
       description:
-        "Key to look up in the credential store. The resolved value is the webhook URL itself, and takes precedence over the url input.",
+        "Key to look up in the credential store. The resolved value is the entire webhook URL — the secret itself, not a bearer token — and takes precedence over the url input.",
       "x-ui-hidden": true,
     },
   },
@@ -96,7 +96,7 @@ export class WebhookNotifyTask<
   Config extends TaskConfig = TaskConfig,
 > extends Task<Input, Output, Config> {
   public static override readonly type = "WebhookNotifyTask";
-  public static override readonly category = "Utility";
+  public static override readonly category = "Notification";
   public static override title = "Webhook Notify";
   public static override description = "Sends a JSON payload to a webhook endpoint via HTTP POST";
   public static override cachePolicy: CachePolicy = { kind: "none" };
@@ -110,7 +110,7 @@ export class WebhookNotifyTask<
     return webhookPrivateEntitlements(
       WebhookNotifyTask.entitlements(),
       this.runInputData?.url,
-      this.runInputData?.credential_key
+      this.runInputData?.url_credential_key
     );
   }
 
@@ -123,7 +123,7 @@ export class WebhookNotifyTask<
   }
 
   override async execute(input: Input, context: IExecuteContext): Promise<Output> {
-    const url = resolveWebhookUrl(input.url, input.credential_key, "WebhookNotifyTask");
+    const url = resolveWebhookUrl(input.url, input.url_credential_key, "WebhookNotifyTask");
     const result = await postWebhookJson({
       url,
       payload: input.payload,
