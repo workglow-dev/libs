@@ -1,0 +1,93 @@
+{
+  "name": "@workglow/bootstrap",
+  "type": "module",
+  "version": "0.3.37",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/workglow-dev/libs.git",
+    "directory": "packages/bootstrap"
+  },
+  "bugs": {
+    "url": "https://github.com/workglow-dev/libs/issues"
+  },
+  "description": "Runtime bootstrap for Workglow: registers every built-in default onto a service registry.",
+  "homepage": "https://workglow.dev",
+  "scripts": {
+    "watch": "concurrently -c 'auto' 'bun:watch-*'",
+    "watch-js": "concurrently -c 'auto' -n 'browser,node,bun' 'bun run watch-browser' 'bun run watch-node' 'bun run watch-bun'",
+    "watch-browser": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/browser.ts",
+    "watch-node": "bun build --watch --no-clear-screen --target=node --sourcemap=external --packages=external --outdir ./dist ./src/node.ts",
+    "watch-bun": "bun build --watch --no-clear-screen --target=bun --sourcemap=external --packages=external --outdir ./dist ./src/bun.ts",
+    "watch-types": "tsc --watch --preserveWatchOutput",
+    "build-package": "concurrently -c 'auto' -n 'browser,node,bun,types' 'bun run build-browser' 'bun run build-node' 'bun run build-bun' 'bun run build-types'",
+    "build-js": "concurrently -m 12 --timings -c 'auto' -n 'browser,node,bun' 'bun run build-browser' 'bun run build-node' 'bun run build-bun'",
+    "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
+    "build-browser": "bun build --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/browser.ts",
+    "build-node": "bun build --target=node --sourcemap=external --packages=external --outdir ./dist ./src/node.ts",
+    "build-bun": "bun build --target=bun --sourcemap=external --packages=external --outdir ./dist ./src/bun.ts",
+    "build-types": "rm -f tsconfig.tsbuildinfo && tsgo",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "@workglow/ai": "workspace:*",
+    "@workglow/knowledge-base": "workspace:*",
+    "@workglow/mcp": "workspace:*",
+    "@workglow/storage": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@workglow/ai": {
+      "optional": false
+    },
+    "@workglow/knowledge-base": {
+      "optional": false
+    },
+    "@workglow/mcp": {
+      "optional": false
+    },
+    "@workglow/storage": {
+      "optional": false
+    },
+    "@workglow/task-graph": {
+      "optional": false
+    },
+    "@workglow/util": {
+      "optional": false
+    }
+  },
+  "devDependencies": {
+    "@workglow/ai": "workspace:*",
+    "@workglow/knowledge-base": "workspace:*",
+    "@workglow/mcp": "workspace:*",
+    "@workglow/storage": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*"
+  },
+  "exports": {
+    ".": {
+      "react-native": {
+        "types": "./dist/browser.d.ts",
+        "import": "./dist/browser.js"
+      },
+      "browser": {
+        "types": "./dist/browser.d.ts",
+        "import": "./dist/browser.js"
+      },
+      "bun": {
+        "types": "./dist/bun.d.ts",
+        "import": "./dist/bun.js"
+      },
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src/**/*.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
