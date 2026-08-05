@@ -9,6 +9,9 @@ A package of task types for common operations, workflow management, and data pro
 - [Quick Start](#quick-start)
 - [Available Tasks](#available-tasks)
   - [FetchUrlTask](#fetchurltask)
+  - [WebhookNotifyTask](#webhooknotifytask)
+  - [SlackNotifyTask](#slacknotifytask)
+  - [DiscordNotifyTask](#discordnotifytask)
   - [DebugLogTask](#debuglogtask)
   - [DelayTask](#delaytask)
   - [JavaScriptTask](#javascripttask)
@@ -126,6 +129,150 @@ console.log(textResponse.text);
 - Request timeout handling
 - Queue-based rate limiting (requires creation of a `@workglow/job-queue` instance)
 - Comprehensive error handling
+
+### WebhookNotifyTask
+
+Sends a JSON payload to a webhook endpoint via HTTP POST.
+
+A webhook URL is treated as a secret throughout all three notification tasks: for
+Slack and Discord the token is part of the URL path, so the URL is kept out of the
+output schema and error messages report only the endpoint's origin.
+
+**Input Schema:**
+
+- `url` (string, optional): Webhook endpoint to POST to
+- `payload` (object, required): JSON body to send
+- `headers` (object, optional): Additional headers, merged over the JSON content type
+- `timeout` (number, optional): Request timeout in milliseconds
+- `credential_key` (string, optional): Credential store key whose resolved value is the webhook URL. Takes precedence over `url`.
+
+**Output Schema:**
+
+- `success` (boolean): True when the endpoint answered with a 2xx status
+- `status` (number): HTTP status code returned by the endpoint
+- `response` (string): Response body, truncated to 1KB
+
+**Examples:**
+
+```typescript
+// Direct task usage
+const result = await new WebhookNotifyTask({
+  url: "https://example.com/hooks/abc123",
+  payload: { event: "deploy", version: "1.4.2" },
+  headers: { "X-Signature": "sha256=..." },
+}).run();
+console.log(result.status);
+
+// In a workflow
+const workflow = new Workflow()
+  .fetch({ url: "https://api.example.com/build" })
+  .webhookNotify({ url: "https://example.com/hooks/abc123", payload: { event: "build" } });
+```
+
+**Features:**
+
+- Runs inline through the SSRF-aware `safeFetch` wrapper
+- Private/internal destinations require the scoped `network:private` entitlement
+- 429/503 and 5xx responses raise retryable errors carrying a `Retry-After` retry date
+- Never cached — the task is side-effecting (`cachePolicy: { kind: "none" }`)
+
+### SlackNotifyTask
+
+Sends a message to a Slack incoming webhook.
+
+**Input Schema:**
+
+- `url` (string, optional): Slack incoming webhook URL
+- `text` (string, required): Message text, also used as the notification fallback for block messages
+- `blocks` (array, optional): Slack Block Kit blocks
+- `username` (string, optional): Overrides the display name of the posting bot
+- `icon_emoji` (string, optional): Overrides the bot icon, e.g. `:rocket:`
+- `credential_key` (string, optional): Credential store key whose resolved value is the webhook URL. Takes precedence over `url`.
+
+**Output Schema:**
+
+- `success` (boolean): True when Slack accepted the message
+- `status` (number): HTTP status code returned by Slack
+
+**Examples:**
+
+```typescript
+// Plain message
+await new SlackNotifyTask({
+  url: "https://hooks.slack.com/services/T000/B000/xxx",
+  text: "Deploy finished",
+}).run();
+
+// Block Kit message with a bot identity
+await new SlackNotifyTask({
+  url: "https://hooks.slack.com/services/T000/B000/xxx",
+  text: "Deploy finished",
+  blocks: [{ type: "section", text: { type: "mrkdwn", text: "*Deploy finished*" } }],
+  username: "deploybot",
+  icon_emoji: ":rocket:",
+}).run();
+
+// In a workflow
+const workflow = new Workflow().slackNotify({
+  url: "https://hooks.slack.com/services/T000/B000/xxx",
+  text: "Pipeline complete",
+});
+```
+
+**Features:**
+
+- Absent optional fields are omitted from the payload rather than sent as `null`
+- Slack answers `200` with the body `ok`; failure bodies (`invalid_payload`, `no_service`) are surfaced in the error message
+- Webhook token never appears in errors, output, or logs
+
+### DiscordNotifyTask
+
+Sends a message to a Discord webhook.
+
+**Input Schema:**
+
+- `url` (string, optional): Discord webhook URL
+- `content` (string, required): Message content
+- `username` (string, optional): Overrides the display name of the webhook
+- `avatar_url` (string, optional): Overrides the avatar of the webhook
+- `embeds` (array, optional): Discord embed objects
+- `credential_key` (string, optional): Credential store key whose resolved value is the webhook URL. Takes precedence over `url`.
+
+**Output Schema:**
+
+- `success` (boolean): True when Discord accepted the message
+- `status` (number): HTTP status code returned by Discord, `204` on success
+
+**Examples:**
+
+```typescript
+// Plain message
+await new DiscordNotifyTask({
+  url: "https://discord.com/api/webhooks/123/xxx",
+  content: "Build passed",
+}).run();
+
+// Embed with a custom identity
+await new DiscordNotifyTask({
+  url: "https://discord.com/api/webhooks/123/xxx",
+  content: "Build passed",
+  username: "ci",
+  avatar_url: "https://example.com/ci.png",
+  embeds: [{ title: "workglow", description: "All checks green" }],
+}).run();
+
+// In a workflow
+const workflow = new Workflow().discordNotify({
+  url: "https://discord.com/api/webhooks/123/xxx",
+  content: "Pipeline complete",
+});
+```
+
+**Features:**
+
+- A successful post answers `204 No Content`, so no response body is read or parsed
+- Rate limits arrive as `429` and may carry the delay as `{"retry_after": <seconds>}` in the body instead of a `Retry-After` header; both are honored
+- Webhook token never appears in errors, output, or logs
 
 ### DebugLogTask
 

@@ -1,0 +1,325 @@
+/**
+ * @license
+ * Copyright 2026 Steven Roussey <sroussey@gmail.com>
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Shared JSON-POST plumbing for the webhook notification tasks.
+ *
+ * A Slack/Discord webhook URL *is* the credential — the token lives in the
+ * path — so unlike {@link FetchUrlTask} (public URL plus a separate bearer
+ * token) the URL must never reach an error message, task output, or log line.
+ * Every message produced here is built from {@link redactWebhookUrl}, and any
+ * error bubbling out of `safeFetch` (whose messages do embed the full URL) is
+ * rewritten through {@link redactWebhookUrlIn} before it escapes.
+ */
+
+import { AbortSignalJobError } from "@workglow/job-queue";
+import type { TaskEntitlements } from "@workglow/task-graph";
+import { Entitlements, mergeEntitlements } from "@workglow/task-graph";
+import type { FetchUrlJobErrorInstance } from "../task/FetchUrlJobError";
+import {
+  createFetchUrlJobError,
+  FetchUrlErrorCode,
+  httpStatusToFetchUrlErrorCode,
+  isFetchUrlJobError,
+} from "../task/FetchUrlJobError";
+import { safeFetch } from "./SafeFetch";
+import { classifyUrl, urlResourcePattern } from "./UrlClassifier";
+
+/** Placeholder used when a webhook URL cannot even be parsed for its origin. */
+const REDACTED_URL = "<redacted-webhook-url>";
+
+/** Maximum characters of a success body surfaced as task output. */
+const MAX_RESPONSE_BODY_CHARS = 1024;
+
+/** Maximum characters of a failure body surfaced in an error message. */
+const MAX_ERROR_BODY_CHARS = 256;
+
+function truncate(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}...`;
+}
+
+/**
+ * Reduces a webhook URL to its origin, dropping the path that carries the
+ * token. Unparseable input collapses to a fixed placeholder rather than
+ * echoing back whatever was passed in.
+ */
+export function redactWebhookUrl(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return REDACTED_URL;
+  }
+}
+
+/** Replaces every literal occurrence of `url` in `text` with its origin. */
+export function redactWebhookUrlIn(text: string, url: string): string {
+  if (url.length === 0) {
+    return text;
+  }
+  return text.split(url).join(redactWebhookUrl(url));
+}
+
+/**
+ * Picks the webhook URL, preferring a resolved credential over the plain
+ * `url` port. Credential values arrive already resolved by the input
+ * resolver, so the key name never reaches the network.
+ */
+export function resolveWebhookUrl(
+  url: string | undefined,
+  credential: string | undefined,
+  label: string
+): string {
+  const resolved = credential !== undefined && credential.length > 0 ? credential : url;
+  if (resolved === undefined || resolved.length === 0) {
+    throw createFetchUrlJobError(
+      FetchUrlErrorCode.CONFIGURATION,
+      `${label}: no webhook URL provided. Set the 'url' input or a credential key.`
+    );
+  }
+  return resolved;
+}
+
+export interface WebhookPostRequest {
+  /** Full webhook URL. Treated as a secret throughout. */
+  readonly url: string;
+  /** Value serialized as the JSON request body. */
+  readonly payload: unknown;
+  /** Extra request headers merged over the JSON content type. */
+  readonly headers: Readonly<Record<string, string>> | undefined;
+  /** Request timeout in milliseconds. */
+  readonly timeout: number | undefined;
+  readonly signal: AbortSignal;
+  /** Read and return the success body. Endpoints replying 204 pass `false`. */
+  readonly readSuccessBody: boolean;
+  /** Include a truncated failure body in the thrown error message. */
+  readonly includeBodyInError: boolean;
+  /** Also read `retry_after` (seconds) from a JSON failure body. */
+  readonly retryAfterFromJsonBody: boolean;
+  /** Human-readable subject used in error messages, e.g. "Slack webhook". */
+  readonly label: string;
+}
+
+export interface WebhookPostResult {
+  readonly status: number;
+  readonly body: string;
+}
+
+/**
+ * Derives a retry date from a rate-limited response. The `Retry-After` header
+ * is authoritative; Discord instead returns `{"retry_after": <seconds>}` in a
+ * JSON body, which is consulted as a secondary source.
+ */
+function retryDateFromResponse(
+  response: Response,
+  bodyText: string,
+  parseJsonBody: boolean
+): Date | undefined {
+  const header = response.headers.get("Retry-After");
+  if (header) {
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return new Date(Date.now() + seconds * 1000);
+    }
+    const parsedDate = new Date(header);
+    if (!isNaN(parsedDate.getTime()) && parsedDate > new Date()) {
+      return parsedDate;
+    }
+  }
+
+  if (!parseJsonBody || bodyText.length === 0) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(bodyText) as { readonly retry_after?: unknown };
+    const seconds = Number(parsed?.retry_after);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return new Date(Date.now() + seconds * 1000);
+    }
+  } catch {
+    // A non-JSON failure body simply carries no retry hint.
+  }
+  return undefined;
+}
+
+function leaksUrl(error: FetchUrlJobErrorInstance, url: string): boolean {
+  return error.message.includes(url) || error.url === url;
+}
+
+/**
+ * Normalizes anything thrown while posting into a typed fetch error whose
+ * message cannot contain the webhook secret. Already-typed errors keep their
+ * code (and therefore their retryable/permanent classification) and are passed
+ * through untouched unless they embed the URL.
+ */
+function toRedactedWebhookError(error: unknown, url: string, label: string): unknown {
+  if (error instanceof AbortSignalJobError) {
+    return error;
+  }
+  if (isFetchUrlJobError(error)) {
+    if (!leaksUrl(error, url)) {
+      return error;
+    }
+    const rebuilt = createFetchUrlJobError(error.code, redactWebhookUrlIn(error.message, url), {
+      url: redactWebhookUrl(url),
+      httpStatus: error.httpStatus,
+      httpStatusText: error.httpStatusText,
+      retryDate: error.retryDate,
+    });
+    rebuilt.stack = error.stack;
+    return rebuilt;
+  }
+  const detail = error instanceof Error ? error.message : String(error);
+  return createFetchUrlJobError(
+    FetchUrlErrorCode.NETWORK_ERROR,
+    `Network error posting ${label} to ${redactWebhookUrl(url)}: ${redactWebhookUrlIn(detail, url)}`,
+    { url: redactWebhookUrl(url) }
+  );
+}
+
+async function readBodyText(response: Response): Promise<string> {
+  try {
+    return await response.text();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * POSTs `payload` as JSON to a webhook endpoint through {@link safeFetch}.
+ *
+ * Private/loopback destinations are permitted only when the URL classifies as
+ * private, in which case the granted scope is re-enforced on every redirect
+ * hop — mirroring how {@link FetchUrlTask} threads the `network:private`
+ * entitlement down to the transport.
+ */
+export async function postWebhookJson(request: WebhookPostRequest): Promise<WebhookPostResult> {
+  const { url, label } = request;
+  const classification = classifyUrl(url);
+  if (classification.kind === "invalid") {
+    throw createFetchUrlJobError(
+      FetchUrlErrorCode.INVALID_URL,
+      `Refusing to post ${label} to an invalid URL: ${classification.reason ?? "malformed"}`,
+      { url: redactWebhookUrl(url) }
+    );
+  }
+
+  const isPrivate = classification.kind === "private";
+  const timeoutSignal =
+    request.timeout !== undefined && request.timeout > 0
+      ? AbortSignal.timeout(request.timeout)
+      : undefined;
+  const signal = timeoutSignal ? AbortSignal.any([request.signal, timeoutSignal]) : request.signal;
+
+  let response: Response;
+  try {
+    response = await safeFetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...request.headers },
+      body: JSON.stringify(request.payload),
+      signal,
+      allowPrivate: isPrivate,
+      privateResourceScopes: isPrivate ? [urlResourcePattern(url)] : undefined,
+    });
+  } catch (err) {
+    throw toRedactedWebhookError(err, url, label);
+  }
+
+  if (response.ok) {
+    if (!request.readSuccessBody) {
+      return { status: response.status, body: "" };
+    }
+    const text = await readBodyText(response);
+    return { status: response.status, body: truncate(text, MAX_RESPONSE_BODY_CHARS) };
+  }
+
+  const failureBody = await readBodyText(response);
+  const retryDate = retryDateFromResponse(response, failureBody, request.retryAfterFromJsonBody);
+  const redacted = redactWebhookUrl(url);
+  const bodySuffix =
+    request.includeBodyInError && failureBody.length > 0
+      ? `: ${truncate(redactWebhookUrlIn(failureBody, url), MAX_ERROR_BODY_CHARS)}`
+      : "";
+
+  throw createFetchUrlJobError(
+    httpStatusToFetchUrlErrorCode(response.status),
+    `Failed to post ${label} to ${redacted}: ${response.status} ${response.statusText}${bodySuffix}`,
+    {
+      url: redacted,
+      httpStatus: response.status,
+      httpStatusText: response.statusText,
+      retryDate,
+    }
+  );
+}
+
+/** Static entitlements shared by every webhook notification task. */
+export function webhookBaseEntitlements(reason: string): TaskEntitlements {
+  return {
+    entitlements: [
+      { id: Entitlements.NETWORK_HTTP, reason },
+      {
+        id: Entitlements.CREDENTIAL,
+        reason: "May resolve the webhook URL from the credential store",
+        optional: true,
+      },
+    ],
+  };
+}
+
+/**
+ * Adds a scoped `network:private` requirement when the configured URL targets
+ * a private host. Fails closed when the URL is not yet known at entitlement
+ * evaluation time (including when it will come from a credential), so a
+ * private destination can never slip through unchecked.
+ */
+export function webhookPrivateEntitlements(base: TaskEntitlements, url: unknown): TaskEntitlements {
+  if (typeof url !== "string" || url.length === 0) {
+    return mergeEntitlements(base, {
+      entitlements: [
+        {
+          id: Entitlements.NETWORK_PRIVATE,
+          reason:
+            "Runtime webhook URL is not yet available during entitlement evaluation; private/internal destinations must be explicitly allowed",
+        },
+      ],
+    });
+  }
+  const classification = classifyUrl(url);
+  if (classification.kind !== "private") {
+    return base;
+  }
+  return mergeEntitlements(base, {
+    entitlements: [
+      {
+        id: Entitlements.NETWORK_PRIVATE,
+        reason: `Webhook URL targets private/internal host: ${classification.reason ?? classification.host ?? "unknown"}`,
+        resources: [urlResourcePattern(url)],
+      },
+    ],
+  });
+}
+
+/**
+ * Builds a JSON payload from the supplied entries, omitting absent keys rather
+ * than serializing them as `null`.
+ *
+ * Empty arrays are dropped alongside `undefined`: an unset array-typed port
+ * materializes as `[]`, and both Slack and Discord reject an empty `blocks` /
+ * `embeds` list, so an empty list can only mean "not supplied".
+ */
+export function compactPayload(
+  entries: Readonly<Record<string, unknown>>
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(entries)) {
+    if (value === undefined) {
+      continue;
+    }
+    if (Array.isArray(value) && value.length === 0) {
+      continue;
+    }
+    payload[key] = value;
+  }
+  return payload;
+}
