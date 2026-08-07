@@ -10,7 +10,6 @@ import { registerMcpServerDefaults } from "@workglow/mcp/util";
 import { registerTabularStorageDefaults } from "@workglow/storage";
 import { registerTaskDefaults, registerTransformDefaults } from "@workglow/task-graph";
 import {
-  globalServiceRegistry,
   registerCredentialDefaults,
   registerInputCompactorDefaults,
   registerInputResolverDefaults,
@@ -28,8 +27,13 @@ import { registerWorkerManagerDefaults } from "@workglow/util/worker";
  * Idempotent — safe to call multiple times. `registerIfAbsent` ensures
  * earlier explicit registrations (e.g. a custom storage backend) are not
  * overwritten.
+ *
+ * The registry is required, never defaulted: this mutates whichever container
+ * it is handed, so the target is always stated at the call site. Pass
+ * `globalServiceRegistry` explicitly for process-wide defaults, or
+ * prefer `bootstrapWorkglow()` / `createOrchestrationContext()`.
  */
-export function registerAllDefaults(registry: ServiceRegistry = globalServiceRegistry): void {
+export function registerAllDefaults(registry: ServiceRegistry): void {
   // Primitive containers first — resolvers/compactors are stored in maps
   // registered by these calls.
   registerInputResolverDefaults(registry);

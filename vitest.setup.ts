@@ -11,5 +11,11 @@ import "./scripts/lib/preload-credentials";
 // the global registry being populated, so bootstrap once here. Imported by
 // source path rather than as `@workglow/bootstrap`: the isolated linker keeps
 // workspace packages out of the repo root's node_modules.
-import { registerAllDefaults } from "./packages/bootstrap/src/bootstrap/registerAllDefaults";
-registerAllDefaults();
+//
+// `bootstrapWorkglow()` rather than `registerAllDefaults(globalServiceRegistry)`
+// because `globalServiceRegistry` is likewise unresolvable from this file: a
+// root-level `@workglow/util` import fails outright, and reaching into
+// `packages/util/src` would load a second copy of the module — a different
+// registry object from the one the tests read through `@workglow/util`.
+import { bootstrapWorkglow } from "./packages/bootstrap/src/bootstrap/bootstrapWorkglow";
+bootstrapWorkglow();
