@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2025 Steven Roussey <sroussey@gmail.com>
+ * Copyright 2026 Steven Roussey <sroussey@gmail.com>
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -20,6 +20,21 @@ import {
 } from "@workglow/util/schema";
 import { describe, expect, test } from "vitest";
 import { getTestingLogger } from "../../binding/TestingLogger";
+
+/**
+ * Deterministic PRNG (mulberry32) so the fidelity tests below never depend on
+ * `Math.random` — a flaky bound here would be indistinguishable from a real
+ * regression.
+ */
+function makeRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 describe("TurboQuantize", () => {
   let logger = getTestingLogger();
@@ -78,6 +93,47 @@ describe("TurboQuantize", () => {
       const vector = new Float32Array([0, 0, 0, 0]);
       const result = turboQuantize(vector, { bits: 4, seed: 42 });
       expect(result.norm).toBe(0);
+    });
+
+    test("should reject NaN and Infinity inputs", () => {
+      expect(() =>
+        turboQuantize(new Float32Array([1, 2, NaN, 4, 5, 6, 7, 8]), { bits: 4, seed: 42 })
+      ).toThrow("NaN or Infinity");
+      expect(() =>
+        turboQuantize(new Float32Array([1, 2, Infinity, 4, 5, 6, 7, 8]), { bits: 4, seed: 42 })
+      ).toThrow("NaN or Infinity");
+      expect(() =>
+        turboQuantize(new Float32Array([1, 2, -Infinity, 4, 5, 6, 7, 8]), { bits: 4, seed: 42 })
+      ).toThrow("NaN or Infinity");
+      expect(() =>
+        turboQuantizeToTypedArray(new Float32Array([1, 2, NaN, 4, 5, 6, 7, 8]), TensorType.INT8, 42)
+      ).toThrow("NaN or Infinity");
+      expect(() =>
+        turboQuantizeToTypedArray(
+          new Float32Array([1, 2, Infinity, 4, 5, 6, 7, 8]),
+          TensorType.INT8,
+          42
+        )
+      ).toThrow("NaN or Infinity");
+    });
+
+    test("should match hardcoded golden bytes (cross-process determinism)", () => {
+      // Literal expectations, not a second in-process call: only a checked-in
+      // byte sequence can catch a non-deterministic (e.g. Math.random) regression
+      // introduced elsewhere in the rotation path.
+      const codes = Array.from(
+        turboQuantize(new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]), { bits: 4, seed: 42 }).codes
+      );
+      expect(codes).toEqual([117, 165, 180, 133]);
+
+      const v64 = new Float32Array(64);
+      for (let i = 0; i < 64; i++) v64[i] = Math.sin(i * 0.7) * ((i % 5) + 1);
+      const first16 = Array.from(
+        turboQuantizeToTypedArray(v64, TensorType.INT8, 42).slice(0, 16) as Int8Array
+      );
+      expect(first16).toEqual([
+        21, -29, -20, -39, -22, -22, 45, 10, -44, -17, -41, -93, 10, 35, -14, -17,
+      ]);
     });
 
     test("should support different TypedArray inputs", () => {
@@ -159,6 +215,20 @@ describe("TurboQuantize", () => {
       for (let i = 0; i < reconstructed.length; i++) {
         expect(Math.abs(reconstructed[i])).toBe(0);
       }
+    });
+
+    test("should reject a paddedDimensions that is not nextPowerOf2(dimensions)", () => {
+      // TurboQuantizeResult is a plain serializable record, so a persisted or
+      // mismatched value can reach the decode path with a bogus padded length.
+      // Without the guard the Walsh-Hadamard butterfly reads past the buffer and
+      // silently returns NaN.
+      const quantized = turboQuantize(new Float32Array([1, 2, 3, 4, 5, 6]), { bits: 4, seed: 42 });
+      expect(quantized.paddedDimensions).toBe(8);
+
+      const tampered = { ...quantized, paddedDimensions: 6 };
+      expect(() => turboDequantize(tampered)).toThrow("paddedDimensions");
+      expect(() => turboQuantizedInnerProduct(tampered, quantized)).toThrow("paddedDimensions");
+      expect(() => turboQuantizedInnerProduct(quantized, tampered)).toThrow("paddedDimensions");
     });
 
     test("should improve quality with higher dimensions", () => {
@@ -289,6 +359,25 @@ describe("TurboQuantize", () => {
       // 3 dimensions pads to 4 (next power of 2), 3 bits: 4 * 3 / 8 = 1.5 -> 2 bytes
       expect(turboQuantizeStorageBytes(3, 3)).toBe(2);
     });
+
+    test("should reject out-of-range dimensions and bits", { timeout: 2000 }, () => {
+      // 2^30 + 1 previously spun forever inside the power-of-2 doubling loop
+      // (32-bit shift wrap), so a hang must fail the test rather than stall CI.
+      expect(() => turboQuantizeStorageBytes(2 ** 30 + 1, 4)).toThrow();
+      expect(() => turboQuantizeCompressionRatio(2 ** 30 + 1, 4)).toThrow();
+
+      expect(() => turboQuantizeStorageBytes(0, 4)).toThrow();
+      expect(() => turboQuantizeStorageBytes(-5, 4)).toThrow();
+      expect(() => turboQuantizeStorageBytes(NaN, 4)).toThrow();
+      expect(() => turboQuantizeStorageBytes(1.5, 4)).toThrow();
+
+      expect(() => turboQuantizeStorageBytes(768, 0)).toThrow();
+      expect(() => turboQuantizeStorageBytes(768, -5)).toThrow();
+      expect(() => turboQuantizeStorageBytes(768, 9)).toThrow();
+      expect(() => turboQuantizeStorageBytes(768, NaN)).toThrow();
+      expect(() => turboQuantizeCompressionRatio(768, 0)).toThrow();
+      expect(() => turboQuantizeCompressionRatio(768, 9)).toThrow();
+    });
   });
 
   describe("turboQuantizeCompressionRatio", () => {
@@ -313,13 +402,6 @@ describe("TurboQuantize", () => {
       expect(result.length).toBe(vector.length);
     });
 
-    test("should produce Uint8Array for UINT8 target", () => {
-      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
-      const result = turboQuantizeToTypedArray(vector, TensorType.UINT8);
-      expect(result).toBeInstanceOf(Uint8Array);
-      expect(result.length).toBe(vector.length);
-    });
-
     test("should produce Int16Array for INT16 target", () => {
       const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
       const result = turboQuantizeToTypedArray(vector, TensorType.INT16);
@@ -327,21 +409,93 @@ describe("TurboQuantize", () => {
       expect(result.length).toBe(vector.length);
     });
 
-    test("should produce Uint16Array for UINT16 target", () => {
-      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
-      const result = turboQuantizeToTypedArray(vector, TensorType.UINT16);
-      expect(result).toBeInstanceOf(Uint16Array);
-      expect(result.length).toBe(vector.length);
-    });
-
     test("should reject float target types", () => {
       const vector = new Float32Array([1, 2, 3, 4]);
       expect(() => turboQuantizeToTypedArray(vector, TensorType.FLOAT32)).toThrow(
-        "integer target types"
+        "signed integer targets only"
       );
       expect(() => turboQuantizeToTypedArray(vector, TensorType.FLOAT64)).toThrow(
-        "integer target types"
+        "signed integer targets only"
       );
+    });
+
+    test("should reject unsigned target types", () => {
+      // An unsigned target needs an affine map with a DC offset, and cosine
+      // similarity is not translation-invariant — see the DC-offset test below.
+      const vector = new Float32Array([1, 2, 3, 4]);
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.UINT8)).toThrow(
+        "signed integer targets only"
+      );
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.UINT16)).toThrow(
+        "signed integer targets only"
+      );
+    });
+
+    test("should reject prototype-chain target type names", () => {
+      // A bare `RANGES[targetType]` lookup resolves inherited Object.prototype
+      // keys, so a truthy-but-wrong "range" would slip past a `if (!range)` guard.
+      const vector = new Float32Array([1, 2, 3, 4]);
+      for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+        expect(() => turboQuantizeToTypedArray(vector, name as TensorType)).toThrow(
+          "signed integer targets only"
+        );
+      }
+    });
+
+    test("should not encode a DC offset (signed output is zero-centred)", () => {
+      // Regression guard for the unsigned affine map: it shifted every stored
+      // coordinate by the type midpoint, which collapsed cosine similarity for
+      // unrelated vectors to ~0.90 and made negative similarities impossible.
+      const d = 1024;
+      const rnd = makeRandom(42);
+      const vector = new Float32Array(d);
+      for (let i = 0; i < d; i++) vector[i] = rnd() - 0.5;
+
+      const result = turboQuantizeToTypedArray(vector, TensorType.INT8, 42);
+
+      let sum = 0;
+      let negatives = 0;
+      for (let i = 0; i < result.length; i++) {
+        sum += result[i];
+        if (result[i] < 0) negatives++;
+      }
+      expect(Math.abs(sum / result.length)).toBeLessThan(2);
+      expect(negatives / result.length).toBeGreaterThanOrEqual(0.3);
+    });
+
+    test("should preserve cosine similarity across common embedding dimensions", () => {
+      // The rotation runs in nextPowerOf2(d) dimensions but only the first d
+      // coordinates are kept, so a non-power-of-2 d is a random projection.
+      // Bounds mirror the RMSE documented on turboQuantizeToTypedArray (x1.5).
+      const cases: readonly { readonly d: number; readonly rmse: number }[] = [
+        { d: 768, rmse: 0.019 },
+        { d: 1000, rmse: 0.006 },
+        { d: 1024, rmse: 0.001 },
+        { d: 1536, rmse: 0.013 },
+      ];
+
+      for (const { d, rmse } of cases) {
+        const rnd = makeRandom(d);
+        let squaredError = 0;
+        let maxError = 0;
+        const pairs = 40;
+        for (let p = 0; p < pairs; p++) {
+          const a = new Float32Array(d);
+          const b = new Float32Array(d);
+          for (let i = 0; i < d; i++) {
+            a[i] = rnd() - 0.5;
+            b[i] = rnd() - 0.5;
+          }
+          const trueSim = cosineSimilarity(a, b);
+          const qa = turboQuantizeToTypedArray(a, TensorType.INT8, 42);
+          const qb = turboQuantizeToTypedArray(b, TensorType.INT8, 42);
+          const error = Math.abs(cosineSimilarity(qa, qb) - trueSim);
+          squaredError += error * error;
+          if (error > maxError) maxError = error;
+        }
+        expect(Math.sqrt(squaredError / pairs)).toBeLessThan(rmse * 1.5);
+        expect(maxError).toBeLessThan(0.08);
+      }
     });
 
     test("should reject empty vectors", () => {
@@ -412,35 +566,43 @@ describe("TurboQuantize", () => {
 
     test("should handle zero vectors", () => {
       const vector = new Float32Array([0, 0, 0, 0]);
-      const result = turboQuantizeToTypedArray(vector, TensorType.INT8);
-      expect(result.length).toBe(4);
-      // All values should be 0 (or the midpoint for unsigned)
-      for (let i = 0; i < result.length; i++) {
-        expect(result[i]).toBe(0);
+
+      for (const targetType of [TensorType.INT8, TensorType.INT16] as const) {
+        const result = turboQuantizeToTypedArray(vector, targetType);
+        expect(result.length).toBe(4);
+        for (let i = 0; i < result.length; i++) {
+          expect(result[i]).toBe(0);
+        }
       }
+
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.UINT8)).toThrow(
+        "signed integer targets only"
+      );
     });
 
     test("should produce values within type range for Int8", () => {
       const d = 256;
+      const rnd = makeRandom(7);
       const vector = new Float32Array(d);
-      for (let i = 0; i < d; i++) vector[i] = Math.random() * 10 - 5;
+      for (let i = 0; i < d; i++) vector[i] = rnd() * 10 - 5;
 
       const result = turboQuantizeToTypedArray(vector, TensorType.INT8);
       for (let i = 0; i < result.length; i++) {
-        expect(result[i]).toBeGreaterThanOrEqual(-128);
+        expect(result[i]).toBeGreaterThanOrEqual(-127);
         expect(result[i]).toBeLessThanOrEqual(127);
       }
     });
 
-    test("should produce values within type range for Uint8", () => {
+    test("should produce values within type range for Int16", () => {
       const d = 256;
+      const rnd = makeRandom(11);
       const vector = new Float32Array(d);
-      for (let i = 0; i < d; i++) vector[i] = Math.random() * 10 - 5;
+      for (let i = 0; i < d; i++) vector[i] = rnd() * 10 - 5;
 
-      const result = turboQuantizeToTypedArray(vector, TensorType.UINT8);
+      const result = turboQuantizeToTypedArray(vector, TensorType.INT16);
       for (let i = 0; i < result.length; i++) {
-        expect(result[i]).toBeGreaterThanOrEqual(0);
-        expect(result[i]).toBeLessThanOrEqual(255);
+        expect(result[i]).toBeGreaterThanOrEqual(-32767);
+        expect(result[i]).toBeLessThanOrEqual(32767);
       }
     });
   });

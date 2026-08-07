@@ -299,5 +299,32 @@ describe("VectorQuantizeTask", () => {
       out.forEach((v) => expect(v).toBeInstanceOf(Int8Array));
       expect(result.targetType).toBe(TensorType.INT8);
     });
+
+    test("should reject unsigned targetType for turbo", async () => {
+      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+
+      for (const targetType of [TensorType.UINT8, TensorType.UINT16] as const) {
+        await expect(
+          vectorQuantize({ vector, targetType, method: "turbo", turboSeed: 42 })
+        ).rejects.toThrow();
+      }
+    });
+
+    test("should report method and turboSeed on the output", async () => {
+      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+
+      const turbo = await vectorQuantize({
+        vector,
+        targetType: TensorType.INT8,
+        method: "turbo",
+        turboSeed: 99,
+      });
+      expect(turbo.method).toBe("turbo");
+      expect(turbo.turboSeed).toBe(99);
+
+      const linear = await vectorQuantize({ vector, targetType: TensorType.INT8 });
+      expect(linear.method).toBe("linear");
+      expect(linear.turboSeed).toBeUndefined();
+    });
   });
 });

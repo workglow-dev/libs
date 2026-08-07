@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2025 Steven Roussey <sroussey@gmail.com>
+ * Copyright 2026 Steven Roussey <sroussey@gmail.com>
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -30,9 +30,9 @@ import type { TypedArray } from "./TypedArray";
  */
 export interface TurboQuantizeOptions {
   /** Number of bits per dimension (1-8). Lower = more compression, higher distortion. */
-  readonly bits?: number;
+  readonly bits: number | undefined;
   /** Seed for deterministic random rotation. If omitted, uses a fixed default seed. */
-  readonly seed?: number;
+  readonly seed: number | undefined;
 }
 
 /**
@@ -60,6 +60,45 @@ export interface TurboQuantizeResult {
 const DEFAULT_SEED = 42;
 
 /**
+ * Upper bound on the dimensionality this module will accept.
+ *
+ * Every entry point pads the input to `nextPowerOf2(dimensions)` and allocates a
+ * `Float64Array` of that length as the transform's working buffer. At 2^24 that
+ * buffer is 128 MB (2^24 * 8 bytes), which is already far beyond any real
+ * embedding. Rejecting anything larger keeps a bogus or hostile `dimensions`
+ * value from either exhausting memory or spinning inside the padding loop.
+ */
+const MAX_TURBO_DIMENSIONS = 2 ** 24;
+
+/** Number of (sign-flip + Walsh-Hadamard) rounds applied by the randomized rotation. */
+const SIGN_ROUNDS = 3;
+
+/**
+ * Validates a dimensionality before it is used to size any buffer.
+ * @param n - Candidate dimensionality
+ */
+function assertDimensions(n: number): void {
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`TurboQuant dimensions must be a positive integer, got ${n}`);
+  }
+  if (n > MAX_TURBO_DIMENSIONS) {
+    throw new Error(
+      `TurboQuant dimensions must be at most ${MAX_TURBO_DIMENSIONS}, got ${n} (the padded working buffer would exceed 128 MB)`
+    );
+  }
+}
+
+/**
+ * Validates a bit width before it is used to derive quantization levels.
+ * @param bits - Candidate bits per dimension
+ */
+function assertBits(bits: number): void {
+  if (!Number.isInteger(bits) || bits < 1 || bits > 8) {
+    throw new Error(`TurboQuant bits must be an integer between 1 and 8, got ${bits}`);
+  }
+}
+
+/**
  * Simple deterministic PRNG (xorshift32) for generating rotation seeds.
  * Produces deterministic sequences given a seed, suitable for reproducible rotations.
  *
@@ -74,11 +113,60 @@ function createPrng(seed: number): () => number {
   let state = (seed ^ 0x9e3779b9) >>> 0 || 1;
   return () => {
     state ^= state << 13;
-    state ^= state >> 17;
+    state ^= state >>> 17;
     state ^= state << 5;
     // Convert to [0, 1) range
     return (state >>> 0) / 4294967296;
   };
+}
+
+/** Maximum number of memoized sign tables. Bounded so a hostile seed stream cannot grow it. */
+const SIGN_TABLE_CACHE_LIMIT = 16;
+
+/** Memoized sign tables keyed by `${seed}:${paddedLen}` (insertion-ordered for eviction). */
+const signTableCache = new Map<string, readonly Uint8Array[]>();
+
+/**
+ * Returns the `SIGN_ROUNDS` Rademacher flip masks for a (seed, paddedLen) pair.
+ *
+ * Each mask holds one byte per coordinate: `1` means "flip the sign". The draws
+ * are made in exactly the order the forward rotation consumes them (round 0 for
+ * every coordinate, then round 1, then round 2), so the forward and inverse
+ * transforms see identical masks.
+ *
+ * The result is memoized because the inverse rotation would otherwise rebuild a
+ * `SIGN_ROUNDS x paddedLen` table on every single dequantization.
+ *
+ * @param seed - Rotation seed
+ * @param paddedLen - Padded (power-of-2) dimensionality
+ * @returns One flip mask per rotation round. The returned arrays must not be mutated.
+ */
+function getSignTable(seed: number, paddedLen: number): readonly Uint8Array[] {
+  const key = `${seed}:${paddedLen}`;
+  const cached = signTableCache.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const prng = createPrng(seed);
+  const table: Uint8Array[] = [];
+  for (let round = 0; round < SIGN_ROUNDS; round++) {
+    const mask = new Uint8Array(paddedLen);
+    for (let i = 0; i < paddedLen; i++) {
+      mask[i] = prng() < 0.5 ? 1 : 0;
+    }
+    table.push(mask);
+  }
+
+  if (signTableCache.size >= SIGN_TABLE_CACHE_LIMIT) {
+    // Map iteration is insertion-ordered, so this evicts the oldest entry.
+    const oldest = signTableCache.keys().next();
+    if (oldest.done !== true) {
+      signTableCache.delete(oldest.value);
+    }
+  }
+  signTableCache.set(key, table);
+  return table;
 }
 
 /**
@@ -100,13 +188,14 @@ function randomRotate(values: Float64Array, seed: number): Float64Array {
   const result = new Float64Array(paddedLen);
   result.set(values);
 
-  const prng = createPrng(seed);
+  const signs = getSignTable(seed, paddedLen);
 
   // Apply 3 rounds for good mixing (standard practice for randomized Hadamard)
-  for (let round = 0; round < 3; round++) {
+  for (let round = 0; round < SIGN_ROUNDS; round++) {
     // Random sign flips (diagonal Rademacher matrix)
+    const mask = signs[round];
     for (let i = 0; i < paddedLen; i++) {
-      if (prng() < 0.5) {
+      if (mask[i] === 1) {
         result[i] = -result[i];
       }
     }
@@ -128,26 +217,17 @@ function inverseRandomRotate(values: Float64Array, seed: number): Float64Array {
   const result = new Float64Array(paddedLen);
   result.set(values);
 
-  const prng = createPrng(seed);
-
-  // We need to collect all random values for 3 rounds, then apply in reverse
-  const signs: boolean[][] = [];
-  for (let round = 0; round < 3; round++) {
-    const roundSigns: boolean[] = [];
-    for (let i = 0; i < paddedLen; i++) {
-      roundSigns.push(prng() < 0.5);
-    }
-    signs.push(roundSigns);
-  }
+  const signs = getSignTable(seed, paddedLen);
 
   // Apply rounds in reverse order
-  for (let round = 2; round >= 0; round--) {
+  for (let round = SIGN_ROUNDS - 1; round >= 0; round--) {
     // WHT is its own inverse (up to scaling, which we handle)
     fastWalshHadamard(result);
 
     // Undo sign flips
+    const mask = signs[round];
     for (let i = 0; i < paddedLen; i++) {
-      if (signs[round][i]) {
+      if (mask[i] === 1) {
         result[i] = -result[i];
       }
     }
@@ -159,9 +239,15 @@ function inverseRandomRotate(values: Float64Array, seed: number): Float64Array {
 /**
  * In-place Fast Walsh-Hadamard Transform with normalization.
  * Runs in O(n log n) where n must be a power of 2.
+ *
+ * The power-of-2 requirement is enforced rather than assumed: at a non-power-of-2
+ * length the butterfly reads past the end of the buffer, silently producing NaN.
  */
 function fastWalshHadamard(data: Float64Array): void {
   const n = data.length;
+  if (n < 1 || (n & (n - 1)) !== 0) {
+    throw new Error(`fastWalshHadamard requires a power-of-2 length, got ${n}`);
+  }
   const norm = 1 / Math.sqrt(n);
 
   for (let halfSize = 1; halfSize < n; halfSize *= 2) {
@@ -181,9 +267,17 @@ function fastWalshHadamard(data: Float64Array): void {
   }
 }
 
+/**
+ * Smallest power of 2 that is >= n.
+ *
+ * Doubling uses `*= 2` rather than `<<= 1`: the shift operators coerce to 32-bit
+ * signed integers, so at p = 2^30 a shift wraps to -2147483648 and then to 0,
+ * leaving `p < n` true forever.
+ */
 function nextPowerOf2(n: number): number {
+  assertDimensions(n);
   let p = 1;
-  while (p < n) p <<= 1;
+  while (p < n) p *= 2;
   return p;
 }
 
@@ -208,6 +302,40 @@ function getQuantizationParams(
   const coverage = 3.0;
   const scale = coverage / Math.sqrt(paddedLen);
   return { levels, scale };
+}
+
+/**
+ * Normalizes a vector to unit length, returning both the unit-length coordinates
+ * and the original L2 norm.
+ *
+ * A non-finite norm means the input carried NaN or Infinity. That must throw:
+ * otherwise `norm > 0` is false for NaN and the freshly-allocated all-zero buffer
+ * is returned, silently discarding the bad input.
+ *
+ * A zero vector is not an error — it yields an all-zero `values` buffer and a
+ * norm of 0.
+ */
+function normalizeToUnit(vector: TypedArray): {
+  readonly values: Float64Array;
+  readonly norm: number;
+} {
+  const d = vector.length;
+  let sumSquares = 0;
+  for (let i = 0; i < d; i++) {
+    sumSquares += vector[i] * vector[i];
+  }
+  const norm = Math.sqrt(sumSquares);
+  if (!Number.isFinite(norm)) {
+    throw new Error("Cannot quantize a vector containing NaN or Infinity");
+  }
+
+  const values = new Float64Array(d);
+  if (norm > 0) {
+    for (let i = 0; i < d; i++) {
+      values[i] = vector[i] / norm;
+    }
+  }
+  return { values, norm };
 }
 
 /**
@@ -261,17 +389,21 @@ function packCodes(codes: number[], bits: number): Uint8Array {
 }
 
 /**
- * Unpacks codes from a compact Uint8Array back to an array of integers.
+ * Unpacks codes from a compact Uint8Array back to a Uint8Array of integers.
+ * Bit widths are capped at 8, so every code fits in one byte; returning a
+ * typed array keeps the per-comparison hot path free of boxed `number[]`
+ * allocations.
+ *
  * Throws if the buffer is too small for the requested count and bit width.
  */
-function unpackCodes(packed: Uint8Array, bits: number, count: number): number[] {
+function unpackCodes(packed: Uint8Array, bits: number, count: number): Uint8Array {
   const expectedBytes = Math.ceil((count * bits) / 8);
   if (packed.length < expectedBytes) {
     throw new Error(
       `unpackCodes: buffer too small - need ${expectedBytes} bytes for ${count} codes at ${bits} bits, got ${packed.length}`
     );
   }
-  const codes: number[] = new Array(count);
+  const codes = new Uint8Array(count);
 
   let bitPos = 0;
   for (let i = 0; i < count; i++) {
@@ -303,7 +435,7 @@ function unpackCodes(packed: Uint8Array, bits: number, count: number): number[] 
  * 3. Quantize each rotated coordinate using optimal scalar quantization
  * 4. Pack the codes into a compact bit representation
  *
- * @param vector - Input vector (any TypedArray)
+ * @param vector - Input vector (any TypedArray). Must not contain NaN or Infinity.
  * @param options - Quantization options (bits per dimension, optional seed)
  * @returns Compact quantized representation
  */
@@ -314,28 +446,16 @@ export function turboQuantize(
   const bits = options?.bits ?? 4;
   const seed = options?.seed ?? DEFAULT_SEED;
 
-  if (bits < 1 || bits > 8 || !Number.isInteger(bits)) {
-    throw new Error(`TurboQuant bits must be an integer between 1 and 8, got ${bits}`);
-  }
+  assertBits(bits);
 
   const d = vector.length;
   if (d === 0) {
     throw new Error("Cannot quantize an empty vector");
   }
+  assertDimensions(d);
 
   // Step 1: Compute norm and normalize
-  let norm = 0;
-  for (let i = 0; i < d; i++) {
-    norm += vector[i] * vector[i];
-  }
-  norm = Math.sqrt(norm);
-
-  const values = new Float64Array(d);
-  if (norm > 0) {
-    for (let i = 0; i < d; i++) {
-      values[i] = vector[i] / norm;
-    }
-  }
+  const { values, norm } = normalizeToUnit(vector);
 
   // Step 2: Random rotation — returns all paddedLen coordinates
   const paddedLen = nextPowerOf2(d);
@@ -362,6 +482,32 @@ export function turboQuantize(
 }
 
 /**
+ * Validates the scalar fields of a {@link TurboQuantizeResult}.
+ *
+ * `TurboQuantizeResult` is a plain, serializable interface intended for storage,
+ * so a value reaching the decode path may have been persisted, hand-built, or
+ * mismatched with a different record. Every field that sizes a buffer or drives
+ * the transform is therefore re-checked rather than trusted.
+ */
+function assertQuantizeResultShape(quantized: TurboQuantizeResult): void {
+  const { bits, dimensions, paddedDimensions, seed, norm } = quantized;
+  assertBits(bits);
+  assertDimensions(dimensions);
+  if (!Number.isInteger(seed)) {
+    throw new Error(`TurboQuant seed must be an integer, got ${seed}`);
+  }
+  if (!Number.isFinite(norm)) {
+    throw new Error(`TurboQuant norm must be a finite number, got ${norm}`);
+  }
+  const expectedPadded = nextPowerOf2(dimensions);
+  if (paddedDimensions !== expectedPadded) {
+    throw new Error(
+      `TurboQuant paddedDimensions must be nextPowerOf2(dimensions) = ${expectedPadded}, got ${paddedDimensions}`
+    );
+  }
+}
+
+/**
  * Dequantizes a TurboQuant result back to a Float32Array.
  *
  * Steps:
@@ -375,6 +521,8 @@ export function turboQuantize(
  */
 export function turboDequantize(quantized: TurboQuantizeResult): Float32Array {
   const { codes, bits, dimensions, paddedDimensions, seed, norm } = quantized;
+
+  assertQuantizeResultShape(quantized);
 
   // Step 1: Unpack all paddedDimensions codes
   const unpacked = unpackCodes(codes, bits, paddedDimensions);
@@ -418,6 +566,8 @@ export function turboQuantizedInnerProduct(a: TurboQuantizeResult, b: TurboQuant
   if (a.seed !== b.seed) {
     throw new Error("Vectors must use the same rotation seed");
   }
+  assertQuantizeResultShape(a);
+  assertQuantizeResultShape(b);
 
   const paddedLen = a.paddedDimensions;
   const { levels, scale } = getQuantizationParams(a.bits, paddedLen);
@@ -457,31 +607,64 @@ export function turboQuantizedCosineSimilarity(
   return turboQuantizedInnerProduct(a, b) / (a.norm * b.norm);
 }
 
-/** Integer target types supported by turboQuantizeToTypedArray */
-const INTEGER_TARGET_RANGES = {
-  [TensorType.INT8]: { signed: true, max: 127 },
-  [TensorType.UINT8]: { signed: false, max: 255 },
-  [TensorType.INT16]: { signed: true, max: 32767 },
-  [TensorType.UINT16]: { signed: false, max: 65535 },
+/**
+ * Signed integer target types supported by {@link turboQuantizeToTypedArray}.
+ *
+ * Unsigned targets are deliberately absent — see the function's documentation.
+ */
+const SIGNED_TARGET_RANGES = {
+  [TensorType.INT8]: { max: 127 },
+  [TensorType.INT16]: { max: 32767 },
 } as const;
 
 /**
  * Quantizes a vector using TurboQuant rotation directly into a byte-aligned TypedArray.
  *
- * Unlike the packed `turboQuantize`, this outputs a standard TypedArray (Int8Array,
- * Uint8Array, Int16Array, Uint16Array) with the **same `.length`** as the input vector.
- * This means the output works transparently with existing storage backends and
- * similarity search (cosineSimilarity requires matching lengths).
+ * Unlike the packed `turboQuantize`, this outputs a standard TypedArray (Int8Array or
+ * Int16Array) with the **same `.length`** as the input vector, so it drops into
+ * storage backends that expect a fixed-width vector column.
  *
  * The rotation spreads information across all coordinates and concentrates their
  * distribution, yielding better distortion than naive linear quantization at the
  * same byte width.
  *
+ * ## Signed targets only
+ *
+ * Only `int8` and `int16` are supported. An unsigned target would need the affine
+ * map `x -> (x + scale) / (2 * scale) * max`, whose DC offset (127.5 for uint8)
+ * lands on every stored coordinate. Cosine similarity is invariant to scaling but
+ * NOT to translation, so that shared component dominates the result: measured at
+ * d=1024 / uint8 / seed 42, a true cosine of 0.0559 reads 0.9071 and the whole
+ * range collapses to roughly [0.90, 1.00] — negatives become impossible and
+ * absolute thresholds meaningless. The offset cannot be subtracted back out at
+ * comparison time either: `cosineSimilarity(a, b)` receives only the two arrays,
+ * and pgvector / SQLite / DuckDB compute the distance server-side. Unsigned also
+ * buys no storage over the signed type of the same width.
+ *
+ * ## Comparability
+ *
+ * The output is cosine-comparable ONLY against other outputs of this function
+ * produced with the SAME seed. It is not comparable with the unrotated input
+ * vector, nor with linearly quantized vectors, nor across seeds — the rotation is
+ * a per-seed change of basis, so mixing them yields meaningless rankings with no
+ * error raised anywhere.
+ *
+ * ## Fidelity and non-power-of-2 dimensions
+ *
+ * The rotation operates on `nextPowerOf2(d)` coordinates but only the first `d`
+ * are kept (the output length must match the input length), so for a
+ * non-power-of-2 `d` this is a random projection rather than an orthogonal
+ * rotation, and cosine similarity is preserved only approximately. Measured
+ * cosine RMSE against the exact similarity (int8, seed 42, 40 random pairs):
+ * d=1024 -> 0.001, d=1000 -> 0.006, d=1536 -> 0.013, d=768 -> 0.019
+ * (worst single pair 0.052). When fidelity matters, zero-pad the vectors to a
+ * power of 2 at the call site.
+ *
  * Note: The vector norm is not preserved (cosine similarity is scale-invariant,
  * so this is fine for similarity search).
  *
- * @param vector - Input vector (any TypedArray)
- * @param targetType - Target integer type (INT8, UINT8, INT16, UINT16)
+ * @param vector - Input vector (any TypedArray). Must not contain NaN or Infinity.
+ * @param targetType - Target signed integer type (INT8 or INT16)
  * @param seed - Seed for the random rotation (default: 42). All vectors in the
  *   same collection must use the same seed for similarity search to work.
  * @returns TypedArray of the target type with `.length === vector.length`
@@ -491,61 +674,42 @@ export function turboQuantizeToTypedArray(
   targetType: TensorType,
   seed: number = DEFAULT_SEED
 ): TypedArray {
-  const range = INTEGER_TARGET_RANGES[targetType as keyof typeof INTEGER_TARGET_RANGES];
-  if (!range) {
+  // `Object.hasOwn` before indexing: a plain `[targetType]` lookup would resolve
+  // inherited Object.prototype keys, so a name like "constructor" would yield a
+  // truthy value and slip past the guard.
+  if (!Object.hasOwn(SIGNED_TARGET_RANGES, targetType)) {
     throw new Error(
-      `turboQuantizeToTypedArray only supports integer target types (int8, uint8, int16, uint16), got "${targetType}"`
+      `turboQuantizeToTypedArray supports signed integer targets only (int8, int16); "${targetType}" is unsupported. Unsigned targets would encode a DC offset that breaks cosineSimilarity.`
     );
   }
+  const { max } = SIGNED_TARGET_RANGES[targetType as keyof typeof SIGNED_TARGET_RANGES];
 
   const d = vector.length;
   if (d === 0) {
     throw new Error("Cannot quantize an empty vector");
   }
+  assertDimensions(d);
 
   // Step 1: Normalize to unit vector
-  let norm = 0;
-  for (let i = 0; i < d; i++) {
-    norm += vector[i] * vector[i];
-  }
-  norm = Math.sqrt(norm);
-
-  const values = new Float64Array(d);
-  if (norm > 0) {
-    for (let i = 0; i < d; i++) {
-      values[i] = vector[i] / norm;
-    }
-  }
+  const { values } = normalizeToUnit(vector);
 
   // Step 2: Random rotation (spreads information, concentrates distribution)
   // randomRotate returns all paddedLen coordinates; we only use the first d.
   const paddedLen = nextPowerOf2(d);
   const rotated = randomRotate(values, seed);
 
-  // Step 3: Map rotated coordinates to target integer range
+  // Step 3: Map rotated coordinates to the signed target range.
   // After rotation in paddedLen-dimensional space, coordinates have std dev ≈ 1/sqrt(paddedLen).
   const coverage = 3.0;
   const scale = coverage / Math.sqrt(paddedLen);
 
-  if (range.signed) {
-    // Map [-scale, scale] → [-max, max]
-    const max = range.max;
-    const result = targetType === TensorType.INT8 ? new Int8Array(d) : new Int16Array(d);
-    for (let i = 0; i < d; i++) {
-      const clamped = Math.max(-scale, Math.min(scale, rotated[i]));
-      result[i] = Math.round((clamped / scale) * max);
-    }
-    return result;
-  } else {
-    // Map [-scale, scale] → [0, max]
-    const max = range.max;
-    const result = targetType === TensorType.UINT8 ? new Uint8Array(d) : new Uint16Array(d);
-    for (let i = 0; i < d; i++) {
-      const clamped = Math.max(-scale, Math.min(scale, rotated[i]));
-      result[i] = Math.round(((clamped + scale) / (2 * scale)) * max);
-    }
-    return result;
+  // Map [-scale, scale] → [-max, max]
+  const result = targetType === TensorType.INT8 ? new Int8Array(d) : new Int16Array(d);
+  for (let i = 0; i < d; i++) {
+    const clamped = Math.max(-scale, Math.min(scale, rotated[i]));
+    result[i] = Math.round((clamped / scale) * max);
   }
+  return result;
 }
 
 /**
@@ -556,10 +720,12 @@ export function turboQuantizeToTypedArray(
  * therefore covers `nextPowerOf2(dimensions)` coordinates, not `dimensions`.
  *
  * @param dimensions - Vector dimensionality
- * @param bits - Bits per dimension
+ * @param bits - Bits per dimension (integer, 1-8)
  * @returns Storage size in bytes (codes only, excluding metadata)
  */
 export function turboQuantizeStorageBytes(dimensions: number, bits: number): number {
+  assertDimensions(dimensions);
+  assertBits(bits);
   return Math.ceil((nextPowerOf2(dimensions) * bits) / 8);
 }
 
@@ -567,10 +733,12 @@ export function turboQuantizeStorageBytes(dimensions: number, bits: number): num
  * Calculates the compression ratio compared to Float32 storage.
  *
  * @param dimensions - Vector dimensionality
- * @param bits - Bits per dimension
+ * @param bits - Bits per dimension (integer, 1-8)
  * @returns Compression ratio (e.g., 8.0 means 8x smaller)
  */
 export function turboQuantizeCompressionRatio(dimensions: number, bits: number): number {
+  assertDimensions(dimensions);
+  assertBits(bits);
   const originalBytes = dimensions * 4; // Float32 = 4 bytes per dim
   const quantizedBytes = turboQuantizeStorageBytes(dimensions, bits);
   return originalBytes / quantizedBytes;

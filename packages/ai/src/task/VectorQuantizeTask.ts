@@ -52,7 +52,8 @@ const inputSchema = {
     normalize: {
       type: "boolean",
       title: "Normalize",
-      description: "Normalize vector before quantization",
+      description:
+        "Normalize vector before quantization. Ignored for method 'turbo', which always L2-normalizes internally.",
       default: true,
     },
     method: {
@@ -60,7 +61,7 @@ const inputSchema = {
       enum: Object.values(QuantizationMethod),
       title: "Method",
       description:
-        "Quantization method: 'linear' for simple min-max scaling, 'turbo' for TurboQuant (randomized rotation + optimal scalar quantization, better distortion than linear at the same bit width). Turbo requires an integer targetType (int8, uint8, int16, uint16).",
+        "Quantization method: 'linear' for simple min-max scaling, 'turbo' for TurboQuant (randomized rotation + optimal scalar quantization, better distortion than linear at the same bit width). Turbo requires a signed integer targetType (int8 or int16). Turbo rotates in nextPowerOf2(d) dimensions but keeps only the first d coordinates, so for a non-power-of-2 dimensionality it is a random projection and cosine similarity is preserved only approximately (measured int8 RMSE: d=1024 -> 0.001, d=1536 -> 0.013, d=768 -> 0.019); zero-pad to a power of 2 when fidelity matters.",
       default: QuantizationMethod.LINEAR,
     },
     turboSeed: {
@@ -107,8 +108,21 @@ const outputSchema = {
       title: "Target Type",
       description: "Target quantization type",
     },
+    method: {
+      type: "string",
+      enum: Object.values(QuantizationMethod),
+      title: "Method",
+      description:
+        "Quantization method that produced the output vector. Recorded so downstream consumers can tell a turbo-rotated vector from a linearly quantized one — the two are not comparable.",
+    },
+    turboSeed: {
+      type: "integer",
+      title: "TurboQuant Seed",
+      description:
+        "Seed of the random rotation applied when method is 'turbo' (absent otherwise). Vectors quantized with different seeds, or mixed with vectors quantized using method 'linear', are NOT comparable: cosine similarity between them is meaningless and no error is raised.",
+    },
   },
-  required: ["vector", "originalType", "targetType"],
+  required: ["vector", "originalType", "targetType", "method"],
   additionalProperties: false,
 } as const satisfies DataPortSchema;
 
@@ -116,13 +130,17 @@ export type VectorQuantizeTaskInput = {
   normalize?: boolean | undefined;
   vector: TypedArray | TypedArray[];
   targetType: "float16" | "float32" | "float64" | "int8" | "uint8" | "int16" | "uint16";
-  method?: QuantizationMethod | undefined;
-  turboSeed?: number | undefined;
+  readonly method?: QuantizationMethod | undefined;
+  readonly turboSeed?: number | undefined;
 };
 export type VectorQuantizeTaskOutput = {
   vector: TypedArray | TypedArray[];
   targetType: "float16" | "float32" | "float64" | "int8" | "uint8" | "int16" | "uint16";
   originalType: "float16" | "float32" | "float64" | "int8" | "uint8" | "int16" | "uint16";
+  /** Method that produced `vector`. A turbo vector is not comparable with a linear one. */
+  readonly method: QuantizationMethod;
+  /** Rotation seed, present only for `method: "turbo"`. Different seeds are not comparable. */
+  readonly turboSeed: number | undefined;
 };
 export type VectorQuantizeTaskConfig = TaskConfig<VectorQuantizeTaskInput>;
 
@@ -171,6 +189,14 @@ export class VectorQuantizeTask extends Task<
     let quantized: TypedArray[];
 
     if (method === QuantizationMethod.TURBO) {
+      // TurboQuant is restricted to signed integer targets: an unsigned target
+      // encodes a DC offset that breaks cosine similarity (translation is not a
+      // cosine invariant), and float targets have no quantization to do.
+      if (targetType !== TensorType.INT8 && targetType !== TensorType.INT16) {
+        throw new Error(
+          `VectorQuantizeTask: method "turbo" supports signed integer target types only (int8, int16), got "${targetType}"`
+        );
+      }
       quantized = vectors.map((v) => turboQuantizeToTypedArray(v, targetType, turboSeed));
     } else {
       quantized = vectors.map((v) => this.vectorQuantize(v, targetType, normalize));
@@ -180,6 +206,8 @@ export class VectorQuantizeTask extends Task<
       vector: isArray ? quantized : quantized[0],
       originalType,
       targetType,
+      method,
+      turboSeed: method === QuantizationMethod.TURBO ? turboSeed : undefined,
     };
   }
 
