@@ -6,17 +6,17 @@
 
 import { setLogger } from "@workglow/util";
 import {
-  turboQuantize,
-  turboDequantize,
-  turboQuantizeToTypedArray,
-  turboQuantizedInnerProduct,
-  turboQuantizedCosineSimilarity,
-  turboQuantizeStorageBytes,
-  turboQuantizeCompressionRatio,
   TensorType,
   cosineSimilarity,
   inner,
   magnitude,
+  turboDequantize,
+  turboQuantize,
+  turboQuantizeCompressionRatio,
+  turboQuantizeStorageBytes,
+  turboQuantizeToTypedArray,
+  turboQuantizedCosineSimilarity,
+  turboQuantizedInnerProduct,
 } from "@workglow/util/schema";
 import { describe, expect, test } from "vitest";
 import { getTestingLogger } from "../../binding/TestingLogger";

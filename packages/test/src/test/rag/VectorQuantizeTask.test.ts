@@ -284,10 +284,7 @@ describe("VectorQuantizeTask", () => {
     });
 
     test("should handle array of vectors with turbo method", async () => {
-      const vectors = [
-        new Float32Array([1, 2, 3, 4]),
-        new Float32Array([5, 6, 7, 8]),
-      ];
+      const vectors = [new Float32Array([1, 2, 3, 4]), new Float32Array([5, 6, 7, 8])];
 
       const result = await vectorQuantize({
         vector: vectors,

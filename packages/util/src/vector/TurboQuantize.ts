@@ -71,7 +71,7 @@ function createPrng(seed: number): () => number {
   // collapse to the same state as seed=1 (xorshift32 requires a non-zero state).
   // The `|| 1` guards the one theoretical edge-case where the XOR result is 0
   // (i.e. the caller passed seed = 0x616c8647).
-  let state = ((seed ^ 0x9e3779b9) >>> 0) || 1;
+  let state = (seed ^ 0x9e3779b9) >>> 0 || 1;
   return () => {
     state ^= state << 13;
     state ^= state >> 17;
@@ -408,10 +408,7 @@ export function turboDequantize(quantized: TurboQuantizeResult): Float32Array {
  * @param b - Second quantized vector
  * @returns Estimated inner product
  */
-export function turboQuantizedInnerProduct(
-  a: TurboQuantizeResult,
-  b: TurboQuantizeResult
-): number {
+export function turboQuantizedInnerProduct(a: TurboQuantizeResult, b: TurboQuantizeResult): number {
   if (a.dimensions !== b.dimensions) {
     throw new Error("Vectors must have the same dimensions");
   }
