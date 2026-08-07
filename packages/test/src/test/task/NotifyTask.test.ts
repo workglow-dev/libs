@@ -4,7 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { PermanentJobError, RetryableJobError } from "@workglow/job-queue";
+import {
+  AbortSignalJobError,
+  formatErrorChainForDiagnostics,
+  PermanentJobError,
+  RetryableJobError,
+} from "@workglow/job-queue";
 import { TaskRegistry, Workflow } from "@workglow/task-graph";
 import {
   createFetchUrlJobError,
@@ -20,6 +25,7 @@ import {
   type SafeFetchFn,
   type SafeFetchOptions,
 } from "@workglow/tasks";
+import { getGlobalCredentialStore } from "@workglow/util";
 import { validateSchema } from "@workglow/util/schema";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -126,7 +132,7 @@ describe("Webhook notification tasks", () => {
       expect(url).toBe(SLACK_URL);
       expect(options.method).toBe("POST");
       expect(requestHeaders()["Content-Type"]).toBe("application/json");
-      expect(options.body).toBe(JSON.stringify({ text: "deploy finished" }));
+      expect(options.body).toBe(JSON.stringify({ text: "deploy finished", link_names: false }));
     });
 
     // An unset array port materializes as `[]`, which Slack rejects, so an
@@ -135,7 +141,7 @@ describe("Webhook notification tasks", () => {
       await slackNotify({ url: SLACK_URL, text: "hi" });
 
       const body = lastCall().options.body as string;
-      expect(body).toBe('{"text":"hi"}');
+      expect(body).toBe('{"text":"hi","link_names":false}');
       expect(body).not.toContain("username");
       expect(body).not.toContain("blocks");
       expect(body).not.toContain("undefined");
@@ -156,6 +162,7 @@ describe("Webhook notification tasks", () => {
           blocks: [{ type: "section" }],
           username: "deploybot",
           icon_emoji: ":rocket:",
+          link_names: false,
         })
       );
     });
@@ -236,6 +243,7 @@ describe("Webhook notification tasks", () => {
           username: "ci",
           avatar_url: "https://example.com/a.png",
           embeds: [{ title: "build" }],
+          allowed_mentions: { parse: [] },
         })
       );
     });
@@ -251,6 +259,25 @@ describe("Webhook notification tasks", () => {
       expect(result).toEqual({ success: true, status: 204 });
       expect(jsonSpy).not.toHaveBeenCalled();
       expect(textSpy).not.toHaveBeenCalled();
+    });
+
+    // Slack answers 200 with a body it does not want read. The success read now
+    // streams via `getReader()`, so a `text()` spy alone would be vacuous —
+    // assert the stream is never opened, and IS released.
+    test("a body it will not read is cancelled rather than opened", async () => {
+      const response = new Response("ok", { status: 200 });
+      const textSpy = vi.spyOn(response, "text");
+      const readerSpy = vi.spyOn(response.body!, "getReader");
+      const cancelSpy = vi.spyOn(response.body!, "cancel");
+      mockFetch.mockImplementation(() => Promise.resolve(response));
+
+      await slackNotify({ url: SLACK_URL, text: "hi" });
+
+      expect(textSpy).not.toHaveBeenCalled();
+      expect(readerSpy).not.toHaveBeenCalled();
+      expect(cancelSpy).toHaveBeenCalled();
+      // A second cancel of an already-cancelled body must stay quiet.
+      await expect(response.body!.cancel()).resolves.toBeUndefined();
     });
 
     test("429 with a JSON retry_after body produces a retryable error with a retry date", async () => {
@@ -328,6 +355,36 @@ describe("Webhook notification tasks", () => {
       expect(error).not.toBeInstanceOf(RetryableJobError);
     });
 
+    // A rewritten `.message` is not enough: V8 bakes the ORIGINAL message into
+    // `.stack`, and stacks are persisted (formatErrorChainForDiagnostics feeds
+    // them into the stored job error), so a copied stack re-exports the token.
+    test("a rewritten error's .stack never contains the webhook token", async () => {
+      mockFetch.mockImplementation((url: string) =>
+        Promise.reject(
+          createFetchUrlJobError(
+            FetchUrlErrorCode.PRIVATE_DENIED,
+            `Refusing to fetch private/internal URL ${url}: resolves into RFC1918 space`,
+            { url }
+          )
+        )
+      );
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "hi" }).catch(
+        (e: unknown) => e
+      )) as PermanentJobError & { url?: string };
+
+      const stack = String(error.stack);
+      expect(stack).not.toContain("SECRETTOKEN");
+      expect(stack).toContain("https://hooks.slack.com");
+      // Frames are retained, not thrown away, on a V8 stack.
+      expect(stack.split("\n").length).toBeGreaterThan(1);
+
+      // The persisted diagnostics dump walks the cause chain and re-serializes
+      // every message + stack it finds — it must find no token, and no cause.
+      expect(formatErrorChainForDiagnostics(error)).not.toContain("SECRETTOKEN");
+      expect(error.cause).toBeUndefined();
+    });
+
     test("the webhook URL is absent from every output schema", () => {
       for (const taskClass of [WebhookNotifyTask, SlackNotifyTask, DiscordNotifyTask]) {
         const schema = taskClass.outputSchema();
@@ -381,7 +438,9 @@ describe("Webhook notification tasks", () => {
       const results = await workflow.run();
 
       expect(results).toEqual({ success: true, status: 200 });
-      expect(lastCall().options.body).toBe(JSON.stringify({ text: "from workflow" }));
+      expect(lastCall().options.body).toBe(
+        JSON.stringify({ text: "from workflow", link_names: false })
+      );
     });
 
     test("Workflow.webhookNotify and Workflow.discordNotify are installed", () => {
@@ -424,6 +483,253 @@ describe("Webhook notification tasks", () => {
       const task = new WebhookNotifyTask();
       task.runInputData = { payload: {} } as any;
       expect(requiresPrivate(task)).toBe(true);
+    });
+
+    // `optional: true` entitlements are skipped outright by evaluatePolicy, so
+    // a decorative declaration is no gate at all on the instance that really
+    // reaches into the credential store.
+    test("a configured credential key makes the credential entitlement enforced", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = { payload: {}, url_credential_key: "hook" } as any;
+      const credential = task.entitlements().entitlements.find((e) => e.id === "credential");
+      expect(credential).toBeDefined();
+      expect(credential!.optional).not.toBe(true);
+    });
+
+    test("without a credential key the credential entitlement stays optional", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = { url: WEBHOOK_URL, payload: {} } as any;
+      const credential = task.entitlements().entitlements.find((e) => e.id === "credential");
+      expect(credential?.optional).toBe(true);
+    });
+  });
+
+  // A workflow piping a fetch result or a model summary into `content`/`text`
+  // would otherwise ping an entire server on every run — and a retry loop turns
+  // that into a mass-notification amplifier the caller cannot switch off, since
+  // `additionalProperties: false` means no caller can supply `allowed_mentions`
+  // themselves.
+  describe("mention neutering", () => {
+    test("Discord suppresses every mention class by default", async () => {
+      mockFetch.mockImplementation(() => Promise.resolve(new Response(null, { status: 204 })));
+
+      await discordNotify({ url: DISCORD_URL, content: "@everyone deploy done" });
+
+      expect(lastCall().options.body as string).toContain('"allowed_mentions":{"parse":[]}');
+    });
+
+    test("Discord honors allow_mentions", async () => {
+      mockFetch.mockImplementation(() => Promise.resolve(new Response(null, { status: 204 })));
+
+      await discordNotify({
+        url: DISCORD_URL,
+        content: "@everyone deploy done",
+        allow_mentions: true,
+      });
+
+      expect(lastCall().options.body as string).not.toContain("allowed_mentions");
+    });
+
+    test("Slack neutralizes channel-wide broadcasts by default", async () => {
+      await slackNotify({ url: SLACK_URL, text: "<!channel> deploy done" });
+
+      const body = lastCall().options.body as string;
+      expect(body).toContain("&lt;!channel>");
+      expect(body).not.toContain("<!channel>");
+      expect(body).toContain('"link_names":false');
+    });
+
+    test("Slack neutralizes here, everyone and subteam broadcasts too", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "<!here> <!everyone> <!subteam^S123>",
+      });
+
+      const body = lastCall().options.body as string;
+      for (const form of ["<!here>", "<!everyone>", "<!subteam^S123>"]) {
+        expect(body).not.toContain(form);
+      }
+    });
+
+    // The narrow `<!` escape must not break the sequences that make Slack
+    // messages useful: links and single-user mentions.
+    test("Slack leaves links and single-user mentions intact", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "<https://x/|y> pinged <@U1>",
+      });
+
+      const body = lastCall().options.body as string;
+      expect(body).toContain("<https://x/|y>");
+      expect(body).toContain("<@U1>");
+    });
+
+    test("Slack honors allow_mentions", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "<!channel> deploy done",
+        allow_mentions: true,
+      });
+
+      const body = lastCall().options.body as string;
+      expect(body).toContain("<!channel>");
+      expect(body).not.toContain("&lt;!");
+      expect(body).not.toContain("link_names");
+    });
+  });
+
+  describe("request timeouts", () => {
+    // Vitest's fake timers do not drive `AbortSignal.timeout` (Node implements
+    // it on an internal timer, not the patched global), so the default is
+    // asserted at the point it is armed and the behavior with a real short one.
+    test("arms an abort signal from the default timeout", async () => {
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+      try {
+        await slackNotify({ url: SLACK_URL, text: "hi" });
+        expect(timeoutSpy).toHaveBeenLastCalledWith(30000);
+        expect(lastCall().options.signal).toBeInstanceOf(AbortSignal);
+
+        mockFetch.mockImplementation(() => Promise.resolve(new Response(null, { status: 204 })));
+        await discordNotify({ url: DISCORD_URL, content: "hi" });
+        expect(timeoutSpy).toHaveBeenLastCalledWith(30000);
+
+        mockFetch.mockImplementation(() => Promise.resolve(new Response("ok", { status: 200 })));
+        await webhookNotify({ url: WEBHOOK_URL, payload: {} });
+        expect(timeoutSpy).toHaveBeenLastCalledWith(30000);
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
+
+    test("an endpoint that never answers is aborted by the timeout", async () => {
+      mockFetch.mockImplementation(
+        (_url, options) =>
+          new Promise<Response>((_resolve, reject) => {
+            options.signal!.addEventListener("abort", () => {
+              reject((options.signal as AbortSignal).reason);
+            });
+          })
+      );
+
+      const error = await slackNotify({ url: SLACK_URL, text: "hi", timeout: 50 }).catch(
+        (e: unknown) => e
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect(String((error as Error).message)).not.toContain("SECRETTOKEN");
+    });
+
+    test("a caller abort surfaces as an abort error, not a retryable network error", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.reject(new DOMException("The operation was aborted.", "AbortError"))
+      );
+
+      const error = await slackNotify({ url: SLACK_URL, text: "hi" }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(AbortSignalJobError);
+      expect(error).not.toBeInstanceOf(RetryableJobError);
+      expect((error as { code?: string }).code).not.toBe(FetchUrlErrorCode.NETWORK_ERROR);
+    });
+  });
+
+  describe("response body cap", () => {
+    /** An endless body; `cancelled` flips when the consumer gives up on it. */
+    function endlessBody(status: number): { response: Response; cancelled: () => boolean } {
+      let cancelled = false;
+      const chunk = new Uint8Array(2 * 1024 * 1024).fill(120); // 2MB of "x"
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(chunk.slice());
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      return {
+        response: new Response(stream, { status, statusText: "Server Error" }),
+        cancelled: () => cancelled,
+      };
+    }
+
+    test("caps the buffered response body", async () => {
+      const { response, cancelled } = endlessBody(200);
+      mockFetch.mockImplementation(() => Promise.resolve(response));
+
+      const result = await webhookNotify({ url: WEBHOOK_URL, payload: {} });
+
+      expect(result.response.length).toBeLessThanOrEqual(1024 + 3);
+      expect(cancelled()).toBe(true);
+    });
+
+    test("caps the failure body too", async () => {
+      const { response, cancelled } = endlessBody(500);
+      mockFetch.mockImplementation(() => Promise.resolve(response));
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "hi" }).catch(
+        (e: unknown) => e
+      )) as RetryableJobError;
+
+      expect(error).toBeInstanceOf(RetryableJobError);
+      expect(error.message.length).toBeLessThan(2048);
+      expect(cancelled()).toBe(true);
+    });
+  });
+
+  describe("private destinations", () => {
+    // Reachability matches FetchUrlTask, but the `response` port would make
+    // this a working SSRF READ primitive against a metadata endpoint.
+    test("does not echo the response body for a private destination", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(new Response("AKIAEXAMPLESECRET", { status: 200 }))
+      );
+
+      const result = await webhookNotify({
+        url: "http://169.254.169.254/latest/meta-data/",
+        payload: { ping: true },
+      });
+
+      expect(result.response).toBe("");
+      expect(JSON.stringify(result)).not.toContain("AKIA");
+      expect(result.status).toBe(200);
+    });
+
+    test("still echoes a public destination's body", async () => {
+      mockFetch.mockImplementation(() => Promise.resolve(new Response("pong", { status: 200 })));
+
+      const result = await webhookNotify({ url: WEBHOOK_URL, payload: {} });
+
+      expect(result.response).toBe("pong");
+    });
+  });
+
+  describe("credential misconfiguration", () => {
+    // Wiring a bearer token into `url_credential_key` is the likely mistake:
+    // for these tasks the credential must BE the whole webhook URL.
+    test("a bearer-token credential value fails with a configuration error", async () => {
+      const store = getGlobalCredentialStore();
+      await store.put("bearer-hook", "Bearer abc123");
+      const error = await webhookNotify({
+        payload: {},
+        url_credential_key: "bearer-hook",
+      })
+        .catch((e: unknown) => e)
+        .finally(() => store.delete("bearer-hook"));
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect((error as PermanentJobError).code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect((error as PermanentJobError).message).toContain("absolute http(s) URL");
+      expect((error as PermanentJobError).message).not.toContain("abc123");
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    test("a non-http scheme is rejected before any request is made", async () => {
+      const error = await webhookNotify({ url: "file:///etc/passwd", payload: {} }).catch(
+        (e: unknown) => e
+      );
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect((error as PermanentJobError).code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(mockFetch.mock.calls.length).toBe(0);
     });
   });
 });

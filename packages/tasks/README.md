@@ -140,17 +140,17 @@ output schema and error messages report only the endpoint's origin.
 
 **Input Schema:**
 
-- `url` (string, optional): Webhook endpoint to POST to
+- `url` (string, optional): Webhook endpoint to POST to. Kept out of errors and output, but a value set here is stored verbatim in the graph JSON — use `url_credential_key` to keep the secret out of the saved workflow.
 - `payload` (object, required): JSON body to send
 - `headers` (object, optional): Additional headers, merged over the JSON content type
-- `timeout` (number, optional): Request timeout in milliseconds
-- `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
+- `timeout` (number, optional): Request timeout in milliseconds. Default: `30000`
+- `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`. A value that is not an absolute `http(s)` URL (e.g. a bearer token) is rejected with a configuration error.
 
 **Output Schema:**
 
-- `success` (boolean): True when the endpoint answered with a 2xx status
+- `success` (boolean): Always `true`; a non-2xx response throws
 - `status` (number): HTTP status code returned by the endpoint
-- `response` (string): Response body, truncated to 1KB
+- `response` (string): Response body, truncated to 1KB. Always empty for a private/internal destination
 
 **Examples:**
 
@@ -173,7 +173,11 @@ const workflow = new Workflow()
 
 - Runs inline through the SSRF-aware `safeFetch` wrapper
 - Private/internal destinations require the scoped `network:private` entitlement
-- 429/503 and 5xx responses raise retryable errors carrying a `Retry-After` retry date
+- A private/internal destination is reachable but its response body is **never echoed** — `response` is always `""`. Notification needs no reply body, and returning one would make this task an SSRF read primitive (e.g. POSTing to a cloud metadata endpoint and reading the answer back into the graph)
+- 429/503 and 5xx raise `RetryableJobError`; retries require a `@workglow/job-queue` consumer, which these inline tasks do not have
+- Response bodies are read as a stream and abandoned past 1MB, so an endpoint answering with an unbounded body cannot exhaust runner memory — on the failure path too
+- Requests time out after 30s by default (`timeout`); a caller abort surfaces as an abort error rather than a retryable network failure
+- A configured `url_credential_key` upgrades the `credential` entitlement from optional to enforced
 - Never cached — the task is side-effecting (`cachePolicy: { kind: "none" }`)
 
 ### SlackNotifyTask
@@ -182,16 +186,18 @@ Sends a message to a Slack incoming webhook.
 
 **Input Schema:**
 
-- `url` (string, optional): Slack incoming webhook URL
+- `url` (string, optional): Slack incoming webhook URL. Kept out of errors and output, but a value set here is stored verbatim in the graph JSON — use `url_credential_key` to keep the secret out of the saved workflow.
 - `text` (string, required): Message text, also used as the notification fallback for block messages
 - `blocks` (array, optional): Slack Block Kit blocks
 - `username` (string, optional): Overrides the display name of the posting bot
 - `icon_emoji` (string, optional): Overrides the bot icon, e.g. `:rocket:`
+- `allow_mentions` (boolean, optional): Send `text` unmodified. Default: `false`
+- `timeout` (number, optional): Request timeout in milliseconds. Default: `30000`
 - `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
 
 **Output Schema:**
 
-- `success` (boolean): True when Slack accepted the message
+- `success` (boolean): Always `true`; a non-2xx response throws
 - `status` (number): HTTP status code returned by Slack
 
 **Examples:**
@@ -223,7 +229,10 @@ const workflow = new Workflow().slackNotify({
 
 - Absent optional fields are omitted from the payload rather than sent as `null`
 - Slack answers `200` with the body `ok`; failure bodies (`invalid_payload`, `no_service`) are surfaced in the error message
-- Webhook token never appears in errors, output, or logs
+- **Channel-wide broadcasts in `text` are neutralized by default.** Slack has no `allowed_mentions`; its documented control is HTML-entity escaping, so the literal `<!` is escaped to `&lt;!`. That defuses `<!channel>`, `<!here>`, `<!everyone>` and `<!subteam^ID>` while leaving `<https://…|label>` links and single-user `<@U123>` mentions intact, and `link_names: false` is sent explicitly. `blocks` is a caller-authored structure, not a piped string, so it is **not** rewritten — a broadcast written inside a block still pings. Set `allow_mentions: true` to send `text` verbatim
+- Requests time out after 30s by default (`timeout`)
+- Response bodies are capped at 1MB while being read
+- Webhook token never appears in error messages, `error.url`, `error.stack`, or task output
 
 ### DiscordNotifyTask
 
@@ -231,16 +240,18 @@ Sends a message to a Discord webhook.
 
 **Input Schema:**
 
-- `url` (string, optional): Discord webhook URL
+- `url` (string, optional): Discord webhook URL. Kept out of errors and output, but a value set here is stored verbatim in the graph JSON — use `url_credential_key` to keep the secret out of the saved workflow.
 - `content` (string, required): Message content
 - `username` (string, optional): Overrides the display name of the webhook
 - `avatar_url` (string, optional): Overrides the avatar of the webhook
 - `embeds` (array, optional): Discord embed objects
+- `allow_mentions` (boolean, optional): Let the message ping. Default: `false`
+- `timeout` (number, optional): Request timeout in milliseconds. Default: `30000`
 - `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
 
 **Output Schema:**
 
-- `success` (boolean): True when Discord accepted the message
+- `success` (boolean): Always `true`; a non-2xx response throws
 - `status` (number): HTTP status code returned by Discord, `204` on success
 
 **Examples:**
@@ -271,8 +282,11 @@ const workflow = new Workflow().discordNotify({
 **Features:**
 
 - A successful post answers `204 No Content`, so no response body is read or parsed
-- Rate limits arrive as `429` and may carry the delay as `{"retry_after": <seconds>}` in the body instead of a `Retry-After` header; both are honored
-- Webhook token never appears in errors, output, or logs
+- Rate limits arrive as `429` and may carry the delay as `{"retry_after": <seconds>}` in the body instead of a `Retry-After` header; both are parsed onto the raised `RetryableJobError`. Nothing acts on the value — retries require a `@workglow/job-queue` consumer, which these inline tasks do not have
+- **Mass mentions are suppressed by default** — `allowed_mentions: { parse: [] }` is sent, so `@everyone`/`@here`, role and user pings in `content` do nothing even when the content was piped in from a fetch or a model. Set `allow_mentions: true` to let the message ping
+- Requests time out after 30s by default (`timeout`)
+- Response bodies are capped at 1MB while being read
+- Webhook token never appears in error messages, `error.url`, `error.stack`, or task output
 
 ### DebugLogTask
 

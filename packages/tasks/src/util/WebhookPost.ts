@@ -10,14 +10,23 @@
  * token) the URL must never reach an error message, task output, or log line.
  * Every message produced here is built from {@link redactWebhookUrl}, and any
  * error bubbling out of `safeFetch` (whose messages do embed the full URL) is
- * rewritten through {@link redactWebhookUrlIn} before it escapes.
+ * rewritten through {@link redactWebhookUrlIn} — message, `url` field AND
+ * `stack` — before it escapes.
+ *
+ * `safeFetch`'s own messages are only "trusted non-secret" for callers whose
+ * URL is not itself a credential (e.g. {@link FetchUrlTask}, where the URL is
+ * the most useful diagnostic there is). This module is the one layer that
+ * knows the URL IS the credential, so redaction belongs here rather than in
+ * the shared transport.
  */
 
 import { AbortSignalJobError } from "@workglow/job-queue";
 import type { TaskEntitlements } from "@workglow/task-graph";
 import { Entitlements, mergeEntitlements } from "@workglow/task-graph";
+import { SECURITY_LIMITS } from "@workglow/util";
 import type { FetchUrlJobErrorInstance } from "../task/FetchUrlJobError";
 import {
+  createFetchUrlAbortedError,
   createFetchUrlJobError,
   FetchUrlErrorCode,
   httpStatusToFetchUrlErrorCode,
@@ -61,6 +70,38 @@ export function redactWebhookUrlIn(text: string, url: string): string {
 }
 
 /**
+ * Builds a redacted `.stack` for a rewritten error.
+ *
+ * `BaseError` never overrides `stack`, so V8 materializes it as
+ * `"<name>: <message>\n    at …"` — the message is baked into the string.
+ * Copying an unredacted stack across therefore re-imports the very webhook
+ * token the rewrite just stripped from `.message` and `.url`, and stacks are
+ * persisted (see `formatErrorChainForDiagnostics`), so "logs are trusted" is
+ * not an available defence.
+ *
+ * The header is replaced wholesale rather than patched: a message may itself
+ * contain newlines, so the split point is the first stack FRAME (`    at …`),
+ * not the first line. Frames can embed the URL independently (a module
+ * specifier, a fetch wrapper argument), so the assembled result gets a second
+ * redaction pass.
+ *
+ * Fails CLOSED on runtimes whose stacks carry no `    at ` frames
+ * (JavaScriptCore's `fn@file:line:col` form): only the redacted header is
+ * kept, losing frames rather than risking the secret.
+ */
+export function redactedStackFrom(original: unknown, rebuilt: Error, url: string): string {
+  const header = `${rebuilt.name}: ${rebuilt.message}`;
+  const originalStack =
+    original instanceof Error && typeof original.stack === "string" ? original.stack : "";
+  const lines = originalStack.split("\n");
+  const firstFrame = lines.findIndex((line) => /^\s+at /.test(line));
+  if (firstFrame < 0) {
+    return redactWebhookUrlIn(header, url);
+  }
+  return redactWebhookUrlIn([header, ...lines.slice(firstFrame)].join("\n"), url);
+}
+
+/**
  * Picks the webhook URL, preferring a resolved credential over the plain
  * `url` port. Credential values arrive already resolved by the input
  * resolver, so the key name never reaches the network.
@@ -75,6 +116,22 @@ export function resolveWebhookUrl(
     throw createFetchUrlJobError(
       FetchUrlErrorCode.CONFIGURATION,
       `${label}: no webhook URL provided. Set the 'url' input or the 'url_credential_key' input.`
+    );
+  }
+  // A bearer token wired into `url_credential_key` is the likely mistake here:
+  // these tasks expect the credential to BE the whole webhook URL. Say so, but
+  // never echo the value — it is a secret whichever kind it turns out to be.
+  let protocol: string;
+  try {
+    protocol = new URL(resolved).protocol;
+  } catch {
+    protocol = "";
+  }
+  if (protocol !== "http:" && protocol !== "https:") {
+    throw createFetchUrlJobError(
+      FetchUrlErrorCode.CONFIGURATION,
+      `${label}: the resolved webhook value must be an absolute http(s) URL. ` +
+        `If 'url_credential_key' holds a bearer token rather than a full webhook URL, use FetchUrlTask instead.`
     );
   }
   return resolved;
@@ -151,10 +208,33 @@ function leaksUrl(error: FetchUrlJobErrorInstance, url: string): boolean {
  * message cannot contain the webhook secret. Already-typed errors keep their
  * code (and therefore their retryable/permanent classification) and are passed
  * through untouched unless they embed the URL.
+ *
+ * `callerSignal` is the task's own abort signal, kept separate from the
+ * composed timeout signal so a cancellation can be told apart from a timeout.
  */
-function toRedactedWebhookError(error: unknown, url: string, label: string): unknown {
+function toRedactedWebhookError(
+  error: unknown,
+  url: string,
+  label: string,
+  callerSignal: AbortSignal
+): unknown {
   if (error instanceof AbortSignalJobError) {
     return error;
+  }
+  // `fetch` rejects an aborted or timed-out request with a DOMException, which
+  // would otherwise fall through to the retryable NETWORK_ERROR below — making
+  // a cancelled workflow look like a transient failure worth retrying.
+  const name = error instanceof Error ? error.name : "";
+  if (name === "AbortError" || name === "TimeoutError") {
+    if (callerSignal.aborted || name === "AbortError") {
+      return createFetchUrlAbortedError();
+    }
+    // Only a timeout that the caller did not also abort is a transient failure.
+    return createFetchUrlJobError(
+      FetchUrlErrorCode.NETWORK_ERROR,
+      `Timed out posting ${label} to ${redactWebhookUrl(url)}`,
+      { url: redactWebhookUrl(url) }
+    );
   }
   if (isFetchUrlJobError(error)) {
     if (!leaksUrl(error, url)) {
@@ -166,7 +246,12 @@ function toRedactedWebhookError(error: unknown, url: string, label: string): unk
       httpStatusText: error.httpStatusText,
       retryDate: error.retryDate,
     });
-    rebuilt.stack = error.stack;
+    // Deliberately NOT copying `error.cause`: `formatErrorChainForDiagnostics`
+    // walks the cause chain and pushes every link's `.message` + `.stack` into
+    // a PERSISTED job-error string, which would re-import the unredacted URL
+    // this rebuild just stripped. `createFetchUrlJobError` sets no cause today
+    // and none must be added here.
+    rebuilt.stack = redactedStackFrom(error, rebuilt, url);
     return rebuilt;
   }
   const detail = error instanceof Error ? error.message : String(error);
@@ -177,11 +262,52 @@ function toRedactedWebhookError(error: unknown, url: string, label: string): unk
   );
 }
 
-async function readBodyText(response: Response): Promise<string> {
+/**
+ * Reads a response body with a hard byte ceiling.
+ *
+ * `response.text()` buffers the whole body before any truncation constant can
+ * apply, so a hostile (or merely broken) endpoint answering with a multi-GB
+ * body would OOM the runner — including on the failure path, which buffers
+ * unconditionally for all three notification tasks. Streaming lets the read be
+ * abandoned mid-body: once the cap is passed the reader is cancelled and
+ * whatever arrived so far is returned.
+ */
+async function readBodyText(
+  response: Response,
+  maxBytes: number = SECURITY_LIMITS.webhookMaxResponseBodyBytes
+): Promise<string> {
+  const body = response.body;
+  if (body === null || body === undefined || typeof body.getReader !== "function") {
+    // A bodiless response (204) or a runtime without streaming support.
+    try {
+      return await response.text();
+    } catch {
+      return "";
+    }
+  }
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
   try {
-    return await response.text();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return text + decoder.decode();
+      }
+      if (value === undefined) {
+        continue;
+      }
+      bytes += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+      if (bytes >= maxBytes) {
+        await reader.cancel().catch(() => {});
+        return text;
+      }
+    }
   } catch {
-    return "";
+    return text;
   }
 }
 
@@ -222,7 +348,7 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
       privateResourceScopes: isPrivate ? [urlResourcePattern(url)] : undefined,
     });
   } catch (err) {
-    throw toRedactedWebhookError(err, url, label);
+    throw toRedactedWebhookError(err, url, label, request.signal);
   }
 
   if (response.ok) {
@@ -257,7 +383,15 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
   );
 }
 
-/** Static entitlements shared by every webhook notification task. */
+/**
+ * Static entitlements shared by every webhook notification task.
+ *
+ * `credential` is declared optional HERE because the static shape describes the
+ * task class, which may or may not be configured to use the store. An optional
+ * entitlement is skipped outright by `evaluatePolicy`, so this declaration is
+ * documentation only; {@link webhookPrivateEntitlements} upgrades it to a real
+ * requirement on the instance that actually configures a credential key.
+ */
 export function webhookBaseEntitlements(reason: string): TaskEntitlements {
   return {
     entitlements: [
@@ -290,8 +424,21 @@ export function webhookPrivateEntitlements(
   credentialKey: unknown
 ): TaskEntitlements {
   const credentialWins = typeof credentialKey === "string" && credentialKey.length > 0;
+  // A configured credential key is no longer a "may": this instance WILL read
+  // the credential store. `mergeEntitlements` keeps the most restrictive
+  // `optional`, so this upgrades the base declaration into an enforced one.
+  const withCredential = credentialWins
+    ? mergeEntitlements(base, {
+        entitlements: [
+          {
+            id: Entitlements.CREDENTIAL,
+            reason: "Resolves the webhook URL — the secret itself — from the credential store",
+          },
+        ],
+      })
+    : base;
   if (credentialWins || typeof url !== "string" || url.length === 0) {
-    return mergeEntitlements(base, {
+    return mergeEntitlements(withCredential, {
       entitlements: [
         {
           id: Entitlements.NETWORK_PRIVATE,
@@ -304,9 +451,9 @@ export function webhookPrivateEntitlements(
   }
   const classification = classifyUrl(url);
   if (classification.kind !== "private") {
-    return base;
+    return withCredential;
   }
-  return mergeEntitlements(base, {
+  return mergeEntitlements(withCredential, {
     entitlements: [
       {
         id: Entitlements.NETWORK_PRIVATE,

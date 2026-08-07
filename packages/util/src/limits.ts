@@ -72,6 +72,13 @@ export const SECURITY_LIMITS = {
   imageMaxInputBytesBrowser: 32 * 1024 * 1024,
   /** Max redirect hops followed by the SSRF-aware `safeFetch` wrapper. */
   safeFetchMaxRedirectHops: 20,
+  /**
+   * Max bytes buffered from a webhook response body before the read is
+   * abandoned. Truncation constants apply only after a body is fully in
+   * memory, so without this ceiling a hostile endpoint answering with an
+   * unbounded body would OOM the runner.
+   */
+  webhookMaxResponseBodyBytes: 1024 * 1024,
   /** Max accepted length (characters) of an encoded tabular storage pagination cursor. */
   tabularMaxCursorLength: 8 * 1024,
   /** Lines matched per interruptible regex batch (ReDoS defence, see below). */

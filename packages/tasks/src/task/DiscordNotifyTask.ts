@@ -28,7 +28,7 @@ const inputSchema = {
       format: "uri",
       title: "Webhook URL",
       description:
-        "Discord webhook URL. The token is part of the path, so it is treated as a secret and never echoed back.",
+        "Discord webhook URL. The token is part of the path, so it is kept out of errors and output — but a value set here is stored verbatim in the graph JSON. Use 'url_credential_key' to keep the secret out of the saved workflow.",
     },
     content: {
       type: "string",
@@ -52,6 +52,19 @@ const inputSchema = {
       title: "Embeds",
       description: "Discord embed objects",
     },
+    allow_mentions: {
+      type: "boolean",
+      default: false,
+      title: "Allow Mentions",
+      description:
+        "Let the message ping. By default `allowed_mentions: { parse: [] }` is sent, suppressing @everyone/@here, role and user pings so piped or model-generated content cannot notify a whole server.",
+    },
+    timeout: {
+      type: "number",
+      default: 30000,
+      title: "Timeout",
+      description: "Request timeout in milliseconds",
+    },
     url_credential_key: {
       type: "string",
       format: "credential",
@@ -71,7 +84,7 @@ const outputSchema = {
     success: {
       type: "boolean",
       title: "Success",
-      description: "True when Discord accepted the message",
+      description: "Always true; a non-2xx response throws.",
     },
     status: {
       type: "number",
@@ -135,9 +148,14 @@ export class DiscordNotifyTask<
         username: input.username,
         avatar_url: input.avatar_url,
         embeds: input.embeds,
+        // `parse: []` suppresses @everyone/@here plus every role and user
+        // mention, so content piped in from a fetch or a model cannot turn a
+        // notification into a server-wide ping (and a retry loop into an
+        // amplifier). Opt back in with `allow_mentions`.
+        allowed_mentions: input.allow_mentions === true ? undefined : { parse: [] },
       }),
       headers: undefined,
-      timeout: undefined,
+      timeout: input.timeout,
       signal: context.signal,
       readSuccessBody: false,
       includeBodyInError: true,

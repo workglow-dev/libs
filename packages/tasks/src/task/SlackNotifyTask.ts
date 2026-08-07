@@ -28,7 +28,7 @@ const inputSchema = {
       format: "uri",
       title: "Webhook URL",
       description:
-        "Slack incoming webhook URL. The token is part of the path, so it is treated as a secret and never echoed back.",
+        "Slack incoming webhook URL. The token is part of the path, so it is kept out of errors and output — but a value set here is stored verbatim in the graph JSON. Use 'url_credential_key' to keep the secret out of the saved workflow.",
     },
     text: {
       type: "string",
@@ -51,6 +51,19 @@ const inputSchema = {
       title: "Icon Emoji",
       description: "Overrides the bot icon, e.g. :robot_face:",
     },
+    allow_mentions: {
+      type: "boolean",
+      default: false,
+      title: "Allow Mentions",
+      description:
+        "Send 'text' unmodified. By default channel-wide broadcasts (<!channel>, <!here>, <!everyone>, <!subteam^ID>) are neutralized so piped or model-generated text cannot notify a whole workspace.",
+    },
+    timeout: {
+      type: "number",
+      default: 30000,
+      title: "Timeout",
+      description: "Request timeout in milliseconds",
+    },
     url_credential_key: {
       type: "string",
       format: "credential",
@@ -70,7 +83,7 @@ const outputSchema = {
     success: {
       type: "boolean",
       title: "Success",
-      description: "True when Slack accepted the message",
+      description: "Always true; a non-2xx response throws.",
     },
     status: {
       type: "number",
@@ -84,6 +97,23 @@ const outputSchema = {
 
 export type SlackNotifyTaskInput = FromSchema<typeof inputSchema>;
 export type SlackNotifyTaskOutput = FromSchema<typeof outputSchema>;
+
+/**
+ * Defuses Slack's channel-wide broadcast sequences in caller-supplied text.
+ *
+ * Slack has no `allowed_mentions` equivalent; its documented control is
+ * HTML-entity escaping. Broadcasts are all written `<!…>` — `<!channel>`,
+ * `<!here>`, `<!everyone>` and the group form `<!subteam^ID>` — so escaping
+ * just the opening `<!` kills every one of them while leaving `<https://…|label>`
+ * links and single-user `<@U123>` mentions intact, which full `<`/`>` escaping
+ * would break.
+ *
+ * `link_names` is NOT a substitute: it governs auto-linking of bare `@name`
+ * text, not these control sequences.
+ */
+export function neutralizeSlackBroadcasts(text: string): string {
+  return text.split("<!").join("&lt;!");
+}
 
 /**
  * Posts a message to a Slack incoming webhook.
@@ -127,16 +157,21 @@ export class SlackNotifyTask<
 
   override async execute(input: Input, context: IExecuteContext): Promise<Output> {
     const url = resolveWebhookUrl(input.url, input.url_credential_key, "SlackNotifyTask");
+    const allowMentions = input.allow_mentions === true;
     const result = await postWebhookJson({
       url,
       payload: compactPayload({
-        text: input.text,
+        // `blocks` is a caller-authored structure rather than a piped string,
+        // so it is passed through unchanged — a broadcast written inside a
+        // block is NOT neutralized.
+        text: allowMentions ? input.text : neutralizeSlackBroadcasts(input.text),
         blocks: input.blocks,
         username: input.username,
         icon_emoji: input.icon_emoji,
+        link_names: allowMentions ? undefined : false,
       }),
       headers: undefined,
-      timeout: undefined,
+      timeout: input.timeout,
       signal: context.signal,
       readSuccessBody: false,
       includeBodyInError: true,

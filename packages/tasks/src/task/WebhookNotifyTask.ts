@@ -12,6 +12,7 @@ import type {
 } from "@workglow/task-graph";
 import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import { classifyUrl } from "../util/UrlClassifier";
 import {
   postWebhookJson,
   resolveWebhookUrl,
@@ -26,7 +27,8 @@ const inputSchema = {
       type: "string",
       format: "uri",
       title: "URL",
-      description: "Webhook endpoint to POST to. Treated as a secret and never echoed back.",
+      description:
+        "Webhook endpoint to POST to. Kept out of errors and output — but a value set here is stored verbatim in the graph JSON. Use 'url_credential_key' to keep the secret out of the saved workflow.",
     },
     payload: {
       type: "object",
@@ -42,6 +44,7 @@ const inputSchema = {
     },
     timeout: {
       type: "number",
+      default: 30000,
       title: "Timeout",
       description: "Request timeout in milliseconds",
     },
@@ -64,7 +67,7 @@ const outputSchema = {
     success: {
       type: "boolean",
       title: "Success",
-      description: "True when the endpoint answered with a 2xx status",
+      description: "Always true; a non-2xx response throws.",
     },
     status: {
       type: "number",
@@ -74,7 +77,8 @@ const outputSchema = {
     response: {
       type: "string",
       title: "Response",
-      description: "Response body, truncated to 1KB",
+      description:
+        "Response body, truncated to 1KB. Always empty for a private/internal destination, which is reachable but never echoed back.",
     },
   },
   required: ["success", "status", "response"],
@@ -124,18 +128,29 @@ export class WebhookNotifyTask<
 
   override async execute(input: Input, context: IExecuteContext): Promise<Output> {
     const url = resolveWebhookUrl(input.url, input.url_credential_key, "WebhookNotifyTask");
+    // Reachability of a private destination matches FetchUrlTask (gated by the
+    // `network:private` entitlement), but the `response` port would additionally
+    // turn this task into an SSRF *read* primitive: a POST to
+    // http://169.254.169.254/latest/meta-data/iam/security-credentials/ would
+    // hand a kilobyte of the reply back into the graph. Notification needs no
+    // reply body, so the private path never reads one.
+    const isPrivate = classifyUrl(url).kind === "private";
     const result = await postWebhookJson({
       url,
       payload: input.payload,
       headers: input.headers,
       timeout: input.timeout,
       signal: context.signal,
-      readSuccessBody: true,
+      readSuccessBody: !isPrivate,
       includeBodyInError: false,
       retryAfterFromJsonBody: false,
       label: "webhook",
     });
-    return { success: true, status: result.status, response: result.body } as Output;
+    return {
+      success: true,
+      status: result.status,
+      response: isPrivate ? "" : result.body,
+    } as Output;
   }
 }
 
