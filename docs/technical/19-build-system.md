@@ -423,6 +423,14 @@ declarations. This is important because `.d.ts` files may differ across platform
 the browser build exports `globalThis.Worker` while the Node build exports a `WorkerPolyfill`
 with a different constructor signature.
 
+**A block's `"types"` must name the declaration of the implementation in that same block.**
+`tsgo` compiles all of `src/**/*`, so every entry file already has its own `.d.ts` in `dist` —
+there is never a reason to borrow another target's. A block that points `"browser"` at the node
+`.d.ts` type-checks browser consumers against the node build: they get autocomplete and
+successful compiles for symbols that are `undefined` at runtime, because the browser bundle
+never exported them. `packages/test/src/test/util/ExportTypesPairing.test.ts` walks every
+condition branch of every workspace manifest and fails on any pair that has drifted apart.
+
 ---
 
 ## Developer Workflow

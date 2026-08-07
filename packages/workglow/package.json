@@ -37,7 +37,7 @@
     },
     "./anthropic": {
       "browser": {
-        "types": "./dist/anthropic.d.ts",
+        "types": "./dist/anthropic.browser.d.ts",
         "import": "./dist/anthropic.browser.js"
       },
       "types": "./dist/anthropic.d.ts",
@@ -49,7 +49,7 @@
     },
     "./deepseek": {
       "browser": {
-        "types": "./dist/deepseek.d.ts",
+        "types": "./dist/deepseek.browser.d.ts",
         "import": "./dist/deepseek.browser.js"
       },
       "types": "./dist/deepseek.d.ts",
@@ -61,7 +61,7 @@
     },
     "./gemini": {
       "browser": {
-        "types": "./dist/google-gemini.d.ts",
+        "types": "./dist/google-gemini.browser.d.ts",
         "import": "./dist/google-gemini.browser.js"
       },
       "types": "./dist/google-gemini.d.ts",
@@ -73,7 +73,7 @@
     },
     "./hf-inference": {
       "browser": {
-        "types": "./dist/hf-inference.d.ts",
+        "types": "./dist/hf-inference.browser.d.ts",
         "import": "./dist/hf-inference.browser.js"
       },
       "types": "./dist/hf-inference.d.ts",
@@ -85,7 +85,7 @@
     },
     "./hf-transformers": {
       "browser": {
-        "types": "./dist/hf-transformers.d.ts",
+        "types": "./dist/hf-transformers.browser.d.ts",
         "import": "./dist/hf-transformers.browser.js"
       },
       "types": "./dist/hf-transformers.d.ts",
@@ -97,7 +97,7 @@
     },
     "./ollama": {
       "browser": {
-        "types": "./dist/ollama.d.ts",
+        "types": "./dist/ollama.browser.d.ts",
         "import": "./dist/ollama.browser.js"
       },
       "types": "./dist/ollama.d.ts",
@@ -109,7 +109,7 @@
     },
     "./openai": {
       "browser": {
-        "types": "./dist/openai.d.ts",
+        "types": "./dist/openai.browser.d.ts",
         "import": "./dist/openai.browser.js"
       },
       "types": "./dist/openai.d.ts",
@@ -121,7 +121,7 @@
     },
     "./openrouter": {
       "browser": {
-        "types": "./dist/openrouter.d.ts",
+        "types": "./dist/openrouter.browser.d.ts",
         "import": "./dist/openrouter.browser.js"
       },
       "types": "./dist/openrouter.d.ts",
@@ -133,7 +133,7 @@
     },
     "./xai": {
       "browser": {
-        "types": "./dist/xai.d.ts",
+        "types": "./dist/xai.browser.d.ts",
         "import": "./dist/xai.browser.js"
       },
       "types": "./dist/xai.d.ts",
