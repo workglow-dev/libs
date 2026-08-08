@@ -13,6 +13,7 @@ import {
 import { TaskRegistry, Workflow } from "@workglow/task-graph";
 import {
   createFetchUrlJobError,
+  createSafeFetchRedirectError,
   discordNotify,
   DiscordNotifyTask,
   FetchUrlErrorCode,
@@ -43,13 +44,11 @@ const REDIRECT_TARGET = "https://attacker.example/collect";
 
 /**
  * Reproduces what both `safeFetch` transports do for a 3xx under
- * `redirect: "error"`: a bare `TypeError` naming the URL that was requested,
- * raised without ever reading the `Location` header.
+ * `redirect: "error"`: the exported refusal sentinel, built from the requested
+ * URL and the 3xx status without ever reading the `Location` header.
  */
-function redirectRefusal(url: string): Promise<Response> {
-  return Promise.reject(
-    new TypeError(`Fetch for ${url} failed because redirect mode was set to 'error'.`)
-  );
+function redirectRefusal(url: string, status = 302): Promise<Response> {
+  return Promise.reject(createSafeFetchRedirectError(url, status));
 }
 
 const mockFetch = vi.fn((_url: string, _options: SafeFetchOptions) =>
@@ -809,6 +808,59 @@ describe("Webhook notification tasks", () => {
       expect(error).toBeInstanceOf(PermanentJobError);
       expect((error as PermanentJobError).code).toBe(FetchUrlErrorCode.INVALID_URL);
       expect(mockFetch.mock.calls.length).toBe(1);
+    });
+
+    // The refusal used to be recognized by its SHAPE — a `TypeError` whose
+    // message matched /redirect/i. That fails open: reword the transport's
+    // message (a refactor, or an undici change) and the match silently stops,
+    // the refusal falls through to the generic branch, and it is relabelled
+    // NETWORK_ERROR — which is in FETCH_URL_RETRYABLE_ERROR_CODES. The refused
+    // redirect would then be retried, with no test failing. Detection is now
+    // the transport's exported discriminant, so the wording is free to change.
+    test("a refusal whose message never says 'redirect' is still permanent", async () => {
+      mockFetch.mockImplementation((url: string) =>
+        Promise.reject(
+          createFetchUrlJobError(
+            FetchUrlErrorCode.REDIRECT_NOT_FOLLOWED,
+            `Fetch for ${url} was answered 307 and the request was not re-sent.`,
+            { url, httpStatus: 307 }
+          )
+        )
+      );
+
+      const error = (await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: { event: "deploy" },
+      }).catch((e: unknown) => e)) as PermanentJobError & { url?: string };
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error).not.toBeInstanceOf(RetryableJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.INVALID_URL);
+      expect(error.code).not.toBe(FetchUrlErrorCode.NETWORK_ERROR);
+      // The remedy is still named, and the token still redacted.
+      expect(error.message).toContain("redirect");
+      expect(error.message).toContain("Configure the final URL instead.");
+      expect(error.message).not.toContain("SECRETTOKEN");
+      expect(String(error.stack)).not.toContain("SECRETTOKEN");
+      expect(mockFetch.mock.calls.length).toBe(1);
+    });
+
+    // The converse: detection is identity-based in BOTH directions, so prose
+    // alone can no longer promote an unrelated failure into the permanent
+    // branch. Nothing real lands here — both transports issue their own fetch
+    // with `redirect: "manual"`, so the runtime never raises a redirect-mode
+    // TypeError of its own — but it pins that the regex is gone.
+    test("an ordinary TypeError that merely mentions redirects is not the refusal", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.reject(new TypeError("fetch failed after redirect to origin pool"))
+      );
+
+      const error = (await webhookNotify({ url: WEBHOOK_URL, payload: {} }).catch(
+        (e: unknown) => e
+      )) as PermanentJobError & { url?: string };
+
+      expect(error.code).toBe(FetchUrlErrorCode.NETWORK_ERROR);
+      expect(error.message).not.toContain("SECRETTOKEN");
     });
   });
 

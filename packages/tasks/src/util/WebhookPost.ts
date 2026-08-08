@@ -32,7 +32,7 @@ import {
   httpStatusToFetchUrlErrorCode,
   isFetchUrlJobError,
 } from "../task/FetchUrlJobError";
-import { safeFetch } from "./SafeFetch";
+import { isSafeFetchRedirectError, safeFetch } from "./SafeFetch";
 import { classifyUrl, urlResourcePattern } from "./UrlClassifier";
 
 /** Placeholder used when a webhook URL cannot even be parsed for its origin. */
@@ -214,20 +214,6 @@ function leaksUrl(error: FetchUrlJobErrorInstance, url: string): boolean {
 }
 
 /**
- * Recognizes the rejection `safeFetch` raises for a 3xx under
- * `redirect: "error"`.
- *
- * Both transports throw a bare `TypeError` there — the shape `fetch` itself
- * uses for the same refusal — so there is no code to match on, only the shape:
- * a `TypeError` that names a redirect. Nothing else on this path produces one;
- * a connection failure names the socket, and every SSRF refusal arrives as a
- * typed {@link FetchUrlJobErrorInstance}.
- */
-function isRedirectRefusal(error: unknown): boolean {
-  return error instanceof Error && error.name === "TypeError" && /redirect/i.test(error.message);
-}
-
-/**
  * Normalizes anything thrown while posting into a typed fetch error whose
  * message cannot contain the webhook secret. Already-typed errors keep their
  * code (and therefore their retryable/permanent classification) and are passed
@@ -260,10 +246,16 @@ function toRedactedWebhookError(
       { url: redactWebhookUrl(url) }
     );
   }
+  // Matched on the transport's exported discriminant, never on its wording: a
+  // reworded message must not be able to demote this refusal into the
+  // retryable NETWORK_ERROR branch below. Checked ahead of the general
+  // `isFetchUrlJobError` pass-through so the refusal keeps this task's own
+  // framing rather than the transport's.
+  //
   // Built from scratch rather than rewritten: the transport's message embeds
   // the requested URL (the secret), and the `Location` it refused to follow is
   // never read at all, so neither can reach the caller.
-  if (isRedirectRefusal(error)) {
+  if (isSafeFetchRedirectError(error)) {
     return createFetchUrlJobError(
       FetchUrlErrorCode.INVALID_URL,
       `Refusing to post ${label} to ${redactWebhookUrl(url)}: the endpoint answered with a ` +
