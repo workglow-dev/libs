@@ -310,6 +310,36 @@ describe("VectorQuantizeTask", () => {
       }
     });
 
+    test("should reject a non-power-of-2 dimensionality with an actionable message", async () => {
+      // 768 is MiniLM's dimensionality, so this is the common case rather than an edge
+      // one. Turbo would have to discard 256 of 1024 rotated coordinates to return a
+      // 768-length vector, which measures worse than linear at that size — so the task
+      // refuses and names both remedies instead of silently returning worse vectors.
+      const vector = new Float32Array(768);
+      for (let i = 0; i < 768; i++) vector[i] = Math.sin(i * 0.1);
+
+      await expect(
+        vectorQuantize({ vector, targetType: TensorType.INT8, method: "turbo", turboSeed: 42 })
+      ).rejects.toThrow(/power of 2/);
+
+      await expect(
+        vectorQuantize({ vector, targetType: TensorType.INT8, method: "turbo", turboSeed: 42 })
+      ).rejects.toThrow(/768/);
+
+      // Both remedies are named: switch method, or pad to the next power of 2.
+      await expect(
+        vectorQuantize({ vector, targetType: TensorType.INT8, method: "turbo", turboSeed: 42 })
+      ).rejects.toThrow(/linear/);
+
+      await expect(
+        vectorQuantize({ vector, targetType: TensorType.INT8, method: "turbo", turboSeed: 42 })
+      ).rejects.toThrow(/1024/);
+
+      // The same vector is fine under linear quantization.
+      const linear = await vectorQuantize({ vector, targetType: TensorType.INT8 });
+      expect((linear.vector as Int8Array).length).toBe(768);
+    });
+
     test("should report method and turboSeed on the output", async () => {
       const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
 

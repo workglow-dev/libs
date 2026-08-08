@@ -61,7 +61,7 @@ const inputSchema = {
       enum: Object.values(QuantizationMethod),
       title: "Method",
       description:
-        "Quantization method: 'linear' for simple min-max scaling, 'turbo' for TurboQuant (randomized rotation + optimal scalar quantization, better distortion than linear at the same bit width). Turbo requires a signed integer targetType (int8 or int16). Turbo rotates in nextPowerOf2(d) dimensions but keeps only the first d coordinates, so for a non-power-of-2 dimensionality it is a random projection and cosine similarity is preserved only approximately (measured int8 RMSE: d=1024 -> 0.001, d=1536 -> 0.013, d=768 -> 0.019); zero-pad to a power of 2 when fidelity matters.",
+        "Quantization method: 'linear' for simple min-max scaling, 'turbo' for TurboQuant (randomized Hadamard rotation + uniform scalar quantization at the MSE-optimal Gaussian clipping range). Turbo requires a signed integer targetType (int8 or int16) AND a power-of-2 vector dimensionality: it rotates in nextPowerOf2(d) dimensions, so a non-power-of-2 input is rejected rather than silently degraded. At equal byte width linear is measurably more accurate at the common embedding sizes — measured int8 cosine RMSE, turbo vs linear: 0.0164 vs 0.0027 at d=768, 0.0126 vs 0.0033 at d=1536, 0.0094 vs 0.0026 at d=3072. Turbo wins only at d=1024 (0.0008 vs 0.0033).",
       default: QuantizationMethod.LINEAR,
     },
     turboSeed: {
@@ -144,6 +144,13 @@ export type VectorQuantizeTaskOutput = {
 };
 export type VectorQuantizeTaskConfig = TaskConfig<VectorQuantizeTaskInput>;
 
+/** Smallest power of 2 that is >= n. Doubles rather than shifts to stay 32-bit safe. */
+function nextPowerOf2(n: number): number {
+  let p = 1;
+  while (p < n) p *= 2;
+  return p;
+}
+
 /**
  * Task for quantizing vectors to reduce storage and improve performance.
  * Supports various quantization types including binary, int8, uint8, int16, uint16.
@@ -195,6 +202,19 @@ export class VectorQuantizeTask extends Task<
       if (targetType !== TensorType.INT8 && targetType !== TensorType.INT16) {
         throw new Error(
           `VectorQuantizeTask: method "turbo" supports signed integer target types only (int8, int16), got "${targetType}"`
+        );
+      }
+      // Checked here rather than left to turboQuantizeToTypedArray so the message names
+      // the task's own remedies. Turbo rotates in nextPowerOf2(d) dimensions and cannot
+      // return a d-length result without discarding coordinates, which measures worse
+      // than linear at exactly the dimensionalities embedding models use.
+      const unpadded = vectors.find((v) => v.length !== nextPowerOf2(v.length));
+      if (unpadded !== undefined) {
+        throw new Error(
+          `VectorQuantizeTask: method "turbo" requires a power of 2 vector dimensionality, got ${unpadded.length}. ` +
+            `Either use method: "linear" at this dimensionality (it is measurably more accurate here — ` +
+            `int8 cosine RMSE at d=768: linear 0.0027 vs turbo 0.0164), or zero-pad the vectors to ` +
+            `${nextPowerOf2(unpadded.length)} before quantizing and size the storage column to match.`
         );
       }
       quantized = vectors.map((v) => turboQuantizeToTypedArray(v, targetType, turboSeed));

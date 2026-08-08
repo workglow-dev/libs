@@ -5,8 +5,10 @@
  */
 
 import { setLogger } from "@workglow/util";
+import type { TurboQuantizeResult } from "@workglow/util/schema";
 import {
   TensorType,
+  clearSignTableCache,
   cosineSimilarity,
   inner,
   magnitude,
@@ -124,7 +126,7 @@ describe("TurboQuantize", () => {
       const codes = Array.from(
         turboQuantize(new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]), { bits: 4, seed: 42 }).codes
       );
-      expect(codes).toEqual([117, 165, 180, 133]);
+      expect(codes).toEqual([117, 180, 195, 133]);
 
       const v64 = new Float32Array(64);
       for (let i = 0; i < 64; i++) v64[i] = Math.sin(i * 0.7) * ((i % 5) + 1);
@@ -132,8 +134,74 @@ describe("TurboQuantize", () => {
         turboQuantizeToTypedArray(v64, TensorType.INT8, 42).slice(0, 16) as Int8Array
       );
       expect(first16).toEqual([
-        21, -29, -20, -39, -22, -22, 45, 10, -44, -17, -41, -93, 10, 35, -14, -17,
+        16, -22, -15, -30, -17, -17, 35, 8, -34, -13, -31, -71, 8, 27, -10, -13,
       ]);
+    });
+
+    test("should reject a decode whose codes are not a Uint8Array", () => {
+      // TurboQuantizeResult is a plain serializable record, so the obvious way to persist
+      // one is JSON. That turns `codes` into a plain object with no usable `length`, and
+      // `undefined < expectedBytes` is false — so a size-only guard waves it through and
+      // every byte reads back as NaN -> code 0, decoding to a confident vector of garbage.
+      const quantized = turboQuantize(new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]), {
+        bits: 4,
+        seed: 42,
+      });
+
+      const shapes: readonly TurboQuantizeResult[] = [
+        JSON.parse(JSON.stringify(quantized)) as TurboQuantizeResult,
+        { ...quantized, codes: { "0": 1, "1": 2 } as unknown as Uint8Array },
+        { ...quantized, codes: Array.from(quantized.codes) as unknown as Uint8Array },
+      ];
+
+      for (const broken of shapes) {
+        expect(() => turboDequantize(broken)).toThrow(/Uint8Array/);
+        expect(() => turboQuantizedInnerProduct(broken, quantized)).toThrow(/Uint8Array/);
+        expect(() => turboQuantizedCosineSimilarity(broken, quantized)).toThrow(/Uint8Array/);
+      }
+    });
+
+    test("should accept a JSON-restored record once its codes are rebuilt", () => {
+      // The counterpart to the guard above: rebuilding the Uint8Array is all that is
+      // needed, so the guard rejects a broken carrier rather than a legitimate record.
+      const quantized = turboQuantize(new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]), {
+        bits: 8,
+        seed: 42,
+      });
+      const restored = JSON.parse(JSON.stringify(quantized)) as TurboQuantizeResult;
+      const repaired: TurboQuantizeResult = {
+        ...restored,
+        codes: Uint8Array.from(Object.values(restored.codes as unknown as Record<string, number>)),
+      };
+
+      expect(turboQuantizedCosineSimilarity(repaired, quantized)).toBeCloseTo(1, 6);
+    });
+
+    test("should reject a record whose version this build does not support", () => {
+      const quantized = turboQuantize(new Float32Array([1, 2, 3, 4]), { bits: 4, seed: 42 });
+      expect(quantized.version).toBe(1);
+
+      const future = { ...quantized, version: 2 };
+      expect(() => turboDequantize(future)).toThrow(/version 2 is not supported/);
+      expect(() => turboQuantizedInnerProduct(future, quantized)).toThrow(
+        /version 2 is not supported/
+      );
+    });
+
+    test("should reject a non-integer or out-of-int32-range seed at encode time", () => {
+      // Encode-side validation matters more than decode-side: a record written with a
+      // seed this module cannot reproduce is data that can never be read back.
+      const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+
+      expect(() => turboQuantize(vector, { bits: 4, seed: 1.5 })).toThrow(/seed/);
+      expect(() => turboQuantize(vector, { bits: 4, seed: 2 ** 32 + 1 })).toThrow(/seed/);
+      expect(() => turboQuantize(vector, { bits: 4, seed: NaN })).toThrow(/seed/);
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.INT8, 1.5)).toThrow(/seed/);
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.INT8, 2 ** 32 + 1)).toThrow(/seed/);
+
+      // The int32 window itself stays usable at both ends.
+      expect(() => turboQuantize(vector, { bits: 4, seed: -(2 ** 31) })).not.toThrow();
+      expect(() => turboQuantize(vector, { bits: 4, seed: 2 ** 31 - 1 })).not.toThrow();
     });
 
     test("should support different TypedArray inputs", () => {
@@ -231,6 +299,73 @@ describe("TurboQuantize", () => {
       expect(() => turboQuantizedInnerProduct(quantized, tampered)).toThrow("paddedDimensions");
     });
 
+    test("should preserve magnitude at every bit width", () => {
+      // A fixed 3-sigma clipping range put the two 1-bit reconstruction points at +/-3
+      // standard deviations, so a 1-bit reconstruction came back exactly 3x too long.
+      // Reconstruction is renormalized to the recorded norm, so magnitude is now carried
+      // by the one quantity the encoder stored exactly.
+      const d = 1024;
+      const rnd = makeRandom(42);
+      const original = new Float32Array(d);
+      for (let i = 0; i < d; i++) original[i] = rnd() - 0.5;
+
+      for (let bits = 1; bits <= 8; bits++) {
+        const reconstructed = turboDequantize(turboQuantize(original, { bits, seed: 42 }));
+        const ratio = magnitude(reconstructed) / magnitude(original);
+        expect(ratio).toBeGreaterThan(0.98);
+        expect(ratio).toBeLessThan(1.02);
+      }
+    });
+
+    test("should preserve magnitude at a cropped (non-power-of-2) dimensionality", () => {
+      const d = 768;
+      const rnd = makeRandom(7);
+      const original = new Float32Array(d);
+      for (let i = 0; i < d; i++) original[i] = rnd() - 0.5;
+
+      for (let bits = 1; bits <= 8; bits++) {
+        const ratio =
+          magnitude(turboDequantize(turboQuantize(original, { bits, seed: 42 }))) /
+          magnitude(original);
+        expect(ratio).toBeGreaterThan(0.9);
+        expect(ratio).toBeLessThan(1.02);
+      }
+    });
+
+    test("should reduce relative L2 error monotonically with bit width", () => {
+      // The monotonicity assertion is the point of this test. With a bits-independent
+      // 3-sigma clipping range, clipping error dominated everything the extra levels
+      // bought and relative L2 flattened out: 6, 7 and 8 bits all landed at ~0.035, so
+      // four times the levels bought nothing. Per-bit ceilings alone would not catch a
+      // regression back to a flat tail; requiring each step to be a real improvement does.
+      const d = 1024;
+      const rnd = makeRandom(42);
+      const original = new Float32Array(d);
+      for (let i = 0; i < d; i++) original[i] = rnd() - 0.5;
+
+      let originalEnergy = 0;
+      for (let i = 0; i < d; i++) originalEnergy += original[i] * original[i];
+
+      const ceilings = [0.75, 0.45, 0.26, 0.15, 0.09, 0.05, 0.028, 0.016];
+      const relativeL2: number[] = [];
+      for (let bits = 1; bits <= 8; bits++) {
+        const reconstructed = turboDequantize(turboQuantize(original, { bits, seed: 42 }));
+        let errorEnergy = 0;
+        for (let i = 0; i < d; i++) {
+          const delta = reconstructed[i] - original[i];
+          errorEnergy += delta * delta;
+        }
+        relativeL2.push(Math.sqrt(errorEnergy / originalEnergy));
+      }
+
+      relativeL2.forEach((value, index) => {
+        expect(value).toBeLessThan(ceilings[index]);
+      });
+      for (let i = 0; i + 1 < relativeL2.length; i++) {
+        expect(relativeL2[i + 1]).toBeLessThan(relativeL2[i] * 0.85);
+      }
+    });
+
     test("should improve quality with higher dimensions", () => {
       // TurboQuant relies on concentration of measure, which improves with dimension
       const d64 = 64;
@@ -269,6 +404,32 @@ describe("TurboQuantize", () => {
 
       // At 8 bits, should be reasonably close
       expect(estimatedIP).toBeCloseTo(trueIP, -1); // within order of magnitude
+    });
+
+    test("should estimate inner products accurately at embedding scale", () => {
+      // The 8-dim case above is dominated by how poorly a Gaussian-derived clipping range
+      // fits 8 bounded coordinates. At a realistic dimensionality the concentration the
+      // rotation relies on actually holds, and this is where the loading-factor fix pays:
+      // mean absolute error over these pairs measured 0.0566 at a fixed 3-sigma range and
+      // 0.0252 at the MSE-optimal one.
+      const d = 1024;
+      const pairs = 20;
+      const rnd = makeRandom(1024);
+      let totalError = 0;
+      for (let p = 0; p < pairs; p++) {
+        const a = new Float32Array(d);
+        const b = new Float32Array(d);
+        for (let i = 0; i < d; i++) {
+          a[i] = rnd() - 0.5;
+          b[i] = rnd() - 0.5;
+        }
+        const estimated = turboQuantizedInnerProduct(
+          turboQuantize(a, { bits: 8, seed: 42 }),
+          turboQuantize(b, { bits: 8, seed: 42 })
+        );
+        totalError += Math.abs(estimated - inner(a, b));
+      }
+      expect(totalError / pairs).toBeLessThan(0.04);
     });
 
     test("should reject vectors with different dimensions", () => {
@@ -332,6 +493,72 @@ describe("TurboQuantize", () => {
       const qb = turboQuantize(v, { bits: 8, seed: 42 });
 
       expect(turboQuantizedCosineSimilarity(qa, qb)).toBeGreaterThan(0.95);
+    });
+
+    test("should score a record against itself at exactly 1 for every bit width", () => {
+      // Treating the codes as if they were already unit vectors made self-similarity a
+      // function of how far the reconstruction's magnitude drifted from 1: at 1 bit the
+      // reconstruction was 3x too long and a record scored 9.0 against itself, on a
+      // function documented to return [-1, 1]. Dividing by each reconstruction's own norm
+      // makes this an actual cosine, so the identity holds by construction.
+      const d = 1024;
+      const rnd = makeRandom(42);
+      const v = new Float32Array(d);
+      for (let i = 0; i < d; i++) v[i] = rnd() - 0.5;
+
+      for (let bits = 1; bits <= 8; bits++) {
+        const q = turboQuantize(v, { bits, seed: 42 });
+        const self = turboQuantizedCosineSimilarity(q, q);
+        expect(self).toBeGreaterThan(0.999);
+        expect(self).toBeLessThanOrEqual(1.0);
+      }
+    });
+
+    test("should stay within [-1, 1] across many pairs at every bit width", () => {
+      const d = 1024;
+      const pairs = 40;
+      for (let bits = 1; bits <= 8; bits++) {
+        const rnd = makeRandom(1000 + bits);
+        for (let p = 0; p < pairs; p++) {
+          const a = new Float32Array(d);
+          const b = new Float32Array(d);
+          for (let i = 0; i < d; i++) {
+            a[i] = rnd() - 0.5;
+            b[i] = rnd() - 0.5;
+          }
+          const sim = turboQuantizedCosineSimilarity(
+            turboQuantize(a, { bits, seed: 42 }),
+            turboQuantize(b, { bits, seed: 42 })
+          );
+          expect(sim).toBeGreaterThanOrEqual(-1);
+          expect(sim).toBeLessThanOrEqual(1);
+        }
+      }
+    });
+  });
+
+  describe("sign table cache", () => {
+    test("should stay bounded and still reproduce an evicted table exactly", () => {
+      // The cache is process-global and keyed by (seed, paddedLen). Eviction has to be
+      // transparent: a table is a pure function of its key, so a recomputed one must give
+      // byte-identical codes. Twenty distinct seeds overflow the 16-entry bound, so the
+      // first seed's table is gone by the end of the loop.
+      const d = 4096;
+      const vector = new Float32Array(d);
+      for (let i = 0; i < d; i++) vector[i] = Math.sin(i * 0.01);
+
+      const first = turboQuantize(vector, { bits: 4, seed: 1 });
+      for (let seed = 2; seed <= 20; seed++) {
+        expect(() => turboQuantize(vector, { bits: 4, seed })).not.toThrow();
+      }
+
+      const afterEviction = turboQuantize(vector, { bits: 4, seed: 1 });
+      expect(Array.from(afterEviction.codes)).toEqual(Array.from(first.codes));
+
+      // An explicit clear is likewise result-preserving.
+      clearSignTableCache();
+      const afterClear = turboQuantize(vector, { bits: 4, seed: 1 });
+      expect(Array.from(afterClear.codes)).toEqual(Array.from(first.codes));
     });
   });
 
@@ -463,15 +690,13 @@ describe("TurboQuantize", () => {
       expect(negatives / result.length).toBeGreaterThanOrEqual(0.3);
     });
 
-    test("should preserve cosine similarity across common embedding dimensions", () => {
-      // The rotation runs in nextPowerOf2(d) dimensions but only the first d
-      // coordinates are kept, so a non-power-of-2 d is a random projection.
-      // Bounds mirror the RMSE documented on turboQuantizeToTypedArray (x1.5).
+    test("should preserve cosine similarity across power-of-2 dimensions", () => {
+      // At a power-of-2 dimensionality the rotation is orthogonal and nothing is
+      // discarded, so cosine similarity survives int8 quantization almost exactly.
       const cases: readonly { readonly d: number; readonly rmse: number }[] = [
-        { d: 768, rmse: 0.019 },
-        { d: 1000, rmse: 0.006 },
-        { d: 1024, rmse: 0.001 },
-        { d: 1536, rmse: 0.013 },
+        { d: 512, rmse: 0.00056 },
+        { d: 1024, rmse: 0.00044 },
+        { d: 2048, rmse: 0.00026 },
       ];
 
       for (const { d, rmse } of cases) {
@@ -494,8 +719,57 @@ describe("TurboQuantize", () => {
           if (error > maxError) maxError = error;
         }
         expect(Math.sqrt(squaredError / pairs)).toBeLessThan(rmse * 1.5);
-        expect(maxError).toBeLessThan(0.08);
+        expect(maxError).toBeLessThan(0.005);
       }
+    });
+
+    test("should reject a non-power-of-2 dimensionality", () => {
+      // Keeping the first d of nextPowerOf2(d) rotated coordinates is a lossy random
+      // projection that measures WORSE than linear quantization at exactly the sizes
+      // real embedding models use, so it is refused rather than silently degraded.
+      for (const d of [768, 1000, 1536, 3072]) {
+        expect(() => turboQuantizeToTypedArray(new Float32Array(d), TensorType.INT8)).toThrow(
+          /power of 2/
+        );
+      }
+    });
+
+    test("should widen to the next power of 2 when padToPowerOf2 is set", () => {
+      const padded = turboQuantizeToTypedArray(new Float32Array(768), TensorType.INT8, {
+        seed: 42,
+        padToPowerOf2: true,
+      });
+      expect(padded.length).toBe(1024);
+      expect(padded).toBeInstanceOf(Int8Array);
+
+      // Already a power of 2: the option is a no-op on length.
+      const exact = turboQuantizeToTypedArray(new Float32Array(1024), TensorType.INT8, {
+        seed: 42,
+        padToPowerOf2: true,
+      });
+      expect(exact.length).toBe(1024);
+    });
+
+    test("should preserve cosine similarity for padded non-power-of-2 vectors", () => {
+      // Padding keeps the rotation orthogonal, which is the whole point of preferring it
+      // over cropping: at d=768 cropping measured 0.0164 RMSE, padding measures ~0.0003.
+      const d = 768;
+      const rnd = makeRandom(768);
+      let squaredError = 0;
+      const pairs = 40;
+      for (let p = 0; p < pairs; p++) {
+        const a = new Float32Array(d);
+        const b = new Float32Array(d);
+        for (let i = 0; i < d; i++) {
+          a[i] = rnd() - 0.5;
+          b[i] = rnd() - 0.5;
+        }
+        const qa = turboQuantizeToTypedArray(a, TensorType.INT8, { seed: 42, padToPowerOf2: true });
+        const qb = turboQuantizeToTypedArray(b, TensorType.INT8, { seed: 42, padToPowerOf2: true });
+        const error = Math.abs(cosineSimilarity(qa, qb) - cosineSimilarity(a, b));
+        squaredError += error * error;
+      }
+      expect(Math.sqrt(squaredError / pairs)).toBeLessThan(0.002);
     });
 
     test("should reject empty vectors", () => {
@@ -612,7 +886,7 @@ describe("TurboQuantize", () => {
     const original = new Float32Array(d);
     for (let i = 0; i < d; i++) original[i] = Math.sin(i * 0.1) * (1 + Math.cos(i * 0.05));
 
-    for (const bits of [2, 3, 4, 6, 8]) {
+    for (const bits of [1, 2, 3, 4, 5, 6, 7, 8]) {
       test(`should maintain reasonable quality at ${bits} bits`, () => {
         const quantized = turboQuantize(original, { bits, seed: 42 });
         const reconstructed = turboDequantize(quantized);
@@ -623,8 +897,10 @@ describe("TurboQuantize", () => {
           expect(sim).toBeGreaterThan(0.95);
         } else if (bits >= 4) {
           expect(sim).toBeGreaterThan(0.85);
-        } else {
+        } else if (bits >= 2) {
           expect(sim).toBeGreaterThan(0.5); // Even 2-bit should preserve direction
+        } else {
+          expect(sim).toBeGreaterThan(0.6); // 1-bit keeps direction via sign information
         }
       });
     }

@@ -5,21 +5,29 @@
  */
 
 /**
- * TurboQuant: Near-optimal vector quantization using randomized rotation
- * and optimal per-coordinate scalar quantization.
+ * Vector quantization by randomized rotation plus uniform scalar quantization.
  *
- * Based on "TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate"
+ * Inspired by "TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate"
  * by Zandieh, Daliri, Hadian, and Mirrokni (2025).
  *
- * The key insight: applying a random orthogonal rotation to a unit vector causes its
- * coordinates to concentrate around a known Beta distribution. This enables near-optimal
- * scalar quantization per coordinate without needing to observe the data distribution first.
+ * Why rotate: a random orthogonal rotation spreads a vector's energy evenly over its
+ * coordinates, so no coordinate dominates and every coordinate ends up with the same
+ * approximately Gaussian marginal. One fixed quantization grid then fits every
+ * coordinate of every vector, with no training pass and no per-dataset codebook.
+ *
+ * What this module implements: the randomized Hadamard rotation, plus a UNIFORM scalar
+ * quantizer whose clipping range is the MSE-optimal loading factor for a unit-variance
+ * Gaussian at the given bit width. Reconstruction is renormalized back to the recorded
+ * L2 norm, which keeps reconstructed magnitude and the similarity estimates unbiased.
+ *
+ * What it does NOT implement: the paper's non-uniform, distribution-fitted (Beta) level
+ * placement. Distortion here is that of an optimal *uniform* quantizer, which is coarser
+ * than the paper's near-optimal one.
  *
  * Properties:
  * - Data-oblivious: no training or codebook construction needed
  * - Per-vector: each vector quantized independently (streaming-friendly)
- * - Near-optimal: within ~2.7x of theoretical distortion limit at all bit-widths
- * - Preserves inner products for accurate similarity search
+ * - Preserves inner products and cosine similarity for similarity search
  */
 
 import { TensorType } from "./Tensor";
@@ -37,8 +45,20 @@ export interface TurboQuantizeOptions {
 
 /**
  * Result of TurboQuant quantization, containing everything needed for dequantization.
+ *
+ * Two records are comparable only when their `(version, bits, seed, dimensions)` tuple
+ * matches. `seed` selects the rotation basis, `bits` and `version` together fix the
+ * reconstruction grid, and `dimensions` fixes the padding — mixing any of them yields
+ * meaningless similarities. The pairwise helpers here enforce the last three; `version`
+ * is enforced on every decode.
  */
 export interface TurboQuantizeResult {
+  /**
+   * Encoding version. Bumped whenever the encoded codes to reconstructed values mapping
+   * changes, so an older record fails loudly on decode instead of being silently
+   * mis-scaled by a newer grid.
+   */
+  readonly version: number;
   /** Quantized codes packed into a Uint8Array */
   readonly codes: Uint8Array;
   /** Number of bits per dimension used */
@@ -60,15 +80,31 @@ export interface TurboQuantizeResult {
 const DEFAULT_SEED = 42;
 
 /**
+ * Current {@link TurboQuantizeResult.version}. Bump whenever the mapping between stored
+ * codes and reconstructed values changes (grid, loading factor, rotation, packing).
+ */
+const TURBO_QUANTIZE_VERSION = 1;
+
+/**
  * Upper bound on the dimensionality this module will accept.
  *
- * Every entry point pads the input to `nextPowerOf2(dimensions)` and allocates a
- * `Float64Array` of that length as the transform's working buffer. At 2^24 that
- * buffer is 128 MB (2^24 * 8 bytes), which is already far beyond any real
- * embedding. Rejecting anything larger keeps a bogus or hostile `dimensions`
- * value from either exhausting memory or spinning inside the padding loop.
+ * Every entry point pads the input to `nextPowerOf2(dimensions)` and allocates several
+ * `Float64Array`s of that length as working buffers, so peak cost is a multiple of the
+ * padded length rather than the single buffer a naive estimate assumes: measured peak RSS
+ * growth is 32 MB at d = 2^20, about 32 bytes per padded coordinate. 2^20 is already ~340x
+ * the largest real embedding (3072-dim). Rejecting anything larger keeps a bogus or
+ * hostile `dimensions` value from exhausting memory or spinning in the padding loop.
  */
-const MAX_TURBO_DIMENSIONS = 2 ** 24;
+const MAX_TURBO_DIMENSIONS = 2 ** 20;
+
+/**
+ * Inclusive bounds on a rotation seed: the int32 window {@link createPrng} actually
+ * distinguishes. It coerces with `>>> 0` after an XOR, so anything outside this window
+ * silently aliases onto another seed (`2**32 + 1` becomes `1`) and would decode against
+ * a different rotation basis than it was encoded with.
+ */
+const MIN_SEED = -(2 ** 31);
+const MAX_SEED = 2 ** 31 - 1;
 
 /** Number of (sign-flip + Walsh-Hadamard) rounds applied by the randomized rotation. */
 const SIGN_ROUNDS = 3;
@@ -83,7 +119,7 @@ function assertDimensions(n: number): void {
   }
   if (n > MAX_TURBO_DIMENSIONS) {
     throw new Error(
-      `TurboQuant dimensions must be at most ${MAX_TURBO_DIMENSIONS}, got ${n} (the padded working buffer would exceed 128 MB)`
+      `TurboQuant dimensions must be at most ${MAX_TURBO_DIMENSIONS}, got ${n} (the padded working buffers would exceed ~32 MB)`
     );
   }
 }
@@ -95,6 +131,24 @@ function assertDimensions(n: number): void {
 function assertBits(bits: number): void {
   if (!Number.isInteger(bits) || bits < 1 || bits > 8) {
     throw new Error(`TurboQuant bits must be an integer between 1 and 8, got ${bits}`);
+  }
+}
+
+/**
+ * Validates a rotation seed before it reaches the PRNG.
+ *
+ * Checked on encode as well as decode: a record written with a seed this module cannot
+ * reproduce (a fraction, or a value outside the int32 window) is data that can never be
+ * read back, and failing at write time is the only point where nothing has been lost yet.
+ *
+ * @param seed - Candidate rotation seed
+ */
+function assertSeed(seed: number): void {
+  if (!Number.isInteger(seed) || seed < MIN_SEED || seed > MAX_SEED) {
+    throw new Error(
+      `TurboQuant seed must be an integer in the int32 range [${MIN_SEED}, ${MAX_SEED}], got ${seed}. ` +
+        `Values outside that window alias onto a different seed once truncated to 32 bits.`
+    );
   }
 }
 
@@ -120,11 +174,45 @@ function createPrng(seed: number): () => number {
   };
 }
 
-/** Maximum number of memoized sign tables. Bounded so a hostile seed stream cannot grow it. */
-const SIGN_TABLE_CACHE_LIMIT = 16;
+/**
+ * Memory budget for memoized sign tables.
+ *
+ * An entry costs `SIGN_ROUNDS * paddedLen` bytes, so a count-only cap says nothing about
+ * memory: 16 entries at the maximum dimensionality would retain hundreds of megabytes.
+ * The byte total is the real bound; the count cap stays as a secondary limit so a stream
+ * of tiny distinct seeds cannot accumulate unbounded Map overhead.
+ */
+const SIGN_TABLE_CACHE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** Secondary bound on memoized sign tables, in entries. */
+const SIGN_TABLE_CACHE_MAX_ENTRIES = 16;
 
 /** Memoized sign tables keyed by `${seed}:${paddedLen}` (insertion-ordered for eviction). */
 const signTableCache = new Map<string, readonly Uint8Array[]>();
+
+/** Running total of the bytes retained by {@link signTableCache}. */
+let signTableCacheBytes = 0;
+
+/** Total bytes held by one memoized sign table. */
+function signTableBytes(table: readonly Uint8Array[]): number {
+  let total = 0;
+  for (const mask of table) total += mask.length;
+  return total;
+}
+
+/**
+ * Drops every memoized sign table.
+ *
+ * The cache is process-global and keyed by `(seed, paddedLen)`, so a long-lived host that
+ * quantizes across many seeds or dimensionalities holds up to
+ * {@link SIGN_TABLE_CACHE_MAX_BYTES} indefinitely. This releases it. Purely a memory
+ * operation: tables are pure functions of their key, so clearing changes no result, only
+ * the cost of recomputing one.
+ */
+export function clearSignTableCache(): void {
+  signTableCache.clear();
+  signTableCacheBytes = 0;
+}
 
 /**
  * Returns the `SIGN_ROUNDS` Rademacher flip masks for a (seed, paddedLen) pair.
@@ -158,14 +246,25 @@ function getSignTable(seed: number, paddedLen: number): readonly Uint8Array[] {
     table.push(mask);
   }
 
-  if (signTableCache.size >= SIGN_TABLE_CACHE_LIMIT) {
-    // Map iteration is insertion-ordered, so this evicts the oldest entry.
+  // Evict oldest-first until the new entry fits both bounds. Map iteration is
+  // insertion-ordered, so `keys().next()` is the oldest entry. A single table can never
+  // exceed the byte budget on its own (SIGN_ROUNDS * MAX_TURBO_DIMENSIONS = 3 MB), so
+  // this always terminates with room to spare.
+  const entryBytes = signTableBytes(table);
+  while (
+    signTableCache.size > 0 &&
+    (signTableCache.size >= SIGN_TABLE_CACHE_MAX_ENTRIES ||
+      signTableCacheBytes + entryBytes > SIGN_TABLE_CACHE_MAX_BYTES)
+  ) {
     const oldest = signTableCache.keys().next();
-    if (oldest.done !== true) {
-      signTableCache.delete(oldest.value);
-    }
+    if (oldest.done === true) break;
+    const evicted = signTableCache.get(oldest.value);
+    if (evicted !== undefined) signTableCacheBytes -= signTableBytes(evicted);
+    signTableCache.delete(oldest.value);
   }
+
   signTableCache.set(key, table);
+  signTableCacheBytes += entryBytes;
   return table;
 }
 
@@ -282,25 +381,124 @@ function nextPowerOf2(n: number): number {
 }
 
 /**
+ * Outermost reconstruction level of the MSE-optimal uniform quantizer for a
+ * unit-variance Gaussian, indexed by `bits - 1` (so `levels = 2^bits`).
+ *
+ * Derived from Max (1960), whose optimum-uniform step sizes are
+ * `Δ = 1.596, 0.9957, 0.5860, 0.3352, 0.1881, 0.1041, 0.0568, 0.0308`; the outer level is
+ * `(levels - 1) * Δ / 2`. That is exactly this module's parameterization, because
+ * {@link dequantizeScalar} places `levels` equally spaced points spanning `[-scale, scale]`
+ * — so `scale` IS the outer level.
+ *
+ * The clipping range has to widen with bit width. A range fixed at 3σ leaves a
+ * bits-independent clipping error that dominates everything the extra levels buy: measured
+ * relative L2 at d=1024 was identical (~0.035) at 6 and 8 bits, and at 1 bit the two
+ * reconstruction points sat at ±3σ, inflating reconstructed magnitude 3x.
+ */
+const GAUSSIAN_LOADING_FACTORS = [
+  0.7979, 1.4937, 2.0517, 2.5138, 2.9156, 3.2792, 3.6068, 3.927,
+] as const;
+
+/** Standard normal density. */
+function gaussianPdf(x: number): number {
+  return Math.exp(-(x * x) / 2) / Math.sqrt(2 * Math.PI);
+}
+
+/**
+ * `∫₀^∞ u² · exp(-a·u - u²/2) du`, the clipping-error integral with the constant
+ * `φ(a)` factored out analytically.
+ *
+ * Written this way on purpose. The closed form `(1 + a²)Q(a) - a·φ(a)` cancels catastrophically
+ * once `a` reaches the far tail the 16-bit grid optimizes into (~6σ), where the two terms agree
+ * to three digits and a tail approximation's absolute error dwarfs their difference. Factoring
+ * `φ(a)` out leaves a smooth positive integrand that Simpson's rule resolves to full precision
+ * at any `a`, and needs no error-function approximation.
+ */
+function clippingErrorIntegral(a: number): number {
+  const upper = 12;
+  const steps = 1200;
+  const h = upper / steps;
+  const term = (u: number): number => u * u * Math.exp(-a * u - (u * u) / 2);
+  let sum = term(0) + term(upper);
+  for (let i = 1; i < steps; i++) {
+    sum += term(i * h) * (i % 2 === 1 ? 4 : 2);
+  }
+  return (sum * h) / 3;
+}
+
+/**
+ * Mean squared error of a uniform quantizer with `levels` points spanning `[-a, a]`,
+ * applied to a unit-variance Gaussian: uniform granular error plus clipping error.
+ */
+function quantizerDistortion(a: number, levels: number): number {
+  const step = (2 * a) / (levels - 1);
+  return (step * step) / 12 + 2 * gaussianPdf(a) * clippingErrorIntegral(a);
+}
+
+/** Memoized {@link optimalLoadingFactor} results for level counts outside the table. */
+const loadingFactorCache = new Map<number, number>();
+
+/**
+ * Outermost reconstruction level of the MSE-optimal uniform quantizer for a unit-variance
+ * Gaussian with `levels` levels.
+ *
+ * Power-of-two level counts up to 256 come from {@link GAUSSIAN_LOADING_FACTORS}. Anything
+ * else is solved numerically by minimizing {@link quantizerDistortion} — needed by
+ * {@link turboQuantizeToTypedArray}, whose effective level count is `2 * max + 1`
+ * (255 for int8, 65535 for int16) and so is never in the table. The numeric solution
+ * reproduces the tabulated values to within 0.35% (0.00% at 64 levels), which is what
+ * pins the two paths to the same curve.
+ */
+function optimalLoadingFactor(levels: number): number {
+  if (!Number.isInteger(levels) || levels < 2) {
+    throw new Error(`TurboQuant requires at least 2 quantization levels, got ${levels}`);
+  }
+  const bitsIndex = Math.log2(levels);
+  if (
+    Number.isInteger(bitsIndex) &&
+    bitsIndex >= 1 &&
+    bitsIndex <= GAUSSIAN_LOADING_FACTORS.length
+  ) {
+    return GAUSSIAN_LOADING_FACTORS[bitsIndex - 1];
+  }
+
+  const cached = loadingFactorCache.get(levels);
+  if (cached !== undefined) return cached;
+
+  // Ternary search: distortion is unimodal in `a` (granular error rises with it, clipping
+  // error falls). 80 iterations shrink the bracket well past double precision.
+  let low = 0.2;
+  let high = 20;
+  for (let i = 0; i < 80; i++) {
+    const leftThird = low + (high - low) / 3;
+    const rightThird = high - (high - low) / 3;
+    if (quantizerDistortion(leftThird, levels) < quantizerDistortion(rightThird, levels)) {
+      high = rightThird;
+    } else {
+      low = leftThird;
+    }
+  }
+  const solved = (low + high) / 2;
+  loadingFactorCache.set(levels, solved);
+  return solved;
+}
+
+/**
  * Returns quantization parameters for uniform scalar quantization over the range
  * [-scale, scale].
  *
  * After random rotation in paddedLen-dimensional space, each coordinate of a
- * d-dimensional unit vector (zero-padded to paddedLen) has variance 1/paddedLen.
- * We use a fixed range of ±3 standard deviations (coverage ≈ 99.7%) as the
- * clipping boundary for a uniform quantizer with `levels = 2^bits` levels.
- * This is a simple, practical uniform quantizer; no non-uniform or
- * distribution-fitted quantization is performed.
+ * d-dimensional unit vector (zero-padded to paddedLen) has variance 1/paddedLen, so the
+ * clipping boundary is the MSE-optimal loading factor for that bit width, in units of the
+ * per-coordinate standard deviation. No non-uniform or distribution-fitted quantization is
+ * performed — the levels are equally spaced.
  */
 function getQuantizationParams(
   bits: number,
   paddedLen: number
 ): { readonly levels: number; readonly scale: number } {
   const levels = 1 << bits; // 2^bits quantization levels
-  // After rotation, coordinates have std dev ≈ 1/sqrt(paddedLen).
-  // Cover ±3 standard deviations.
-  const coverage = 3.0;
-  const scale = coverage / Math.sqrt(paddedLen);
+  const scale = optimalLoadingFactor(levels) / Math.sqrt(paddedLen);
   return { levels, scale };
 }
 
@@ -394,10 +592,19 @@ function packCodes(codes: number[], bits: number): Uint8Array {
  * typed array keeps the per-comparison hot path free of boxed `number[]`
  * allocations.
  *
- * Throws if the buffer is too small for the requested count and bit width.
+ * Throws if the buffer is not a Uint8Array, or is too small for the requested count and
+ * bit width.
  */
 function unpackCodes(packed: Uint8Array, bits: number, count: number): Uint8Array {
   const expectedBytes = Math.ceil((count * bits) / 8);
+  // Checked before the length comparison: a non-array `packed` has an `undefined` length,
+  // and `undefined < N` is false, so a size check alone waves it through and every byte
+  // read yields `undefined -> NaN -> code 0`.
+  if (!(packed instanceof Uint8Array)) {
+    throw new Error(
+      `unpackCodes: codes must be a Uint8Array, got ${Object.prototype.toString.call(packed)}`
+    );
+  }
   if (packed.length < expectedBytes) {
     throw new Error(
       `unpackCodes: buffer too small - need ${expectedBytes} bytes for ${count} codes at ${bits} bits, got ${packed.length}`
@@ -432,7 +639,8 @@ function unpackCodes(packed: Uint8Array, bits: number, count: number): Uint8Arra
  * Steps:
  * 1. Normalize the vector and record its L2 norm
  * 2. Apply randomized rotation (sign flips + Walsh-Hadamard transform)
- * 3. Quantize each rotated coordinate using optimal scalar quantization
+ * 3. Quantize each rotated coordinate on a uniform grid whose clipping range is the
+ *    MSE-optimal loading factor for this bit width
  * 4. Pack the codes into a compact bit representation
  *
  * @param vector - Input vector (any TypedArray). Must not contain NaN or Infinity.
@@ -447,6 +655,7 @@ export function turboQuantize(
   const seed = options?.seed ?? DEFAULT_SEED;
 
   assertBits(bits);
+  assertSeed(seed);
 
   const d = vector.length;
   if (d === 0) {
@@ -472,6 +681,7 @@ export function turboQuantize(
   const packed = packCodes(codes, bits);
 
   return {
+    version: TURBO_QUANTIZE_VERSION,
     codes: packed,
     bits,
     dimensions: d,
@@ -490,12 +700,26 @@ export function turboQuantize(
  * the transform is therefore re-checked rather than trusted.
  */
 function assertQuantizeResultShape(quantized: TurboQuantizeResult): void {
-  const { bits, dimensions, paddedDimensions, seed, norm } = quantized;
+  const { version, codes, bits, dimensions, paddedDimensions, seed, norm } = quantized;
+  // First, before any length or range check: a record that has been through JSON (or any
+  // structured-clone-free channel) carries `codes` as a plain object — `{"type":"Buffer",
+  // "data":[...]}` from a Node Buffer, `{"0":..,"1":..}` from a Uint8Array. Neither has a
+  // usable `length`, so every downstream size guard passes and the decode silently yields
+  // a vector of zeroes instead of failing.
+  if (!(codes instanceof Uint8Array)) {
+    throw new Error(
+      `TurboQuant codes must be a Uint8Array, got ${Object.prototype.toString.call(codes)}. ` +
+        `A record restored from JSON must have its codes rebuilt (e.g. Uint8Array.from(...)) before decoding.`
+    );
+  }
+  if (version !== TURBO_QUANTIZE_VERSION) {
+    throw new Error(
+      `TurboQuant record version ${version} is not supported by this build (expected ${TURBO_QUANTIZE_VERSION})`
+    );
+  }
   assertBits(bits);
   assertDimensions(dimensions);
-  if (!Number.isInteger(seed)) {
-    throw new Error(`TurboQuant seed must be an integer, got ${seed}`);
-  }
+  assertSeed(seed);
   if (!Number.isFinite(norm)) {
     throw new Error(`TurboQuant norm must be a finite number, got ${norm}`);
   }
@@ -508,39 +732,74 @@ function assertQuantizeResultShape(quantized: TurboQuantizeResult): void {
 }
 
 /**
+ * Reconstructs the rotated-domain coordinates from a record's packed codes.
+ *
+ * Returns the L2 norm of those coordinates alongside them because every consumer needs it:
+ * clipping and rounding do not preserve magnitude, so the reconstruction has to be
+ * renormalized before it means anything. Shared by the decode and both similarity helpers
+ * so all three sit on one definition of "the vector these codes stand for".
+ *
+ * @param quantized - A record whose shape has already been validated
+ */
+function reconstructRotatedCodes(quantized: TurboQuantizeResult): {
+  readonly values: Float64Array;
+  readonly codeNorm: number;
+} {
+  const { codes, bits, paddedDimensions } = quantized;
+  const unpacked = unpackCodes(codes, bits, paddedDimensions);
+  const { levels, scale } = getQuantizationParams(bits, paddedDimensions);
+
+  const values = new Float64Array(paddedDimensions);
+  let sumSquares = 0;
+  for (let i = 0; i < paddedDimensions; i++) {
+    const value = dequantizeScalar(unpacked[i], scale, levels);
+    values[i] = value;
+    sumSquares += value * value;
+  }
+  return { values, codeNorm: Math.sqrt(sumSquares) };
+}
+
+/**
  * Dequantizes a TurboQuant result back to a Float32Array.
  *
  * Steps:
- * 1. Unpack the codes from the compact representation
- * 2. Reconstruct the rotated coordinates from quantization levels
- * 3. Apply inverse rotation
- * 4. Scale by the original norm
+ * 1. Unpack the codes and reconstruct the rotated coordinates
+ * 2. Apply inverse rotation
+ * 3. Crop to the original dimensions and renormalize to the recorded norm
+ *
+ * The final step is a rescale, not a multiply. Quantization does not preserve magnitude —
+ * at low bit widths the clipped grid inflates it badly — and `norm` is the one quantity the
+ * encoder stored exactly, so restoring it costs nothing and removes the bias.
  *
  * @param quantized - The TurboQuant quantization result
  * @returns Reconstructed vector as Float32Array
  */
 export function turboDequantize(quantized: TurboQuantizeResult): Float32Array {
-  const { codes, bits, dimensions, paddedDimensions, seed, norm } = quantized;
-
   assertQuantizeResultShape(quantized);
+  const { dimensions, seed, norm } = quantized;
 
-  // Step 1: Unpack all paddedDimensions codes
-  const unpacked = unpackCodes(codes, bits, paddedDimensions);
-
-  // Step 2: Reconstruct rotated coordinates (all paddedDimensions)
-  const { levels, scale } = getQuantizationParams(bits, paddedDimensions);
-  const rotated = new Float64Array(paddedDimensions);
-  for (let i = 0; i < paddedDimensions; i++) {
-    rotated[i] = dequantizeScalar(unpacked[i], scale, levels);
-  }
-
-  // Step 3: Inverse rotation (returns full paddedDimensions array)
-  const unrotated = inverseRandomRotate(rotated, seed);
-
-  // Step 4: Crop to original dimensions and scale by original norm
   const result = new Float32Array(dimensions);
+  // A zero vector has no direction to restore. The early return is also what keeps the
+  // rescale below safe: for an even `levels` count no reconstruction point sits at exactly
+  // zero, so a zero input decodes to a small non-zero vector that renormalizing would
+  // amplify to full length.
+  if (norm === 0) return result;
+
+  const { values } = reconstructRotatedCodes(quantized);
+  const unrotated = inverseRandomRotate(values, seed);
+
+  // Renormalize against the CROPPED coordinates: those are the output, and for a
+  // non-power-of-2 dimensionality their norm differs from the padded one.
+  let sumSquares = 0;
   for (let i = 0; i < dimensions; i++) {
-    result[i] = unrotated[i] * norm;
+    sumSquares += unrotated[i] * unrotated[i];
+  }
+  const croppedNorm = Math.sqrt(sumSquares);
+  if (croppedNorm === 0) return result;
+
+  const rescale = norm / croppedNorm;
+  for (let i = 0; i < dimensions; i++) {
+    result[i] = unrotated[i] * rescale;
   }
 
   return result;
@@ -557,6 +816,16 @@ export function turboDequantize(quantized: TurboQuantizeResult): Float32Array {
  * @returns Estimated inner product
  */
 export function turboQuantizedInnerProduct(a: TurboQuantizeResult, b: TurboQuantizeResult): number {
+  assertComparablePair(a, b);
+  return quantizedCosine(a, b) * a.norm * b.norm;
+}
+
+/**
+ * Validates that two records were produced by compatible encodings and are individually
+ * well-formed. The pairwise checks come first so a mismatch reports the mismatch rather
+ * than whichever record happens to be inspected first.
+ */
+function assertComparablePair(a: TurboQuantizeResult, b: TurboQuantizeResult): void {
   if (a.dimensions !== b.dimensions) {
     throw new Error("Vectors must have the same dimensions");
   }
@@ -568,26 +837,28 @@ export function turboQuantizedInnerProduct(a: TurboQuantizeResult, b: TurboQuant
   }
   assertQuantizeResultShape(a);
   assertQuantizeResultShape(b);
+}
 
-  const paddedLen = a.paddedDimensions;
-  const { levels, scale } = getQuantizationParams(a.bits, paddedLen);
+/**
+ * Cosine similarity between the two reconstructions, computed in the rotated domain.
+ *
+ * The rotation is orthogonal, so it preserves both inner products and norms and the
+ * rotated-domain cosine IS the original-domain cosine. Dividing by each reconstruction's
+ * own norm — rather than treating the codes as if they were already unit vectors — is what
+ * makes the result an actual cosine: Cauchy-Schwarz then bounds it to [-1, 1] by
+ * construction and a record compared with itself scores exactly 1. The clamp only absorbs
+ * floating-point rounding at the endpoints.
+ */
+function quantizedCosine(a: TurboQuantizeResult, b: TurboQuantizeResult): number {
+  const { values: valuesA, codeNorm: codeNormA } = reconstructRotatedCodes(a);
+  const { values: valuesB, codeNorm: codeNormB } = reconstructRotatedCodes(b);
+  if (codeNormA === 0 || codeNormB === 0) return 0;
 
-  // Unpack both code arrays (paddedLen codes each)
-  const codesA = unpackCodes(a.codes, a.bits, paddedLen);
-  const codesB = unpackCodes(b.codes, b.bits, paddedLen);
-
-  // Compute dot product in the rotated (quantized) domain.
-  // Since rotation is orthogonal, inner products are preserved:
-  // <Ra, Rb> = <a, b> (for orthogonal R)
   let dot = 0;
-  for (let i = 0; i < paddedLen; i++) {
-    const va = dequantizeScalar(codesA[i], scale, levels);
-    const vb = dequantizeScalar(codesB[i], scale, levels);
-    dot += va * vb;
+  for (let i = 0; i < valuesA.length; i++) {
+    dot += valuesA[i] * valuesB[i];
   }
-
-  // Scale by both norms
-  return dot * a.norm * b.norm;
+  return Math.max(-1, Math.min(1, dot / (codeNormA * codeNormB)));
 }
 
 /**
@@ -601,10 +872,9 @@ export function turboQuantizedCosineSimilarity(
   a: TurboQuantizeResult,
   b: TurboQuantizeResult
 ): number {
+  assertComparablePair(a, b);
   if (a.norm === 0 || b.norm === 0) return 0;
-  // Inner product of unit vectors = cosine similarity
-  // turboQuantizedInnerProduct includes norm scaling, so divide it out
-  return turboQuantizedInnerProduct(a, b) / (a.norm * b.norm);
+  return quantizedCosine(a, b);
 }
 
 /**
@@ -618,15 +888,25 @@ const SIGNED_TARGET_RANGES = {
 } as const;
 
 /**
+ * Options for {@link turboQuantizeToTypedArray}.
+ */
+export interface TurboQuantizeToTypedArrayOptions {
+  /** Seed for the random rotation. Defaults to the module default when undefined. */
+  readonly seed: number | undefined;
+  /**
+   * Accept a non-power-of-2 input length by returning `nextPowerOf2(length)` values
+   * instead of throwing. The result is LONGER than the input; a storage column sized to
+   * the input dimensionality will not hold it.
+   */
+  readonly padToPowerOf2: boolean | undefined;
+}
+
+/**
  * Quantizes a vector using TurboQuant rotation directly into a byte-aligned TypedArray.
  *
  * Unlike the packed `turboQuantize`, this outputs a standard TypedArray (Int8Array or
  * Int16Array) with the **same `.length`** as the input vector, so it drops into
  * storage backends that expect a fixed-width vector column.
- *
- * The rotation spreads information across all coordinates and concentrates their
- * distribution, yielding better distortion than naive linear quantization at the
- * same byte width.
  *
  * ## Signed targets only
  *
@@ -649,30 +929,35 @@ const SIGNED_TARGET_RANGES = {
  * a per-seed change of basis, so mixing them yields meaningless rankings with no
  * error raised anywhere.
  *
- * ## Fidelity and non-power-of-2 dimensions
+ * ## Power-of-2 dimensions required
  *
- * The rotation operates on `nextPowerOf2(d)` coordinates but only the first `d`
- * are kept (the output length must match the input length), so for a
- * non-power-of-2 `d` this is a random projection rather than an orthogonal
- * rotation, and cosine similarity is preserved only approximately. Measured
- * cosine RMSE against the exact similarity (int8, seed 42, 40 random pairs):
- * d=1024 -> 0.001, d=1000 -> 0.006, d=1536 -> 0.013, d=768 -> 0.019
- * (worst single pair 0.052). When fidelity matters, zero-pad the vectors to a
- * power of 2 at the call site.
+ * The rotation operates on `nextPowerOf2(d)` coordinates. Keeping only the first `d` of
+ * them would make this a lossy random projection rather than an orthogonal rotation, and
+ * it measures WORSE than plain linear quantization at exactly the dimensionalities real
+ * embedding models use — cosine RMSE against the exact similarity (int8, seed 42, 40
+ * random pairs), turbo vs linear: 0.0164 vs 0.0027 at d=768 (MiniLM), 0.0126 vs 0.0033 at
+ * d=1536, 0.0094 vs 0.0026 at d=3072; turbo wins only at d=1024 (0.0008 vs 0.0033).
+ *
+ * A non-power-of-2 `d` is therefore rejected rather than silently degraded. Pass
+ * `{ padToPowerOf2: true }` to opt into a `nextPowerOf2(d)`-length result instead — note
+ * this output is LONGER than the input, so a fixed-width storage column must be declared
+ * at the padded width. {@link turboQuantize} is unaffected either way: it keeps all
+ * `paddedLen` coordinates and stays fully invertible at any dimensionality.
  *
  * Note: The vector norm is not preserved (cosine similarity is scale-invariant,
  * so this is fine for similarity search).
  *
  * @param vector - Input vector (any TypedArray). Must not contain NaN or Infinity.
  * @param targetType - Target signed integer type (INT8 or INT16)
- * @param seed - Seed for the random rotation (default: 42). All vectors in the
- *   same collection must use the same seed for similarity search to work.
- * @returns TypedArray of the target type with `.length === vector.length`
+ * @param seedOrOptions - Rotation seed (default: 42), or an options object. All vectors in
+ *   the same collection must use the same seed for similarity search to work.
+ * @returns TypedArray of the target type, with `.length === vector.length` unless
+ *   `padToPowerOf2` widened it to `nextPowerOf2(vector.length)`
  */
 export function turboQuantizeToTypedArray(
   vector: TypedArray,
   targetType: TensorType,
-  seed: number = DEFAULT_SEED
+  seedOrOptions: number | TurboQuantizeToTypedArrayOptions = DEFAULT_SEED
 ): TypedArray {
   // `Object.hasOwn` before indexing: a plain `[targetType]` lookup would resolve
   // inherited Object.prototype keys, so a name like "constructor" would yield a
@@ -684,28 +969,47 @@ export function turboQuantizeToTypedArray(
   }
   const { max } = SIGNED_TARGET_RANGES[targetType as keyof typeof SIGNED_TARGET_RANGES];
 
+  const seed =
+    typeof seedOrOptions === "number" ? seedOrOptions : (seedOrOptions.seed ?? DEFAULT_SEED);
+  const padToPowerOf2 = typeof seedOrOptions === "number" ? false : seedOrOptions.padToPowerOf2;
+
   const d = vector.length;
   if (d === 0) {
     throw new Error("Cannot quantize an empty vector");
   }
   assertDimensions(d);
+  assertSeed(seed);
+
+  const paddedLen = nextPowerOf2(d);
+  if (paddedLen !== d && padToPowerOf2 !== true) {
+    throw new Error(
+      `turboQuantizeToTypedArray requires a power of 2 dimensionality, got ${d}. ` +
+        `Returning only the first ${d} of ${paddedLen} rotated coordinates is a lossy random ` +
+        `projection that measures worse than linear quantization at this size (int8 cosine RMSE ` +
+        `at d=768: turbo 0.0164 vs linear 0.0027). Pass { padToPowerOf2: true } to receive ` +
+        `${paddedLen} values instead, or quantize linearly.`
+    );
+  }
 
   // Step 1: Normalize to unit vector
   const { values } = normalizeToUnit(vector);
 
   // Step 2: Random rotation (spreads information, concentrates distribution)
-  // randomRotate returns all paddedLen coordinates; we only use the first d.
-  const paddedLen = nextPowerOf2(d);
   const rotated = randomRotate(values, seed);
 
-  // Step 3: Map rotated coordinates to the signed target range.
-  // After rotation in paddedLen-dimensional space, coordinates have std dev ≈ 1/sqrt(paddedLen).
-  const coverage = 3.0;
-  const scale = coverage / Math.sqrt(paddedLen);
+  // Step 3: Map rotated coordinates to the signed target range. After rotation in
+  // paddedLen-dimensional space coordinates have std dev ≈ 1/sqrt(paddedLen), and the
+  // clipping range is the MSE-optimal loading factor for this grid. The grid is the signed
+  // range INCLUDING zero, so it holds 2 * max + 1 levels — the same helper the packed path
+  // uses, solved numerically because that count is never a power of 2.
+  const levels = 2 * max + 1;
+  const scale = optimalLoadingFactor(levels) / Math.sqrt(paddedLen);
 
-  // Map [-scale, scale] → [-max, max]
-  const result = targetType === TensorType.INT8 ? new Int8Array(d) : new Int16Array(d);
-  for (let i = 0; i < d; i++) {
+  // Map [-scale, scale] → [-max, max]. Length is paddedLen, which equals d unless the
+  // caller opted into padding.
+  const result =
+    targetType === TensorType.INT8 ? new Int8Array(paddedLen) : new Int16Array(paddedLen);
+  for (let i = 0; i < paddedLen; i++) {
     const clamped = Math.max(-scale, Math.min(scale, rotated[i]));
     result[i] = Math.round((clamped / scale) * max);
   }
