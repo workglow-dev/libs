@@ -34,7 +34,7 @@ bun add @workglow/tasks
 ## Quick Start
 
 ```typescript
-import { Workflow, fetch, debugLog, delay } from "@workglow/tasks";
+import { Workflow } from "@workglow/tasks";
 
 // Simple workflow example (fluent API)
 const workflow = new Workflow()
@@ -46,18 +46,26 @@ const results = await workflow.run();
 ```
 
 ```typescript
-import { FetchUrlTask, DebugLogTask, DelayTask } from "@workglow/tasks";
+import { fetchUrl, debugLog, delay } from "@workglow/tasks";
 
-// Simple sequence using Task classes directly
-const fetchResult = await new FetchUrlTask({
+// Simple sequence using the exported helpers
+const fetchResult = await fetchUrl({
   url: "https://api.example.com/data",
   response_type: "json",
-}).run();
+});
 
-await new DebugLogTask({ console: fetchResult.json }, { log_level: "info" }).run();
+await debugLog({ console: fetchResult.json }, { log_level: "info" });
 
-await new DelayTask({}, { delay: 1000 }).run();
+await delay({}, { delay: 1000 });
 ```
+
+> **Inputs go to `run()`, not to the constructor.** A task constructor takes
+> `(config, runConfig)`, and `TaskConfigSchema` is `additionalProperties: false`,
+> so `new SomeTask({ url: "…" })` throws a `TaskConfigurationError` before any
+> work happens. Each helper above (`fetchUrl`, `debugLog`, `slackNotify`, …) is
+> just `new SomeTask(config).run(input)` with the two arguments in the right
+> places. To bake input values into an instance, put them under the config's
+> `defaults` key — see the [WebhookNotifyTask](#webhooknotifytask) examples.
 
 ```typescript
 import { fetch, debugLog, delay } from "@workglow/tasks";
@@ -96,14 +104,14 @@ Makes HTTP requests with built-in retry logic, progress tracking, and multiple r
 
 ```typescript
 // Simple GET request
-const response = await new FetchUrlTask({
+const response = await fetchUrl({
   url: "https://api.example.com/users",
   response_type: "json",
-}).run();
+});
 console.log(response.json);
 
 // POST request with headers
-const postResponse = await new FetchUrlTask({
+const postResponse = await fetchUrl({
   url: "https://api.example.com/users",
   method: "POST",
   headers: {
@@ -112,13 +120,13 @@ const postResponse = await new FetchUrlTask({
   },
   body: JSON.stringify({ name: "John", email: "john@example.com" }),
   response_type: "json",
-}).run();
+});
 
 // Text response
-const textResponse = await new FetchUrlTask({
+const textResponse = await fetchUrl({
   url: "https://example.com/readme.txt",
   response_type: "text",
-}).run();
+});
 console.log(textResponse.text);
 ```
 
@@ -156,12 +164,20 @@ output schema and error messages report only the endpoint's origin.
 
 ```typescript
 // Direct task usage
-const result = await new WebhookNotifyTask({
+const result = await webhookNotify({
   url: "https://example.com/hooks/abc123",
   payload: { event: "deploy", version: "1.4.2" },
   headers: { "X-Signature": "sha256=..." },
-}).run();
+});
 console.log(result.status);
+
+// Config vs. input: the constructor takes CONFIG, so a fixed endpoint belongs
+// under `defaults` — the per-run payload is still passed to `run()`.
+const notifier = new WebhookNotifyTask({
+  title: "Deploy hook",
+  defaults: { url: "https://example.com/hooks/abc123" },
+});
+await notifier.run({ payload: { event: "deploy", version: "1.4.2" } });
 
 // In a workflow
 const workflow = new Workflow()
@@ -172,6 +188,7 @@ const workflow = new Workflow()
 **Features:**
 
 - Runs inline through the SSRF-aware `safeFetch` wrapper
+- **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
 - Private/internal destinations require the scoped `network:private` entitlement
 - A private/internal destination is reachable but its response body is **never echoed** — `response` is always `""`. Notification needs no reply body, and returning one would make this task an SSRF read primitive (e.g. POSTing to a cloud metadata endpoint and reading the answer back into the graph)
 - 429/503 and 5xx raise `RetryableJobError`; retries require a `@workglow/job-queue` consumer, which these inline tasks do not have
@@ -204,19 +221,19 @@ Sends a message to a Slack incoming webhook.
 
 ```typescript
 // Plain message
-await new SlackNotifyTask({
+await slackNotify({
   url: "https://hooks.slack.com/services/T000/B000/xxx",
   text: "Deploy finished",
-}).run();
+});
 
 // Block Kit message with a bot identity
-await new SlackNotifyTask({
+await slackNotify({
   url: "https://hooks.slack.com/services/T000/B000/xxx",
   text: "Deploy finished",
   blocks: [{ type: "section", text: { type: "mrkdwn", text: "*Deploy finished*" } }],
   username: "deploybot",
   icon_emoji: ":rocket:",
-}).run();
+});
 
 // In a workflow
 const workflow = new Workflow().slackNotify({
@@ -228,7 +245,8 @@ const workflow = new Workflow().slackNotify({
 **Features:**
 
 - Absent optional fields are omitted from the payload rather than sent as `null`
-- Slack answers `200` with the body `ok`; failure bodies (`invalid_payload`, `no_service`) are surfaced in the error message
+- **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
+- Slack answers `200` with the body `ok`; failure bodies (`invalid_payload`, `no_service`) are surfaced in the error message — but **only for a public destination**. A private/internal endpoint's reply body is never spliced into the error, which would otherwise make the task an SSRF read primitive; its status is still reported
 - **Channel-wide broadcasts in `text` are neutralized by default.** Slack has no `allowed_mentions`; its documented control is HTML-entity escaping, so the literal `<!` is escaped to `&lt;!`. That defuses `<!channel>`, `<!here>`, `<!everyone>` and `<!subteam^ID>` while leaving `<https://…|label>` links and single-user `<@U123>` mentions intact, and `link_names: false` is sent explicitly. `blocks` is a caller-authored structure, not a piped string, so it is **not** rewritten — a broadcast written inside a block still pings. Set `allow_mentions: true` to send `text` verbatim
 - Requests time out after 30s by default (`timeout`)
 - Response bodies are capped at 1MB while being read
@@ -258,19 +276,19 @@ Sends a message to a Discord webhook.
 
 ```typescript
 // Plain message
-await new DiscordNotifyTask({
+await discordNotify({
   url: "https://discord.com/api/webhooks/123/xxx",
   content: "Build passed",
-}).run();
+});
 
 // Embed with a custom identity
-await new DiscordNotifyTask({
+await discordNotify({
   url: "https://discord.com/api/webhooks/123/xxx",
   content: "Build passed",
   username: "ci",
   avatar_url: "https://example.com/ci.png",
   embeds: [{ title: "workglow", description: "All checks green" }],
-}).run();
+});
 
 // In a workflow
 const workflow = new Workflow().discordNotify({
@@ -282,6 +300,8 @@ const workflow = new Workflow().discordNotify({
 **Features:**
 
 - A successful post answers `204 No Content`, so no response body is read or parsed
+- **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
+- A failure body is surfaced in the error message **only for a public destination**; a private/internal endpoint's reply body is never spliced in, which would otherwise make the task an SSRF read primitive
 - Rate limits arrive as `429` and may carry the delay as `{"retry_after": <seconds>}` in the body instead of a `Retry-After` header; both are parsed onto the raised `RetryableJobError`. Nothing acts on the value — retries require a `@workglow/job-queue` consumer, which these inline tasks do not have
 - **Mass mentions are suppressed by default** — `allowed_mentions: { parse: [] }` is sent, so `@everyone`/`@here`, role and user pings in `content` do nothing even when the content was piped in from a fetch or a model. Set `allow_mentions: true` to let the message ping
 - Requests time out after 30s by default (`timeout`)

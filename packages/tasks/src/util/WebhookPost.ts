@@ -147,9 +147,19 @@ export interface WebhookPostRequest {
   /** Request timeout in milliseconds. */
   readonly timeout: number | undefined;
   readonly signal: AbortSignal;
-  /** Read and return the success body. Endpoints replying 204 pass `false`. */
+  /**
+   * Read and return the success body. Endpoints replying 204 pass `false`.
+   *
+   * A ceiling, not a switch: {@link postWebhookJson} forces it to `false` for a
+   * private/internal destination, whose body is never surfaced.
+   */
   readonly readSuccessBody: boolean;
-  /** Include a truncated failure body in the thrown error message. */
+  /**
+   * Include a truncated failure body in the thrown error message.
+   *
+   * A ceiling, not a switch: {@link postWebhookJson} forces it to `false` for a
+   * private/internal destination, whose body is never surfaced.
+   */
   readonly includeBodyInError: boolean;
   /** Also read `retry_after` (seconds) from a JSON failure body. */
   readonly retryAfterFromJsonBody: boolean;
@@ -204,6 +214,20 @@ function leaksUrl(error: FetchUrlJobErrorInstance, url: string): boolean {
 }
 
 /**
+ * Recognizes the rejection `safeFetch` raises for a 3xx under
+ * `redirect: "error"`.
+ *
+ * Both transports throw a bare `TypeError` there — the shape `fetch` itself
+ * uses for the same refusal — so there is no code to match on, only the shape:
+ * a `TypeError` that names a redirect. Nothing else on this path produces one;
+ * a connection failure names the socket, and every SSRF refusal arrives as a
+ * typed {@link FetchUrlJobErrorInstance}.
+ */
+function isRedirectRefusal(error: unknown): boolean {
+  return error instanceof Error && error.name === "TypeError" && /redirect/i.test(error.message);
+}
+
+/**
  * Normalizes anything thrown while posting into a typed fetch error whose
  * message cannot contain the webhook secret. Already-typed errors keep their
  * code (and therefore their retryable/permanent classification) and are passed
@@ -233,6 +257,18 @@ function toRedactedWebhookError(
     return createFetchUrlJobError(
       FetchUrlErrorCode.NETWORK_ERROR,
       `Timed out posting ${label} to ${redactWebhookUrl(url)}`,
+      { url: redactWebhookUrl(url) }
+    );
+  }
+  // Built from scratch rather than rewritten: the transport's message embeds
+  // the requested URL (the secret), and the `Location` it refused to follow is
+  // never read at all, so neither can reach the caller.
+  if (isRedirectRefusal(error)) {
+    return createFetchUrlJobError(
+      FetchUrlErrorCode.INVALID_URL,
+      `Refusing to post ${label} to ${redactWebhookUrl(url)}: the endpoint answered with a ` +
+        `redirect. A webhook POST is never re-sent to another origin, because the payload ` +
+        `and any credentials would go with it. Configure the final URL instead.`,
       { url: redactWebhookUrl(url) }
     );
   }
@@ -303,7 +339,9 @@ async function readBodyText(
       text += decoder.decode(value, { stream: true });
       if (bytes >= maxBytes) {
         await reader.cancel().catch(() => {});
-        return text;
+        // Flush the decoder here too: abandoning the read mid-body can leave a
+        // partial multi-byte sequence buffered, which is dropped otherwise.
+        return text + decoder.decode();
       }
     }
   } catch {
@@ -315,9 +353,18 @@ async function readBodyText(
  * POSTs `payload` as JSON to a webhook endpoint through {@link safeFetch}.
  *
  * Private/loopback destinations are permitted only when the URL classifies as
- * private, in which case the granted scope is re-enforced on every redirect
- * hop — mirroring how {@link FetchUrlTask} threads the `network:private`
- * entitlement down to the transport.
+ * private, mirroring how {@link FetchUrlTask} threads the `network:private`
+ * entitlement down to the transport. A private destination additionally
+ * overrides `readSuccessBody` and `includeBodyInError` to `false`: those flags
+ * are a ceiling set by the calling task, and no reply from an internal host is
+ * ever surfaced — otherwise a notification task doubles as an SSRF read
+ * primitive with the answer smuggled out through an error message.
+ *
+ * Redirects are refused rather than followed. Following one would re-issue this
+ * exact request — method, serialized payload and caller headers — at whatever
+ * origin the `Location` names, handing the notification payload and any
+ * credentials to a host the caller never configured, and repeating the message
+ * once per hop. No mainstream webhook receiver answers a POST with a 3xx.
  */
 export async function postWebhookJson(request: WebhookPostRequest): Promise<WebhookPostResult> {
   const { url, label } = request;
@@ -337,13 +384,33 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
       : undefined;
   const signal = timeoutSignal ? AbortSignal.any([request.signal, timeoutSignal]) : request.signal;
 
+  // Built BEFORE the request `try`. A payload carrying a circular reference or
+  // a `BigInt` is a caller mistake no retry can fix, but the catch below has to
+  // treat anything it does not recognize as a transient network failure — so a
+  // throw from here would be retried forever under a misleading message.
+  let body: string | undefined;
+  let headers: Record<string, string>;
+  try {
+    body = JSON.stringify(request.payload);
+    headers = { "Content-Type": "application/json", ...request.headers };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw createFetchUrlJobError(
+      FetchUrlErrorCode.CONFIGURATION,
+      `Cannot build the ${label} request for ${redactWebhookUrl(url)}: ` +
+        `${redactWebhookUrlIn(detail, url)}`,
+      { url: redactWebhookUrl(url) }
+    );
+  }
+
   let response: Response;
   try {
     response = await safeFetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...request.headers },
-      body: JSON.stringify(request.payload),
+      headers,
+      body,
       signal,
+      redirect: "error",
       allowPrivate: isPrivate,
       privateResourceScopes: isPrivate ? [urlResourcePattern(url)] : undefined,
     });
@@ -352,7 +419,7 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
   }
 
   if (response.ok) {
-    if (!request.readSuccessBody) {
+    if (!request.readSuccessBody || isPrivate) {
       // Slack answers 200 with a short `ok` body even though we don't want it.
       // An unconsumed body keeps the underlying connection out of the agent's
       // pool until GC, so cancel it explicitly instead of dropping it.
@@ -366,8 +433,10 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
   const failureBody = await readBodyText(response);
   const retryDate = retryDateFromResponse(response, failureBody, request.retryAfterFromJsonBody);
   const redacted = redactWebhookUrl(url);
+  // The status is still reported for a private destination — the reply BODY is
+  // what would turn a POST at an internal service into a read of it.
   const bodySuffix =
-    request.includeBodyInError && failureBody.length > 0
+    request.includeBodyInError && !isPrivate && failureBody.length > 0
       ? `: ${truncate(redactWebhookUrlIn(failureBody, url), MAX_ERROR_BODY_CHARS)}`
       : "";
 

@@ -25,7 +25,7 @@ import {
   type SafeFetchFn,
   type SafeFetchOptions,
 } from "@workglow/tasks";
-import { getGlobalCredentialStore } from "@workglow/util";
+import { getGlobalCredentialStore, SECURITY_LIMITS } from "@workglow/util";
 import { validateSchema } from "@workglow/util/schema";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -37,6 +37,20 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 const SLACK_URL = "https://hooks.slack.com/services/T00000000/B00000000/SECRETTOKEN";
 const DISCORD_URL = "https://discord.com/api/webhooks/123456789/SECRETTOKEN";
 const WEBHOOK_URL = "https://example.com/hooks/SECRETTOKEN";
+
+/** Where a redirecting (or compromised) endpoint would send the payload. */
+const REDIRECT_TARGET = "https://attacker.example/collect";
+
+/**
+ * Reproduces what both `safeFetch` transports do for a 3xx under
+ * `redirect: "error"`: a bare `TypeError` naming the URL that was requested,
+ * raised without ever reading the `Location` header.
+ */
+function redirectRefusal(url: string): Promise<Response> {
+  return Promise.reject(
+    new TypeError(`Fetch for ${url} failed because redirect mode was set to 'error'.`)
+  );
+}
 
 const mockFetch = vi.fn((_url: string, _options: SafeFetchOptions) =>
   Promise.resolve(new Response("ok", { status: 200 }))
@@ -729,6 +743,246 @@ describe("Webhook notification tasks", () => {
 
       expect(error).toBeInstanceOf(PermanentJobError);
       expect((error as PermanentJobError).code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+  });
+
+  // Following a redirect re-issues the SAME request — method, serialized
+  // payload and caller headers — at whatever origin the `Location` names. For a
+  // notification whose URL (or `Authorization` header) is the credential, one
+  // `302` from a merely-misconfigured partner hands the payload to a third
+  // party, and every hop re-delivers the message.
+  describe("redirect refusal", () => {
+    test("every task asks the transport to refuse redirects", async () => {
+      await slackNotify({ url: SLACK_URL, text: "hi" });
+      expect(lastCall().options.redirect).toBe("error");
+
+      mockFetch.mockImplementation(() => Promise.resolve(new Response(null, { status: 204 })));
+      await discordNotify({ url: DISCORD_URL, content: "hi" });
+      expect(lastCall().options.redirect).toBe("error");
+
+      mockFetch.mockImplementation(() => Promise.resolve(new Response("ok", { status: 200 })));
+      await webhookNotify({ url: WEBHOOK_URL, payload: {} });
+      expect(lastCall().options.redirect).toBe("error");
+    });
+
+    test("a refused redirect is a permanent failure and is never re-sent", async () => {
+      mockFetch.mockImplementation((url: string) => redirectRefusal(url));
+
+      const error = (await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: { event: "deploy" },
+      }).catch((e: unknown) => e)) as PermanentJobError & { url?: string };
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error).not.toBeInstanceOf(RetryableJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.INVALID_URL);
+      expect(error.code).not.toBe(FetchUrlErrorCode.NETWORK_ERROR);
+      expect(error.message).toContain("redirect");
+      // The payload must not be replayed at the redirect target.
+      expect(mockFetch.mock.calls.length).toBe(1);
+    });
+
+    test("the refusal leaks neither the webhook token nor the redirect target", async () => {
+      mockFetch.mockImplementation((url: string) => redirectRefusal(url));
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "hi" }).catch(
+        (e: unknown) => e
+      )) as PermanentJobError & { url?: string };
+
+      expect(error.message).not.toContain("SECRETTOKEN");
+      expect(error.message).not.toContain(REDIRECT_TARGET);
+      expect(error.message).not.toContain("attacker.example");
+      expect(error.message).toContain("https://hooks.slack.com");
+      expect(error.url).not.toContain("SECRETTOKEN");
+      expect(String(error.stack)).not.toContain("SECRETTOKEN");
+      expect(formatErrorChainForDiagnostics(error)).not.toContain("SECRETTOKEN");
+    });
+
+    test("Discord's refusal is permanent too", async () => {
+      mockFetch.mockImplementation((url: string) => redirectRefusal(url));
+
+      const error = await discordNotify({ url: DISCORD_URL, content: "hi" }).catch(
+        (e: unknown) => e
+      );
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect((error as PermanentJobError).code).toBe(FetchUrlErrorCode.INVALID_URL);
+      expect(mockFetch.mock.calls.length).toBe(1);
+    });
+  });
+
+  // `includeBodyInError` is set unconditionally by the Slack and Discord tasks,
+  // so the private-destination gate has to live at the shared choke point:
+  // without it, posting to an internal service returns that service's detailed
+  // reply through the error message — the SSRF read the `response` port is
+  // already suppressed to prevent.
+  describe("private destination failure bodies", () => {
+    const PRIVATE_URL = "http://127.0.0.1:9200/_search";
+    const ES_BODY = JSON.stringify({
+      error: { type: "parsing_exception", reason: "cluster secrets index shard 3" },
+    });
+
+    test("Slack does not echo a private endpoint's failure body", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(new Response(ES_BODY, { status: 400, statusText: "Bad Request" }))
+      );
+
+      const error = (await slackNotify({ url: PRIVATE_URL, text: "x" }).catch(
+        (e: unknown) => e
+      )) as PermanentJobError & { httpStatus?: number };
+
+      expect(error.message).not.toContain("parsing_exception");
+      expect(error.message).not.toContain("cluster secrets index");
+      // The status still reports; only the body is withheld.
+      expect(error.message).toContain("400");
+      expect(error.httpStatus).toBe(400);
+    });
+
+    test("Discord does not echo a private endpoint's failure body", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(new Response(ES_BODY, { status: 400, statusText: "Bad Request" }))
+      );
+
+      const error = (await discordNotify({ url: PRIVATE_URL, content: "x" }).catch(
+        (e: unknown) => e
+      )) as PermanentJobError;
+
+      expect(error.message).not.toContain("parsing_exception");
+      expect(error.message).toContain("400");
+    });
+
+    test("a public endpoint's failure body is still surfaced", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(new Response("invalid_payload", { status: 400, statusText: "Bad Request" }))
+      );
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "x" }).catch(
+        (e: unknown) => e
+      )) as PermanentJobError;
+
+      expect(error.message).toContain("invalid_payload");
+    });
+
+    test("a private endpoint's success body is not read at all", async () => {
+      const response = new Response("AKIAEXAMPLESECRET", { status: 200 });
+      const readerSpy = vi.spyOn(response.body!, "getReader");
+      mockFetch.mockImplementation(() => Promise.resolve(response));
+
+      const result = await webhookNotify({ url: PRIVATE_URL, payload: {} });
+
+      expect(result.response).toBe("");
+      expect(readerSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("response body read ceiling", () => {
+    test("abandons a failure body past the byte ceiling", async () => {
+      const CHUNK_BYTES = 64 * 1024;
+      const TOTAL_CHUNKS = 40; // 2.5MB available, well past the 1MB ceiling
+      const chunk = new Uint8Array(CHUNK_BYTES).fill(121); // "y"
+      let pulled = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += 1;
+          if (pulled > TOTAL_CHUNKS) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(chunk.slice());
+        },
+      });
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(new Response(stream, { status: 500, statusText: "Server Error" }))
+      );
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "hi" }).catch(
+        (e: unknown) => e
+      )) as RetryableJobError;
+
+      expect(error).toBeInstanceOf(RetryableJobError);
+      // The read stops at the ceiling rather than buffering the whole body.
+      expect(pulled).toBeLessThan(TOTAL_CHUNKS);
+      expect(pulled * CHUNK_BYTES).toBeLessThanOrEqual(
+        SECURITY_LIMITS.webhookMaxResponseBodyBytes + CHUNK_BYTES
+      );
+      // What survives is still truncated for the message.
+      expect(error.message.length).toBeLessThan(2048);
+    });
+  });
+
+  // The catch around the request classifies anything it does not recognize as a
+  // retryable network failure, so building the request there would turn a
+  // caller mistake into an error that is retried forever.
+  describe("request construction failures", () => {
+    test("a circular payload is a permanent configuration error", async () => {
+      const payload: Record<string, unknown> = { event: "deploy" };
+      payload.self = payload;
+
+      const error = await webhookNotify({ url: WEBHOOK_URL, payload }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error).not.toBeInstanceOf(RetryableJobError);
+      expect((error as PermanentJobError).code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect((error as PermanentJobError).code).not.toBe(FetchUrlErrorCode.NETWORK_ERROR);
+      expect((error as PermanentJobError).message).not.toContain("SECRETTOKEN");
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    test("a BigInt in the payload is a permanent configuration error", async () => {
+      const error = await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: { size: BigInt(9007199254740993n) } as never,
+      }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error).not.toBeInstanceOf(RetryableJobError);
+      expect((error as PermanentJobError).code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+  });
+
+  // The README's snippets are copy-paste material; a constructor call that
+  // throws before any request is a documentation bug with a runtime cost.
+  describe("documented usage forms", () => {
+    test("the helper form documented for all three tasks runs", async () => {
+      expect(await webhookNotify({ url: WEBHOOK_URL, payload: { event: "deploy" } })).toEqual({
+        success: true,
+        status: 200,
+        response: "ok",
+      });
+
+      expect(await slackNotify({ url: SLACK_URL, text: "Deploy finished" })).toEqual({
+        success: true,
+        status: 200,
+      });
+
+      mockFetch.mockImplementation(() => Promise.resolve(new Response(null, { status: 204 })));
+      expect(await discordNotify({ url: DISCORD_URL, content: "Build passed" })).toEqual({
+        success: true,
+        status: 204,
+      });
+    });
+
+    test("the documented `defaults` config form runs", async () => {
+      const notifier = new WebhookNotifyTask({
+        title: "Deploy hook",
+        defaults: { url: WEBHOOK_URL },
+      });
+
+      const result = await notifier.run({ payload: { event: "deploy", version: "1.4.2" } });
+
+      expect(result.status).toBe(200);
+      expect(lastCall().url).toBe(WEBHOOK_URL);
+      expect(lastCall().options.body).toBe(JSON.stringify({ event: "deploy", version: "1.4.2" }));
+    });
+
+    // Why the snippets had to change: the constructor's first argument is
+    // CONFIG, whose schema is `additionalProperties: false`.
+    test("passing inputs as the constructor config throws before any request", () => {
+      expect(() => new WebhookNotifyTask({ url: WEBHOOK_URL, payload: {} } as never)).toThrow();
+      expect(() => new SlackNotifyTask({ url: SLACK_URL, text: "hi" } as never)).toThrow();
+      expect(() => new DiscordNotifyTask({ url: DISCORD_URL, content: "hi" } as never)).toThrow();
       expect(mockFetch.mock.calls.length).toBe(0);
     });
   });

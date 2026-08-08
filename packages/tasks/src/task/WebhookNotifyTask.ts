@@ -45,8 +45,10 @@ const inputSchema = {
     timeout: {
       type: "number",
       default: 30000,
+      minimum: 1,
       title: "Timeout",
-      description: "Request timeout in milliseconds",
+      description:
+        "Request timeout in milliseconds. There is no 'wait forever' setting: a black-holed endpoint would pin the task until the caller aborts.",
     },
     url_credential_key: {
       type: "string",
