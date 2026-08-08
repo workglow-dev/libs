@@ -9,13 +9,13 @@ import { registerKnowledgeBaseDefaults } from "@workglow/knowledge-base";
 import { registerMcpServerDefaults } from "@workglow/mcp/util";
 import { registerTabularStorageDefaults } from "@workglow/storage";
 import { registerTaskDefaults, registerTransformDefaults } from "@workglow/task-graph";
+import type { ServiceRegistry } from "@workglow/util";
 import {
   registerCredentialDefaults,
   registerInputCompactorDefaults,
   registerInputResolverDefaults,
   registerLoggerDefaults,
   registerTelemetryDefaults,
-  ServiceRegistry,
 } from "@workglow/util";
 import { registerImageDefaults } from "@workglow/util/media";
 import { registerWorkerManagerDefaults } from "@workglow/util/worker";

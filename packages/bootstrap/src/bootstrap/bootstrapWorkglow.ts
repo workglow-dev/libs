@@ -72,7 +72,10 @@ export function bootstrapWorkglow(opts: BootstrapOptions = {}): WorkglowContext 
  * ```ts
  * const ctx = createOrchestrationContext({ logger: new MyLogger() });
  * try {
- *   await task.run({ ..., context: ctx });
+ *   // The registry travels in the run config — `run()`'s FIRST argument is
+ *   // input overrides, so a context passed there is just an input named
+ *   // `context` and the run still uses the global registry.
+ *   await task.run({}, { registry: ctx.registry });
  * } finally {
  *   await ctx.dispose();
  * }

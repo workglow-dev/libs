@@ -2,11 +2,19 @@
 
 Runtime bootstrap for Workglow: registers every built-in default onto a service registry.
 
-Workglow does not self-register defaults at import time. Something has to install
-the logger, telemetry, worker-manager, credential, model, provider, knowledge-base,
-MCP, storage, task, and transform factories before any task runs — this package is
-that something, sitting below both the `workglow` meta-package and the test harness
-so neither has to own its own copy.
+Each registrar self-registers on the **global** registry when its module happens to
+be imported — `registerModelDefaults()`, `registerTabularStorageDefaults()` and the
+twelve others run at module scope, and default their `registry` parameter to the
+global one. What is populated therefore depends on which modules your import graph
+has pulled in, which is import-order dependent and easy to mis-diagnose.
+`bootstrapWorkglow()` is the guarantee: it installs the full set — logger,
+telemetry, worker-manager, credential, model, provider, knowledge-base, MCP,
+storage, task, and transform factories — in dependency order, idempotently. An
+isolated registry gets **nothing** until `registerAllDefaults(registry)` (or
+`createOrchestrationContext()`) is called explicitly.
+
+This package is that seam, sitting below both the `workglow` meta-package and the
+test harness so neither has to own its own copy.
 
 ## Installation
 
@@ -51,11 +59,16 @@ import { createOrchestrationContext } from "@workglow/bootstrap";
 
 const ctx = createOrchestrationContext();
 try {
-  await task.run({ context: ctx });
+  await task.run({}, { registry: ctx.registry });
 } finally {
   await ctx.dispose();
 }
 ```
+
+The registry travels in the **run config** — `run()`'s second argument. The first
+argument is input overrides, so passing a context there silently becomes an input
+named `context`, the run uses the global registry, and `ctx.dispose()` tears down a
+registry nothing ever touched.
 
 ### Registering onto a registry you already have
 

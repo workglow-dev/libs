@@ -210,7 +210,7 @@
     },
     "packages/bootstrap": {
       "name": "@workglow/bootstrap",
-      "version": "0.3.37",
+      "version": "0.3.38",
       "devDependencies": {
         "@workglow/ai": "workspace:*",
         "@workglow/knowledge-base": "workspace:*",
@@ -373,6 +373,7 @@
         "@workglow/ai": "workspace:*",
         "@workglow/anthropic": "workspace:*",
         "@workglow/aws": "workspace:*",
+        "@workglow/bootstrap": "workspace:*",
         "@workglow/browser-control": "workspace:*",
         "@workglow/bun-webview": "workspace:*",
         "@workglow/cactus": "workspace:*",

@@ -541,7 +541,7 @@ Register with `registerCommonTasks({ fileSystemTasks })` — the flag is require
 
 ### `@workglow/bootstrap` — default registration
 
-Nothing self-registers at import time, so a runtime has to install the defaults before any task runs. This package is that seam, and **the implementation lives here** — `packages/workglow/src/bootstrap.ts` is now a pure `export * from "@workglow/bootstrap"` re-export shim. Add a new default registration in `packages/bootstrap/src/bootstrap/registerAllDefaults.ts`; editing the shim does nothing.
+Each registrar self-registers on the **global** registry when its module happens to be imported — `registerModelDefaults()`, `registerTabularStorageDefaults()` and the twelve others run at module scope, and default their `registry` parameter to the global one. What is populated therefore depends on which modules your import graph has pulled in, which is import-order dependent and easy to mis-diagnose. `bootstrapWorkglow()` is the guarantee: it installs the full set in dependency order, idempotently. An isolated registry gets **nothing** until `registerAllDefaults(registry)` (or `createOrchestrationContext()`) is called explicitly. This package is that seam, and **the implementation lives here** — `packages/workglow/src/bootstrap.ts` is now a pure `export * from "@workglow/bootstrap"` re-export shim. Add a new default registration in `packages/bootstrap/src/bootstrap/registerAllDefaults.ts`; editing the shim does nothing.
 
 - `bootstrapWorkglow(opts?)` — installs defaults onto the global registry, idempotent. The normal application entry point.
 - `createOrchestrationContext(opts?)` — a fresh, disposable registry backed by its own container (tests, multi-tenant servers, embedded use).
