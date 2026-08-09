@@ -201,7 +201,12 @@ export class SlackNotifyTask<
   }
 
   override async execute(input: Input, context: IExecuteContext): Promise<Output> {
-    const url = resolveWebhookUrl(input.url, input.url_credential_key, "SlackNotifyTask");
+    const url = resolveWebhookUrl(
+      input.url,
+      input.url_credential_key,
+      Object.hasOwn(input, "url_credential_key"),
+      "SlackNotifyTask"
+    );
     const allowMentions = input.allow_mentions === true;
     const result = await postWebhookJson({
       url,

@@ -158,12 +158,29 @@ export function redactedStackFrom(original: unknown, rebuilt: Error, url: string
  * Picks the webhook URL, preferring a resolved credential over the plain
  * `url` port. Credential values arrive already resolved by the input
  * resolver, so the key name never reaches the network.
+ *
+ * `credentialConfigured` says whether the task declared a key at all, which is
+ * what separates "no credential wanted" from "credential wanted but the store
+ * could not answer". The resolver overwrites the port in place, so by the time
+ * `execute` runs the key itself is gone: a store miss leaves the port PRESENT
+ * with value `undefined`, whereas an unconfigured port is absent entirely. A
+ * miss must fail rather than fall back to `url` — otherwise a locked store or
+ * a mistyped key silently redirects the notification to a different endpoint
+ * and reports success.
  */
 export function resolveWebhookUrl(
   url: string | undefined,
   credential: string | undefined,
+  credentialConfigured: boolean,
   label: string
 ): string {
+  if (credentialConfigured && (credential === undefined || credential.length === 0)) {
+    throw createFetchUrlJobError(
+      FetchUrlErrorCode.CONFIGURATION,
+      `${label}: 'url_credential_key' is set but the credential store returned no value for it. ` +
+        `Unlock the store or correct the key; 'url' is not used as a fallback when a credential key is configured.`
+    );
+  }
   const resolved = credential !== undefined && credential.length > 0 ? credential : url;
   if (resolved === undefined || resolved.length === 0) {
     throw createFetchUrlJobError(

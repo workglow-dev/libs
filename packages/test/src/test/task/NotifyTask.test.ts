@@ -887,6 +887,32 @@ describe("Webhook notification tasks", () => {
       expect(mockFetch.mock.calls.length).toBe(0);
     });
 
+    // A configured key that the store cannot answer used to fall through to
+    // the `url` port and post anyway, reporting success. That silently sends
+    // the notification somewhere other than where the operator configured it,
+    // and hides an unlocked-store / wrong-key misconfiguration entirely.
+    test("a configured credential key the store cannot answer fails closed", async () => {
+      const error = await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        url_credential_key: "absent-key",
+      }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect((error as PermanentJobError).code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect((error as PermanentJobError).message).toContain("url_credential_key");
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    // The discriminator is "the port is present", not "the value is empty", so
+    // it must not fire for a task that never configured a credential at all.
+    test("an unconfigured credential key leaves the plain url working", async () => {
+      const result = await webhookNotify({ url: WEBHOOK_URL, payload: {} });
+
+      expect(result.success).toBe(true);
+      expect(lastCall().url).toBe(WEBHOOK_URL);
+    });
+
     test("a non-http scheme is rejected before any request is made", async () => {
       const error = await webhookNotify({ url: "file:///etc/passwd", payload: {} }).catch(
         (e: unknown) => e

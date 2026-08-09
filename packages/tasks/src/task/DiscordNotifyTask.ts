@@ -142,7 +142,12 @@ export class DiscordNotifyTask<
   }
 
   override async execute(input: Input, context: IExecuteContext): Promise<Output> {
-    const url = resolveWebhookUrl(input.url, input.url_credential_key, "DiscordNotifyTask");
+    const url = resolveWebhookUrl(
+      input.url,
+      input.url_credential_key,
+      Object.hasOwn(input, "url_credential_key"),
+      "DiscordNotifyTask"
+    );
     const result = await postWebhookJson({
       url,
       payload: compactPayload({

@@ -129,7 +129,12 @@ export class WebhookNotifyTask<
   }
 
   override async execute(input: Input, context: IExecuteContext): Promise<Output> {
-    const url = resolveWebhookUrl(input.url, input.url_credential_key, "WebhookNotifyTask");
+    const url = resolveWebhookUrl(
+      input.url,
+      input.url_credential_key,
+      Object.hasOwn(input, "url_credential_key"),
+      "WebhookNotifyTask"
+    );
     // Reachability of a private destination matches FetchUrlTask (gated by the
     // `network:private` entitlement), but the `response` port would additionally
     // turn this task into an SSRF *read* primitive: a POST to
