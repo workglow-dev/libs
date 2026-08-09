@@ -254,6 +254,65 @@ describe("workspace exports maps", () => {
 });
 
 /**
+ * A correct manifest is only half of it: TypeScript's condition set is
+ * `["import", "types"]` under `moduleResolution: "bundler"`, so `"browser"` is
+ * never applied unless the consumer names it in `customConditions`. Without that
+ * line a browser project bundles `dist/browser.js` while `tsc` type-checks it
+ * against the node declarations — no error anywhere, and the symbols the browser
+ * bundle omits still autocomplete.
+ */
+/** `tsconfig.json` is JSONC, so its comments have to go before `JSON.parse`. */
+function stripJsonComments(text: string): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]!;
+    if (inString) {
+      out += char;
+      if (char === "\\") {
+        out += text[i + 1] ?? "";
+        i++;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      out += char;
+      continue;
+    }
+    if (char === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+      continue;
+    }
+    if (char === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 1;
+      continue;
+    }
+    out += char;
+  }
+  return out;
+}
+
+describe("browser consumers opt into the browser condition", () => {
+  it("examples/web sets customConditions", () => {
+    // examples/web is the repo's only browser-bundled TypeScript project, and it
+    // imports packages that carry `browser` conditions (`@workglow/util`,
+    // `@workglow/indexeddb/storage`, `@workglow/tf-mediapipe/ai`). If that project
+    // is renamed or moved, repoint this path at its replacement rather than
+    // deleting the check.
+    const root = workspaceRoot();
+    const tsconfig = JSON.parse(
+      stripJsonComments(readFileSync(join(root.dir, "examples/web/tsconfig.json"), "utf8"))
+    ) as { compilerOptions?: { customConditions?: readonly string[] } };
+    expect(tsconfig.compilerOptions?.customConditions).toContain("browser");
+  });
+});
+
+/**
  * No manifest violates these rules today, so the code paths that catch them would
  * ship untested. These fixtures exercise them directly.
  */

@@ -431,6 +431,26 @@ successful compiles for symbols that are `undefined` at runtime, because the bro
 never exported them. `packages/test/src/test/util/ExportTypesPairing.test.ts` walks every
 condition branch of every workspace manifest and fails on any pair that has drifted apart.
 
+**TypeScript applies the `"browser"` condition only when the consumer asks for it.** Its condition
+set is `["import", "types"]` under `moduleResolution: "bundler"` and `["node", "import", "types"]`
+under `node16`/`nodenext` — `"browser"` is in neither. A Vite or webpack app therefore _bundles_
+`dist/browser.js` while `tsc` resolves the outer `"types"` and type-checks it against the node
+declaration. Correct manifests do not fix that on their own; they move the drift from the manifest
+to the consumer's tsconfig. Browser consumers must opt in:
+
+```json
+{
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "customConditions": ["browser"]
+  }
+}
+```
+
+`examples/web/tsconfig.json` is the in-repo example. Downstream apps that bundle for the browser
+need the same line — without it, `import { _testOnly } from "@workglow/openai/ai"` compiles with
+full autocomplete and is `undefined` at runtime.
+
 ---
 
 ## Developer Workflow
