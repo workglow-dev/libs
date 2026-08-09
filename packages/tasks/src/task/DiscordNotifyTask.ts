@@ -67,6 +67,13 @@ const inputSchema = {
       description:
         "Request timeout in milliseconds. There is no 'wait forever' setting: a black-holed endpoint would pin the task until the caller aborts.",
     },
+    allow_private_destination: {
+      type: "boolean",
+      default: false,
+      title: "Allow Private Destination",
+      description:
+        "Permit posting to a private/internal/loopback destination. Requires the `network:private` entitlement.",
+    },
     url_credential_key: {
       type: "string",
       format: "credential",
@@ -129,7 +136,8 @@ export class DiscordNotifyTask<
     return webhookPrivateEntitlements(
       DiscordNotifyTask.entitlements(),
       this.runInputData?.url,
-      this.runInputData?.url_credential_key
+      this.runInputData?.url_credential_key,
+      this.runInputData?.allow_private_destination
     );
   }
 
@@ -167,6 +175,7 @@ export class DiscordNotifyTask<
       readSuccessBody: false,
       includeBodyInError: true,
       retryAfterFromJsonBody: true,
+      allowPrivateDestination: input.allow_private_destination === true,
       label: "Discord webhook",
     });
     return { success: true, status: result.status } as Output;

@@ -549,29 +549,68 @@ describe("Webhook notification tasks", () => {
       expect(requiresPrivate(task)).toBe(false);
     });
 
-    test("a private URL requires network:private", () => {
+    // The destination is not knowable at entitlement-evaluation time — the
+    // enforcer runs before the credential resolver — so the requirement is
+    // driven by the DECLARATION, not by grading a URL that may be a decoy.
+    test("a private URL alone declares no network:private", () => {
       const task = new WebhookNotifyTask();
       task.runInputData = { url: "http://127.0.0.1:9200/ingest", payload: {} } as any;
+      expect(requiresPrivate(task)).toBe(false);
+    });
+
+    test("a private URL with allow_private_destination requires network:private", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = {
+        url: "http://127.0.0.1:9200/ingest",
+        payload: {},
+        allow_private_destination: true,
+      } as any;
       expect(requiresPrivate(task)).toBe(true);
     });
 
-    // Regression: the credential OVERRIDES `url` at execute time, so grading
-    // entitlements on a public-looking `url` while the request actually goes
-    // to whatever the credential holds is an entitlement bypass.
-    test("a credential key forces network:private even beside a public url", () => {
+    // Inverted: a credential key no longer forces an unscoped private grant on
+    // every instance that uses the store. Execute-time enforcement against the
+    // URL actually resolved is what keeps that safe.
+    test("a credential key alone requires no network:private", () => {
       const task = new WebhookNotifyTask();
       task.runInputData = {
         url: WEBHOOK_URL,
         payload: {},
         url_credential_key: "internal-hook",
       } as any;
-      expect(requiresPrivate(task)).toBe(true);
+      expect(requiresPrivate(task)).toBe(false);
     });
 
-    test("an absent url still fails closed", () => {
+    test("an absent url alone requires no network:private", () => {
       const task = new WebhookNotifyTask();
       task.runInputData = { payload: {} } as any;
-      expect(requiresPrivate(task)).toBe(true);
+      expect(requiresPrivate(task)).toBe(false);
+    });
+
+    test("a declared private destination is scoped to the url port", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = {
+        url: "http://127.0.0.1:9200/ingest",
+        payload: {},
+        allow_private_destination: true,
+      } as any;
+      const granted = task.entitlements().entitlements.find((e) => e.id === "network:private");
+      expect(granted?.resources).toEqual(["http://127.0.0.1:9200/*"]);
+    });
+
+    // With a credential key the URL is genuinely unknown here, so the grant
+    // cannot be scoped and says so rather than pretending otherwise.
+    test("a declared private destination behind a credential key is unscoped", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = {
+        url: WEBHOOK_URL,
+        payload: {},
+        url_credential_key: "internal-hook",
+        allow_private_destination: true,
+      } as any;
+      const granted = task.entitlements().entitlements.find((e) => e.id === "network:private");
+      expect(granted).toBeDefined();
+      expect(granted!.resources).toBeUndefined();
     });
 
     // `optional: true` entitlements are skipped outright by evaluatePolicy, so
@@ -851,11 +890,54 @@ describe("Webhook notification tasks", () => {
       const result = await webhookNotify({
         url: "http://169.254.169.254/latest/meta-data/",
         payload: { ping: true },
+        allow_private_destination: true,
       });
 
       expect(result.response).toBe("");
       expect(JSON.stringify(result)).not.toContain("AKIA");
       expect(result.status).toBe(200);
+    });
+
+    test("refuses a private destination that was not declared", async () => {
+      const error = (await webhookNotify({
+        url: "http://169.254.169.254/latest/meta-data/",
+        payload: { ping: true },
+      }).catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error).not.toBeInstanceOf(RetryableJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.PRIVATE_DENIED);
+      expect(error.message).toContain("allow_private_destination");
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    // The declaration is checked against the URL actually resolved, which is
+    // the only place a credential-backed destination can be graded at all: the
+    // entitlement enforcer runs before the credential resolver does.
+    test("a credential resolving to a private URL is refused at execute time", async () => {
+      const store = getGlobalCredentialStore();
+      await store.put("internal-hook", "http://127.0.0.1:9200/x");
+      const error = (await webhookNotify({
+        payload: {},
+        url_credential_key: "internal-hook",
+      })
+        .catch((e: unknown) => e)
+        .finally(() => store.delete("internal-hook"))) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.PRIVATE_DENIED);
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    test("the refusal does not echo the webhook token", async () => {
+      const error = (await slackNotify({
+        url: "http://127.0.0.1:9200/services/T00000000/B00000000/SECRETTOKEN",
+        text: "hi",
+      }).catch((e: unknown) => e)) as PermanentJobError & { url?: string };
+
+      expect(error.code).toBe(FetchUrlErrorCode.PRIVATE_DENIED);
+      expect(error.message).not.toContain("SECRETTOKEN");
+      expect(error.url).not.toContain("SECRETTOKEN");
     });
 
     test("still echoes a public destination's body", async () => {
@@ -1058,9 +1140,11 @@ describe("Webhook notification tasks", () => {
         Promise.resolve(new Response(ES_BODY, { status: 400, statusText: "Bad Request" }))
       );
 
-      const error = (await slackNotify({ url: PRIVATE_URL, text: "x" }).catch(
-        (e: unknown) => e
-      )) as PermanentJobError & { httpStatus?: number };
+      const error = (await slackNotify({
+        url: PRIVATE_URL,
+        text: "x",
+        allow_private_destination: true,
+      }).catch((e: unknown) => e)) as PermanentJobError & { httpStatus?: number };
 
       expect(error.message).not.toContain("parsing_exception");
       expect(error.message).not.toContain("cluster secrets index");
@@ -1074,9 +1158,11 @@ describe("Webhook notification tasks", () => {
         Promise.resolve(new Response(ES_BODY, { status: 400, statusText: "Bad Request" }))
       );
 
-      const error = (await discordNotify({ url: PRIVATE_URL, content: "x" }).catch(
-        (e: unknown) => e
-      )) as PermanentJobError;
+      const error = (await discordNotify({
+        url: PRIVATE_URL,
+        content: "x",
+        allow_private_destination: true,
+      }).catch((e: unknown) => e)) as PermanentJobError;
 
       expect(error.message).not.toContain("parsing_exception");
       expect(error.message).toContain("400");
@@ -1099,7 +1185,11 @@ describe("Webhook notification tasks", () => {
       const readerSpy = vi.spyOn(response.body!, "getReader");
       mockFetch.mockImplementation(() => Promise.resolve(response));
 
-      const result = await webhookNotify({ url: PRIVATE_URL, payload: {} });
+      const result = await webhookNotify({
+        url: PRIVATE_URL,
+        payload: {},
+        allow_private_destination: true,
+      });
 
       expect(result.response).toBe("");
       expect(readerSpy).not.toHaveBeenCalled();

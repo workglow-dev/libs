@@ -50,6 +50,13 @@ const inputSchema = {
       description:
         "Request timeout in milliseconds. There is no 'wait forever' setting: a black-holed endpoint would pin the task until the caller aborts.",
     },
+    allow_private_destination: {
+      type: "boolean",
+      default: false,
+      title: "Allow Private Destination",
+      description:
+        "Permit posting to a private/internal/loopback destination. Requires the `network:private` entitlement.",
+    },
     url_credential_key: {
       type: "string",
       format: "credential",
@@ -116,7 +123,8 @@ export class WebhookNotifyTask<
     return webhookPrivateEntitlements(
       WebhookNotifyTask.entitlements(),
       this.runInputData?.url,
-      this.runInputData?.url_credential_key
+      this.runInputData?.url_credential_key,
+      this.runInputData?.allow_private_destination
     );
   }
 
@@ -135,8 +143,8 @@ export class WebhookNotifyTask<
       Object.hasOwn(input, "url_credential_key"),
       "WebhookNotifyTask"
     );
-    // Reachability of a private destination matches FetchUrlTask (gated by the
-    // `network:private` entitlement), but the `response` port would additionally
+    // A private destination is reachable only once `allow_private_destination`
+    // declares it (enforced in postWebhookJson), but the `response` port would
     // turn this task into an SSRF *read* primitive: a POST to
     // http://169.254.169.254/latest/meta-data/iam/security-credentials/ would
     // hand a kilobyte of the reply back into the graph. Notification needs no
@@ -151,6 +159,7 @@ export class WebhookNotifyTask<
       readSuccessBody: !isPrivate,
       includeBodyInError: false,
       retryAfterFromJsonBody: false,
+      allowPrivateDestination: input.allow_private_destination === true,
       label: "webhook",
     });
     return {

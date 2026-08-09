@@ -152,6 +152,7 @@ output schema and error messages report only the endpoint's origin.
 - `payload` (object, required): JSON body to send
 - `headers` (object, optional): Additional headers, merged over the JSON content type
 - `timeout` (number, optional): Request timeout in milliseconds. Default: `30000`
+- `allow_private_destination` (boolean, optional): Permit posting to a private/internal/loopback destination. Requires the `network:private` entitlement. Default: `false`
 - `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`. A value that is not an absolute `http(s)` URL (e.g. a bearer token) is rejected with a configuration error.
 
 **Output Schema:**
@@ -189,8 +190,8 @@ const workflow = new Workflow()
 
 - Runs inline through the SSRF-aware `safeFetch` wrapper
 - **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
-- Private/internal destinations require the scoped `network:private` entitlement
-- A private/internal destination is reachable but its response body is **never echoed** — `response` is always `""`. Notification needs no reply body, and returning one would make this task an SSRF read primitive (e.g. POSTing to a cloud metadata endpoint and reading the answer back into the graph)
+- **A private/internal destination is refused unless `allow_private_destination` is set** — which also declares the `network:private` entitlement, scoped to `url` when no credential key is configured. Without the flag the post fails with `PRIVATE_DENIED` before any request is made
+- A permitted private/internal destination is reachable but its response body is **never echoed** — `response` is always `""`. Notification needs no reply body, and returning one would make this task an SSRF read primitive (e.g. POSTing to a cloud metadata endpoint and reading the answer back into the graph)
 - 429/503 and 5xx raise `RetryableJobError`; retries require a `@workglow/job-queue` consumer, which these inline tasks do not have
 - Response bodies are read as a stream and abandoned past 1MB, so an endpoint answering with an unbounded body cannot exhaust runner memory — on the failure path too
 - Requests time out after 30s by default (`timeout`); a caller abort surfaces as an abort error rather than a retryable network failure
@@ -210,6 +211,7 @@ Sends a message to a Slack incoming webhook.
 - `icon_emoji` (string, optional): Overrides the bot icon, e.g. `:rocket:`
 - `allow_mentions` (boolean, optional): Send `text` unmodified. Default: `false`
 - `timeout` (number, optional): Request timeout in milliseconds. Default: `30000`
+- `allow_private_destination` (boolean, optional): Permit posting to a private/internal/loopback destination. Requires the `network:private` entitlement. Default: `false`
 - `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
 
 **Output Schema:**
@@ -246,6 +248,7 @@ const workflow = new Workflow().slackNotify({
 
 - Absent optional fields are omitted from the payload rather than sent as `null`
 - **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
+- **A private/internal destination is refused unless `allow_private_destination` is set**, which also declares the `network:private` entitlement
 - Slack answers `200` with the body `ok`; failure bodies (`invalid_payload`, `no_service`) are surfaced in the error message — but **only for a public destination**. A private/internal endpoint's reply body is never spliced into the error, which would otherwise make the task an SSRF read primitive; its status is still reported
 - **Channel-wide broadcasts in `text` and `blocks` are neutralized by default.** Slack has no `allowed_mentions`; its documented control is HTML-entity escaping, so the literal `<!` is escaped to `&lt;!`. That defuses `<!channel>`, `<!here>`, `<!everyone>` and `<!subteam^ID>` while leaving `<https://…|label>` links and single-user `<@U123>` mentions intact, and `link_names: false` is sent explicitly. `blocks` is walked to every string leaf, so a broadcast written inside a section, a `fields[]` entry or an `elements[]` entry is defused too. Set `allow_mentions: true` to send both verbatim
 - Requests time out after 30s by default (`timeout`)
@@ -265,6 +268,7 @@ Sends a message to a Discord webhook.
 - `embeds` (array, optional): Discord embed objects
 - `allow_mentions` (boolean, optional): Let the message ping. Default: `false`
 - `timeout` (number, optional): Request timeout in milliseconds. Default: `30000`
+- `allow_private_destination` (boolean, optional): Permit posting to a private/internal/loopback destination. Requires the `network:private` entitlement. Default: `false`
 - `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
 
 **Output Schema:**
@@ -301,6 +305,7 @@ const workflow = new Workflow().discordNotify({
 
 - A successful post answers `204 No Content`, so no response body is read or parsed
 - **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
+- **A private/internal destination is refused unless `allow_private_destination` is set**, which also declares the `network:private` entitlement
 - A failure body is surfaced in the error message **only for a public destination**; a private/internal endpoint's reply body is never spliced in, which would otherwise make the task an SSRF read primitive
 - Rate limits arrive as `429` and may carry the delay as `{"retry_after": <seconds>}` in the body instead of a `Retry-After` header; both are parsed onto the raised `RetryableJobError`. Nothing acts on the value — retries require a `@workglow/job-queue` consumer, which these inline tasks do not have
 - **Mass mentions are suppressed by default** — `allowed_mentions: { parse: [] }` is sent, so `@everyone`/`@here`, role and user pings in `content` do nothing even when the content was piped in from a fetch or a model. Set `allow_mentions: true` to let the message ping

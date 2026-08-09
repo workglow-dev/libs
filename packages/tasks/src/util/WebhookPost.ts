@@ -233,6 +233,14 @@ export interface WebhookPostRequest {
   readonly includeBodyInError: boolean;
   /** Also read `retry_after` (seconds) from a JSON failure body. */
   readonly retryAfterFromJsonBody: boolean;
+  /**
+   * The caller declared a private/internal destination is intended.
+   *
+   * Without it a private destination is refused outright, so the
+   * `allowPrivate` flag handed to {@link safeFetch} is never self-derived from
+   * whatever the URL happened to resolve to.
+   */
+  readonly allowPrivateDestination: boolean;
   /** Human-readable subject used in error messages, e.g. "Slack webhook". */
   readonly label: string;
 }
@@ -414,10 +422,10 @@ async function readBodyText(
 /**
  * POSTs `payload` as JSON to a webhook endpoint through {@link safeFetch}.
  *
- * Private/loopback destinations are permitted only when the URL classifies as
- * private, mirroring how {@link FetchUrlTask} threads the `network:private`
- * entitlement down to the transport. A private destination additionally
- * overrides `readSuccessBody` and `includeBodyInError` to `false`: those flags
+ * Private/loopback destinations are refused unless the caller declared
+ * `allowPrivateDestination`, which is what the `network:private` entitlement is
+ * granted against. A permitted private destination additionally overrides
+ * `readSuccessBody` and `includeBodyInError` to `false`: those flags
  * are a ceiling set by the calling task, and no reply from an internal host is
  * ever surfaced — otherwise a notification task doubles as an SSRF read
  * primitive with the answer smuggled out through an error message.
@@ -440,6 +448,14 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
   }
 
   const isPrivate = classification.kind === "private";
+  if (isPrivate && !request.allowPrivateDestination) {
+    throw createFetchUrlJobError(
+      FetchUrlErrorCode.PRIVATE_DENIED,
+      `Refusing to post ${label} to a private/internal destination. ` +
+        `Set 'allow_private_destination' and grant the 'network:private' entitlement.`,
+      { url: redactWebhookUrl(url) }
+    );
+  }
   const timeoutSignal =
     request.timeout !== undefined && request.timeout > 0
       ? AbortSignal.timeout(request.timeout)
@@ -548,22 +564,27 @@ export function webhookBaseEntitlements(reason: string): TaskEntitlements {
 }
 
 /**
- * Adds a scoped `network:private` requirement when the configured URL targets
- * a private host. Fails closed when the destination is not knowable at
- * entitlement evaluation time, so a private destination can never slip
- * through unchecked.
+ * Adds a `network:private` requirement when — and only when — the task
+ * DECLARES that it intends to post to a private/internal destination.
  *
- * `credentialKey` must be threaded in: {@link resolveWebhookUrl} prefers the
- * resolved credential OVER the `url` port, so classifying `url` alone would
- * grade a decoy public URL while the request actually goes wherever the
- * credential points — and {@link postWebhookJson} self-grants `allowPrivate`
- * from the URL it really uses. Whenever a credential is configured the
- * destination is unknown here, whatever `url` says.
+ * The destination is genuinely unknowable here: `ITask.entitlements()` is
+ * synchronous and the enforcer checks it before the runner resolves
+ * `format: "credential"` inputs, so a credential-backed URL does not exist yet.
+ * Deriving the requirement from the URL therefore either fails open (grade the
+ * decoy `url` while the request goes wherever the credential points) or forces
+ * an unscoped grant on every credential-using instance, public or not.
+ *
+ * So the decision is an explicit input instead, and {@link postWebhookJson}
+ * enforces it at execute time against the URL actually resolved. The
+ * declaration is scoped to the `url` port when that port is the destination;
+ * with a credential key the URL is unknown here, so the grant is unscoped and
+ * says why.
  */
 export function webhookPrivateEntitlements(
   base: TaskEntitlements,
   url: unknown,
-  credentialKey: unknown
+  credentialKey: unknown,
+  allowPrivate: unknown
 ): TaskEntitlements {
   const credentialWins = typeof credentialKey === "string" && credentialKey.length > 0;
   // A configured credential key is no longer a "may": this instance WILL read
@@ -579,28 +600,18 @@ export function webhookPrivateEntitlements(
         ],
       })
     : base;
-  if (credentialWins || typeof url !== "string" || url.length === 0) {
-    return mergeEntitlements(withCredential, {
-      entitlements: [
-        {
-          id: Entitlements.NETWORK_PRIVATE,
-          reason: credentialWins
-            ? "The webhook URL comes from the credential store and overrides the `url` port, so the destination is unknown during entitlement evaluation; private/internal destinations must be explicitly allowed"
-            : "Runtime webhook URL is not yet available during entitlement evaluation; private/internal destinations must be explicitly allowed",
-        },
-      ],
-    });
-  }
-  const classification = classifyUrl(url);
-  if (classification.kind !== "private") {
+  if (allowPrivate !== true) {
     return withCredential;
   }
+  const scoped = !credentialWins && typeof url === "string" && url.length > 0;
   return mergeEntitlements(withCredential, {
     entitlements: [
       {
         id: Entitlements.NETWORK_PRIVATE,
-        reason: `Webhook URL targets private/internal host: ${classification.reason ?? classification.host ?? "unknown"}`,
-        resources: [urlResourcePattern(url)],
+        reason: scoped
+          ? "'allow_private_destination' is set, permitting a private/internal destination on the configured `url`"
+          : "'allow_private_destination' is set and the webhook URL comes from the credential store, so the destination is not knowable during entitlement evaluation",
+        resources: scoped ? [urlResourcePattern(url as string)] : undefined,
       },
     ],
   });
