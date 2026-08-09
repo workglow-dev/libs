@@ -471,8 +471,19 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
       await response.body?.cancel().catch(() => {});
       return { status: response.status, body: "" };
     }
+    // Redacted BEFORE truncating: cutting first can slice a token in half so
+    // it no longer matches, leaving a usable prefix in the task output. Echo
+    // endpoints (webhook.site, RequestBin) reply with the request line, which
+    // carries the whole webhook URL.
+    //
+    // A residual gap remains and is deliberately not closed here: `readBodyText`
+    // stops at `SECURITY_LIMITS.webhookMaxResponseBodyBytes`, so a token
+    // straddling that boundary can still leave a partial behind.
     const text = await readBodyText(response);
-    return { status: response.status, body: truncate(text, MAX_RESPONSE_BODY_CHARS) };
+    return {
+      status: response.status,
+      body: truncate(redactWebhookUrlIn(text, url), MAX_RESPONSE_BODY_CHARS),
+    };
   }
 
   const failureBody = await readBodyText(response);

@@ -398,6 +398,21 @@ describe("Webhook notification tasks", () => {
       expect(error.cause).toBeUndefined();
     });
 
+    // Echo endpoints (webhook.site, RequestBin) reply 200 with the request
+    // line, so a success body can carry the whole webhook URL straight into
+    // the `response` port — which is task output, persisted and pipeable.
+    test("a success body echoing the webhook URL is redacted", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(new Response(`Received POST ${WEBHOOK_URL}`, { status: 200 }))
+      );
+
+      const result = await webhookNotify({ url: WEBHOOK_URL, payload: {} });
+
+      expect(result.response).not.toContain("SECRETTOKEN");
+      // The origin stays as the useful diagnostic.
+      expect(result.response).toContain("https://example.com");
+    });
+
     // An endpoint routinely echoes only PART of the URL, which the literal
     // full-URL match never sees. Express answers an unknown route with the
     // PATH and no origin, and Slack sets `includeBodyInError`, so this 404
