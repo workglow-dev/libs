@@ -14,7 +14,13 @@
  * `TaskGraphRunConfig` has a `context` key — so with a loosely typed `Input`
  * that object is an input override named `context`, the run keeps the global
  * registry, and `ctx.dispose()` tears down a registry the task never touched.
- * Both halves are pinned below so the snippet cannot silently rot back.
+ *
+ * Two halves are pinned below. The first `describe` exercises both shapes at
+ * runtime, proving the documented one works and the old one does not. The
+ * second reads the two documents themselves, so a snippet that rots back is a
+ * test failure rather than prose nobody re-checks. The document cases scan
+ * every fenced block for the wrong shape, so a deliberate counter-example in
+ * the README would trip them — write the counter-example as prose instead.
  */
 
 import { createOrchestrationContext } from "@workglow/bootstrap";
@@ -23,7 +29,29 @@ import { Task } from "@workglow/task-graph";
 import type { ServiceRegistry } from "@workglow/util";
 import { globalServiceRegistry } from "@workglow/util";
 import type { DataPortSchema } from "@workglow/util/schema";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../../../..");
+const README_PATH = join(REPO_ROOT, "packages/bootstrap/README.md");
+const SOURCE_PATH = join(REPO_ROOT, "packages/bootstrap/src/bootstrap/bootstrapWorkglow.ts");
+
+/** The registry travelling in the run config — `run()`'s second argument. */
+const REGISTRY_IN_RUN_CONFIG =
+  /\.run\(\s*\{\s*\}\s*,\s*\{\s*registry:\s*\w+\.registry[\s,]*\}\s*\)/;
+/** The shape that silently becomes an input override named `context`. */
+const CONTEXT_AS_INPUT = /\.run\(\s*\{\s*context\s*:/;
+
+/**
+ * Every fenced code block's body, whatever its info string. Selecting blocks by
+ * content rather than by the heading above them keeps a heading rename from
+ * making these cases pass vacuously.
+ */
+function fencedBlocks(markdown: string): string[] {
+  return [...markdown.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)].map((match) => match[1]!);
+}
 
 interface RegistryProbeOutput extends TaskOutput {
   isGlobal: boolean;
@@ -91,5 +119,39 @@ describe("the @workglow/bootstrap README isolated-context example", () => {
     } finally {
       await ctx.dispose();
     }
+  });
+});
+
+describe("the documents the example is transcribed from", () => {
+  it("README documents the registry in the run config", () => {
+    const blocks = fencedBlocks(readFileSync(README_PATH, "utf8")).filter((block) =>
+      block.includes("createOrchestrationContext(")
+    );
+
+    expect(blocks.length).toBeGreaterThan(0);
+    expect(blocks.some((block) => REGISTRY_IN_RUN_CONFIG.test(block))).toBe(true);
+  });
+
+  it("no README code block passes the context as an input override", () => {
+    // Code only: the surrounding prose deliberately discusses "an input named
+    // `context`" and has to stay legal.
+    const offenders = fencedBlocks(readFileSync(README_PATH, "utf8")).filter((block) =>
+      CONTEXT_AS_INPUT.test(block)
+    );
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("the createOrchestrationContext JSDoc shows the same shape", () => {
+    const source = readFileSync(SOURCE_PATH, "utf8");
+    const jsdoc = source.match(
+      /\/\*\*([\s\S]*?)\*\/\s*export function createOrchestrationContext\b/
+    );
+
+    expect(jsdoc).not.toBeNull();
+
+    const comment = jsdoc![1]!.replace(/^\s*\*/gm, "");
+    expect(REGISTRY_IN_RUN_CONFIG.test(comment)).toBe(true);
+    expect(CONTEXT_AS_INPUT.test(comment)).toBe(false);
   });
 });
