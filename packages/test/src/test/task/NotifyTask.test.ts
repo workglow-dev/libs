@@ -638,6 +638,82 @@ describe("Webhook notification tasks", () => {
       expect(body).toContain("<@U1>");
     });
 
+    // `blocks` is as reachable from a pipe or a model as `text` is, so leaving
+    // it unescaped left the whole neutering one field away from being bypassed.
+    test("Slack neutralizes broadcasts inside blocks", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "<!channel> down" } }],
+      });
+
+      const body = lastCall().options.body as string;
+      expect(body).toContain("&lt;!channel>");
+      expect(body).not.toContain("<!channel>");
+    });
+
+    test("Slack neutralizes broadcasts nested in fields and elements", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          { type: "section", fields: [{ type: "mrkdwn", text: "<!here> a" }] },
+          { type: "context", elements: [{ type: "mrkdwn", text: "<!subteam^S1> b" }] },
+        ],
+      });
+
+      const body = lastCall().options.body as string;
+      for (const form of ["<!here>", "<!subteam^S1>"]) {
+        expect(body).not.toContain(form);
+      }
+      expect(body).toContain("&lt;!here>");
+      expect(body).toContain("&lt;!subteam^S1>");
+    });
+
+    test("Slack leaves links and single-user mentions inside blocks intact", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "<https://x/|y> <@U1>" } }],
+      });
+
+      const body = lastCall().options.body as string;
+      expect(body).toContain("<https://x/|y>");
+      expect(body).toContain("<@U1>");
+    });
+
+    test("allow_mentions leaves blocks verbatim", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "<!channel> down" } }],
+        allow_mentions: true,
+      });
+
+      const body = lastCall().options.body as string;
+      expect(body).toContain("<!channel>");
+      expect(body).not.toContain("&lt;!");
+    });
+
+    // A cycle is infinitely deep, so the depth cap terminates it. The failure
+    // must be permanent (no retry can fix a caller-authored cycle) and must
+    // happen before anything is sent.
+    test("a self-referential blocks structure is a permanent configuration error", async () => {
+      const block: Record<string, unknown> = { type: "section" };
+      block.self = block;
+
+      const error = await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [block] as never,
+      }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error).not.toBeInstanceOf(RetryableJobError);
+      expect((error as PermanentJobError).code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
     test("Slack honors allow_mentions", async () => {
       await slackNotify({
         url: SLACK_URL,
