@@ -25,8 +25,7 @@
     "build-browser": "bun build --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/browser.ts",
     "build-node": "bun build --target=node --sourcemap=external --packages=external --outdir ./dist ./src/node.ts",
     "build-types": "rm -f tsconfig.tsbuildinfo && tsgo",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "test": "bun test"
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "peerDependencies": {
     "@workglow/ai": "workspace:*",
