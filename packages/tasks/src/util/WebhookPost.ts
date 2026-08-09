@@ -38,6 +38,9 @@ import { classifyUrl, urlResourcePattern } from "./UrlClassifier";
 /** Placeholder used when a webhook URL cannot even be parsed for its origin. */
 const REDACTED_URL = "<redacted-webhook-url>";
 
+/** Placeholder substituted for a token-bearing fragment of a webhook URL. */
+const REDACTED_SEGMENT = "<redacted>";
+
 /** Maximum characters of a success body surfaced as task output. */
 const MAX_RESPONSE_BODY_CHARS = 1024;
 
@@ -61,12 +64,62 @@ export function redactWebhookUrl(url: string): string {
   }
 }
 
-/** Replaces every literal occurrence of `url` in `text` with its origin. */
+/**
+ * Strips every trace of `url` out of `text`.
+ *
+ * Matching the literal full URL alone is not enough: an endpoint routinely
+ * echoes only PART of it. Express answers an unknown route with
+ * `Cannot POST /services/T0.../SECRETTOKEN` — the path, never the origin — and
+ * a validation error may quote the token on its own. So after the full URL
+ * collapses to its origin (which stays the useful diagnostic), the path, the
+ * query and each individual path segment are replaced too.
+ *
+ * Candidates are applied LONGEST FIRST: replacing a short segment first would
+ * break a longer candidate that contains it, leaving the rest of that longer
+ * fragment behind.
+ *
+ * A candidate is admitted only when it is long enough to plausibly be a token
+ * AND is not an all-lowercase word. Both clauses are load-bearing: `services`
+ * and `webhooks` are real segments of the Slack and Discord webhook paths, and
+ * redacting them would corrupt ordinary prose like `invalid webhooks payload`
+ * for no security gain.
+ */
 export function redactWebhookUrlIn(text: string, url: string): string {
   if (url.length === 0) {
     return text;
   }
-  return text.split(url).join(redactWebhookUrl(url));
+  let redacted = text.split(url).join(redactWebhookUrl(url));
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return redacted;
+  }
+
+  const candidates = new Set<string>();
+  const admit = (candidate: string): void => {
+    if (
+      candidate.length >= SECURITY_LIMITS.webhookMinRedactableSegmentChars &&
+      !/^[a-z]+$/.test(candidate)
+    ) {
+      candidates.add(candidate);
+    }
+  };
+  admit(`${parsed.pathname}${parsed.search}`);
+  admit(parsed.search);
+  for (const segment of parsed.pathname.split("/")) {
+    admit(segment);
+    const encoded = encodeURIComponent(segment);
+    if (encoded !== segment) {
+      admit(encoded);
+    }
+  }
+
+  for (const candidate of [...candidates].sort((a, b) => b.length - a.length)) {
+    redacted = redacted.split(candidate).join(REDACTED_SEGMENT);
+  }
+  return redacted;
 }
 
 /**

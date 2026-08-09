@@ -398,6 +398,67 @@ describe("Webhook notification tasks", () => {
       expect(error.cause).toBeUndefined();
     });
 
+    // An endpoint routinely echoes only PART of the URL, which the literal
+    // full-URL match never sees. Express answers an unknown route with the
+    // PATH and no origin, and Slack sets `includeBodyInError`, so this 404
+    // body reaches the error message verbatim.
+    test("a failure body echoing only the URL path is redacted", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(
+          new Response("Cannot POST /services/T00000000/B00000000/SECRETTOKEN", {
+            status: 404,
+            statusText: "Not Found",
+          })
+        )
+      );
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "hi" }).catch(
+        (e: unknown) => e
+      )) as PermanentJobError;
+
+      expect(error.message).not.toContain("SECRETTOKEN");
+      expect(error.message).not.toContain("/services/");
+      expect(String(error.stack)).not.toContain("SECRETTOKEN");
+      expect(String(error.stack)).not.toContain("/services/");
+      expect(formatErrorChainForDiagnostics(error)).not.toContain("SECRETTOKEN");
+      expect(formatErrorChainForDiagnostics(error)).not.toContain("/services/");
+    });
+
+    test("a failure body quoting the token alone is redacted", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(
+          new Response("token SECRETTOKEN rejected", { status: 403, statusText: "Forbidden" })
+        )
+      );
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "hi" }).catch(
+        (e: unknown) => e
+      )) as PermanentJobError;
+
+      expect(error.message).not.toContain("SECRETTOKEN");
+      // The surrounding diagnostic survives; only the token is removed.
+      expect(error.message).toContain("rejected");
+    });
+
+    // The guard against over-redaction. `webhooks` is a real path segment of
+    // every Discord webhook URL and is exactly 8 characters, so a length floor
+    // alone would delete the word from ordinary prose. All-lowercase-alphabetic
+    // runs are words, not tokens.
+    test("an ordinary word that happens to be a path segment survives", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(
+          new Response("invalid webhooks payload", { status: 400, statusText: "Bad Request" })
+        )
+      );
+
+      const error = (await discordNotify({ url: DISCORD_URL, content: "hi" }).catch(
+        (e: unknown) => e
+      )) as PermanentJobError;
+
+      expect(error.message).toContain("invalid webhooks payload");
+      expect(error.message).not.toContain("SECRETTOKEN");
+    });
+
     test("the webhook URL is absent from every output schema", () => {
       for (const taskClass of [WebhookNotifyTask, SlackNotifyTask, DiscordNotifyTask]) {
         const schema = taskClass.outputSchema();

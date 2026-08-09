@@ -79,6 +79,19 @@ export const SECURITY_LIMITS = {
    * unbounded body would OOM the runner.
    */
   webhookMaxResponseBodyBytes: 1024 * 1024,
+  /**
+   * Shortest fragment of a webhook URL that may be redacted out of an echoed
+   * response body. Below this length a path segment is far likelier to be an
+   * ordinary word than a token, and replacing it would mangle the diagnostic
+   * the redaction exists to preserve.
+   */
+  webhookMinRedactableSegmentChars: 8,
+  /**
+   * Max nesting depth walked when escaping Slack Block Kit structures. Real
+   * Block Kit nests about six levels; exceeding this means a hostile payload
+   * or a cycle, both of which are rejected rather than followed.
+   */
+  slackBlocksMaxDepth: 32,
   /** Max accepted length (characters) of an encoded tabular storage pagination cursor. */
   tabularMaxCursorLength: 8 * 1024,
   /** Lines matched per interruptible regex batch (ReDoS defence, see below). */
