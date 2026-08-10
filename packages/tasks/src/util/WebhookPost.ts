@@ -22,7 +22,8 @@
 
 import { AbortSignalJobError } from "@workglow/job-queue";
 import type { TaskEntitlements } from "@workglow/task-graph";
-import { Entitlements, mergeEntitlements } from "@workglow/task-graph";
+import { ENTITLEMENT_ENFORCER, Entitlements, mergeEntitlements } from "@workglow/task-graph";
+import type { ServiceRegistry } from "@workglow/util";
 import { SECURITY_LIMITS } from "@workglow/util";
 import type { FetchUrlJobErrorInstance } from "../task/FetchUrlJobError";
 import {
@@ -236,11 +237,19 @@ export interface WebhookPostRequest {
   /**
    * The caller declared a private/internal destination is intended.
    *
-   * Without it a private destination is refused outright, so the
-   * `allowPrivate` flag handed to {@link safeFetch} is never self-derived from
-   * whatever the URL happened to resolve to.
+   * A declaration, not the authorization: it is what keeps the `allowPrivate`
+   * flag handed to {@link safeFetch} from being self-derived from whatever the
+   * URL happened to resolve to. The `network:private` grant is what authorizes
+   * the post, and it is re-checked against the resolved URL via
+   * {@link assertPrivateDestinationGranted}.
    */
   readonly allowPrivateDestination: boolean;
+  /**
+   * Registry the task is executing under. When it carries an
+   * {@link ENTITLEMENT_ENFORCER}, a private destination must hold a
+   * `network:private` grant for the URL actually resolved.
+   */
+  readonly registry: ServiceRegistry | undefined;
   /** Human-readable subject used in error messages, e.g. "Slack webhook". */
   readonly label: string;
 }
@@ -420,11 +429,53 @@ async function readBodyText(
 }
 
 /**
+ * Re-checks the `network:private` grant against the URL actually resolved.
+ *
+ * `allow_private_destination` is an input, and a graph root task's inputs are
+ * applied AFTER the runner evaluates entitlements — so the declaration the
+ * enforcer graded need not be the one `execute()` receives, and a
+ * credential-backed URL does not exist yet at that point either. The
+ * declaration is therefore advisory; this is the check that binds.
+ *
+ * No enforcer registered means no policy to satisfy, and the post proceeds.
+ */
+export async function assertPrivateDestinationGranted(
+  registry: ServiceRegistry | undefined,
+  url: string,
+  label: string
+): Promise<void> {
+  if (registry === undefined || !registry.has(ENTITLEMENT_ENFORCER)) {
+    return;
+  }
+  const denied = await registry.get(ENTITLEMENT_ENFORCER).checkAll({
+    entitlements: [
+      {
+        id: Entitlements.NETWORK_PRIVATE,
+        reason: `Posts ${label} to a private/internal destination`,
+        resources: [urlResourcePattern(url)],
+      },
+    ],
+  });
+  if (denied.length > 0) {
+    throw createFetchUrlJobError(
+      FetchUrlErrorCode.PRIVATE_DENIED,
+      `Refusing to post ${label} to a private/internal destination: the 'network:private' ` +
+        `entitlement is not granted for it.`,
+      { url: redactWebhookUrl(url) }
+    );
+  }
+}
+
+/**
  * POSTs `payload` as JSON to a webhook endpoint through {@link safeFetch}.
  *
  * Private/loopback destinations are refused unless the caller declared
  * `allowPrivateDestination`, which is what the `network:private` entitlement is
- * granted against. A permitted private destination additionally overrides
+ * granted against — and, when an enforcer is registered, that grant is
+ * re-checked here against the URL actually resolved
+ * ({@link assertPrivateDestinationGranted}), because the declaration graded at
+ * entitlement-evaluation time need not be the one `execute()` receives. A
+ * permitted private destination additionally overrides
  * `readSuccessBody` and `includeBodyInError` to `false`: those flags
  * are a ceiling set by the calling task, and no reply from an internal host is
  * ever surfaced — otherwise a notification task doubles as an SSRF read
@@ -455,6 +506,9 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
         `Set 'allow_private_destination' and grant the 'network:private' entitlement.`,
       { url: redactWebhookUrl(url) }
     );
+  }
+  if (isPrivate) {
+    await assertPrivateDestinationGranted(request.registry, url, label);
   }
   const timeoutSignal =
     request.timeout !== undefined && request.timeout > 0
@@ -579,6 +633,10 @@ export function webhookBaseEntitlements(reason: string): TaskEntitlements {
  * declaration is scoped to the `url` port when that port is the destination;
  * with a credential key the URL is unknown here, so the grant is unscoped and
  * says why.
+ *
+ * Only an explicit `false` opts out: a root task's run-input is applied after
+ * entitlements are evaluated, so an unset flag is "not yet knowable" and fails
+ * closed.
  */
 export function webhookPrivateEntitlements(
   base: TaskEntitlements,
@@ -600,7 +658,7 @@ export function webhookPrivateEntitlements(
         ],
       })
     : base;
-  if (allowPrivate !== true) {
+  if (allowPrivate === false) {
     return withCredential;
   }
   const scoped = !credentialWins && typeof url === "string" && url.length > 0;

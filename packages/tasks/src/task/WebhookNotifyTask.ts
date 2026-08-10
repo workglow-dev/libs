@@ -156,6 +156,7 @@ export class WebhookNotifyTask<
       headers: input.headers,
       timeout: input.timeout,
       signal: context.signal,
+      registry: context.registry,
       readSuccessBody: !isPrivate,
       includeBodyInError: false,
       retryAfterFromJsonBody: false,

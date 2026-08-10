@@ -172,6 +172,7 @@ export class DiscordNotifyTask<
       headers: undefined,
       timeout: input.timeout,
       signal: context.signal,
+      registry: context.registry,
       readSuccessBody: false,
       includeBodyInError: true,
       retryAfterFromJsonBody: true,

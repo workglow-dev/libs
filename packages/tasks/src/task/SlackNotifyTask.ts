@@ -228,6 +228,7 @@ export class SlackNotifyTask<
       headers: undefined,
       timeout: input.timeout,
       signal: context.signal,
+      registry: context.registry,
       readSuccessBody: false,
       includeBodyInError: true,
       retryAfterFromJsonBody: false,

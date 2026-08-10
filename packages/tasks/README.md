@@ -190,7 +190,7 @@ const workflow = new Workflow()
 
 - Runs inline through the SSRF-aware `safeFetch` wrapper
 - **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
-- **A private/internal destination is refused unless `allow_private_destination` is set** — which also declares the `network:private` entitlement, scoped to `url` when no credential key is configured. Without the flag the post fails with `PRIVATE_DENIED` before any request is made
+- **A private/internal destination is refused unless `allow_private_destination` is set** — which also declares the `network:private` entitlement, scoped to `url` when no credential key is configured. Without the flag the post fails with `PRIVATE_DENIED` before any request is made, and, when an entitlement enforcer is registered, the `network:private` grant is re-checked at execute time against the URL actually resolved — so a run-input or credential-supplied private destination cannot slip past the declaration the enforcer graded
 - A permitted private/internal destination is reachable but its response body is **never echoed** — `response` is always `""`. Notification needs no reply body, and returning one would make this task an SSRF read primitive (e.g. POSTing to a cloud metadata endpoint and reading the answer back into the graph)
 - 429/503 and 5xx raise `RetryableJobError`; retries require a `@workglow/job-queue` consumer, which these inline tasks do not have
 - Response bodies are read as a stream and abandoned past 1MB, so an endpoint answering with an unbounded body cannot exhaust runner memory — on the failure path too
@@ -248,7 +248,7 @@ const workflow = new Workflow().slackNotify({
 
 - Absent optional fields are omitted from the payload rather than sent as `null`
 - **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
-- **A private/internal destination is refused unless `allow_private_destination` is set**, which also declares the `network:private` entitlement
+- **A private/internal destination is refused unless `allow_private_destination` is set**, which also declares the `network:private` entitlement, and, when an entitlement enforcer is registered, the `network:private` grant is re-checked at execute time against the URL actually resolved — so a run-input or credential-supplied private destination cannot slip past the declaration the enforcer graded
 - Slack answers `200` with the body `ok`; failure bodies (`invalid_payload`, `no_service`) are surfaced in the error message — but **only for a public destination**. A private/internal endpoint's reply body is never spliced into the error, which would otherwise make the task an SSRF read primitive; its status is still reported
 - **Channel-wide broadcasts in `text` and `blocks` are neutralized by default.** Slack has no `allowed_mentions`; its documented control is HTML-entity escaping, so the literal `<!` is escaped to `&lt;!`. That defuses `<!channel>`, `<!here>`, `<!everyone>` and `<!subteam^ID>` while leaving `<https://…|label>` links and single-user `<@U123>` mentions intact, and `link_names: false` is sent explicitly. `blocks` is walked to every string leaf, so a broadcast written inside a section, a `fields[]` entry or an `elements[]` entry is defused too. Set `allow_mentions: true` to send both verbatim
 - Requests time out after 30s by default (`timeout`)
@@ -305,7 +305,7 @@ const workflow = new Workflow().discordNotify({
 
 - A successful post answers `204 No Content`, so no response body is read or parsed
 - **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
-- **A private/internal destination is refused unless `allow_private_destination` is set**, which also declares the `network:private` entitlement
+- **A private/internal destination is refused unless `allow_private_destination` is set**, which also declares the `network:private` entitlement, and, when an entitlement enforcer is registered, the `network:private` grant is re-checked at execute time against the URL actually resolved — so a run-input or credential-supplied private destination cannot slip past the declaration the enforcer graded
 - A failure body is surfaced in the error message **only for a public destination**; a private/internal endpoint's reply body is never spliced in, which would otherwise make the task an SSRF read primitive
 - Rate limits arrive as `429` and may carry the delay as `{"retry_after": <seconds>}` in the body instead of a `Retry-After` header; both are parsed onto the raised `RetryableJobError`. Nothing acts on the value — retries require a `@workglow/job-queue` consumer, which these inline tasks do not have
 - **Mass mentions are suppressed by default** — `allowed_mentions: { parse: [] }` is sent, so `@everyone`/`@here`, role and user pings in `content` do nothing even when the content was piped in from a fetch or a model. Set `allow_mentions: true` to let the message ping
