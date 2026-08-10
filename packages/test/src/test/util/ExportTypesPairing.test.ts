@@ -12,12 +12,17 @@ import { describe, expect, it } from "vitest";
 /**
  * Every condition branch in an `exports` map that names an implementation must
  * declare the `types` target belonging to the implementation named *in that same
- * branch*. A branch whose `types` names a different target — or that declares no
- * `types` at all, so resolution falls through to an outer one — hands TypeScript
- * the wrong module: browser consumers of `@workglow/openai/ai` were type-checked
+ * branch*. A branch whose `types` names a different target hands TypeScript the
+ * wrong module: browser consumers of `@workglow/openai/ai` were type-checked
  * against the node build, which exports `_testOnly`,
  * `registerOpenAiImageValidator` and `OpenAI_ModelSearch_Stream` — symbols the
  * browser bundle genuinely does not export.
+ *
+ * A branch that declares no `types` is not typed by an outer one: resolution
+ * stops at the branch that matched, and TypeScript then looks for a declaration
+ * beside the resolved implementation (`.js` -> `.d.ts`). Declaring it explicitly
+ * is what makes the pairing checkable here, and what survives a build that emits
+ * the implementation without an adjacent declaration.
  */
 
 /** Keys whose value is the module a runtime loads, in resolution order. */
@@ -30,10 +35,11 @@ const IMPLEMENTATION_KEYS = ["import", "require", "default"] as const;
 const MODULE_PATH = /\.[cm]?js$/;
 
 /**
- * Branches allowed to pair a `types` target with a differently-named
- * implementation. Each entry must say why the declaration genuinely describes
- * the other file. Empty on purpose: do not add an entry to silence drift — fix
- * the manifest, or emit the missing declaration.
+ * Branches exempt from the pairing rule, by label. An entry silences that
+ * branch's violation whichever kind it is — a `types` naming a different target,
+ * or an implementation with no `types` beside it. Each entry must say why the
+ * declaration genuinely describes the other file. Empty on purpose: do not add
+ * an entry to silence drift — fix the manifest, or emit the missing declaration.
  */
 const ALLOWED_MISMATCHES: ReadonlySet<string> = new Set<string>([]);
 
@@ -52,6 +58,8 @@ interface BranchLocation {
 interface DeclaredBranch extends BranchLocation {
   readonly reason: "mismatch";
   readonly types: string;
+  /** Whether `types` precedes the implementation key in the same object. */
+  readonly typesBeforeImplementation: boolean;
 }
 
 /** A branch naming an implementation with no `types` beside it. */
@@ -72,6 +80,22 @@ function declarationFor(implementation: string): string {
   return implementation.replace(/\.js$/, ".d.ts");
 }
 
+/** Source entry extensions a `dist` target can be built from. */
+const SOURCE_ENTRY_EXTENSIONS = [".ts", ".tsx"] as const;
+
+/** `./dist/<stem>.<ext>` -> `<stem>`, or undefined for a layout this rule cannot describe. */
+function distStem(target: string): string | undefined {
+  return /^\.\/dist\/(.+?)(?:\.d\.ts|\.d\.cts|\.d\.mts|\.js|\.cjs|\.mjs)$/.exec(target)?.[1];
+}
+
+/** Repo-relative source entry candidates for a target declared by `manifest`. */
+function sourceCandidates(manifest: string, target: string): readonly string[] | undefined {
+  const stem = distStem(target);
+  if (stem === undefined) return undefined;
+  const packageDir = dirname(manifest);
+  return SOURCE_ENTRY_EXTENSIONS.map((ext) => `${packageDir}/src/${stem}${ext}`);
+}
+
 function collectBranches(
   manifest: string,
   subpath: string,
@@ -81,7 +105,8 @@ function collectBranches(
 ): void {
   const condition = conditionPath.join(" > ") || "(default)";
   // Shorthand: the condition's value *is* the implementation, so nothing beside
-  // it can declare types and resolution falls through to an outer `types`.
+  // it can declare types; TypeScript falls back to the declaration adjacent to
+  // the resolved file rather than to an outer `types`.
   if (typeof node === "string") {
     if (MODULE_PATH.test(node)) {
       out.push({
@@ -98,10 +123,9 @@ function collectBranches(
   }
   if (typeof node !== "object" || node === null || Array.isArray(node)) return;
   const entry = node as Record<string, unknown>;
-  const implementation = IMPLEMENTATION_KEYS.map((key) => entry[key]).find(
-    (value): value is string => typeof value === "string"
-  );
-  if (implementation !== undefined) {
+  const implementationKey = IMPLEMENTATION_KEYS.find((key) => typeof entry[key] === "string");
+  if (implementationKey !== undefined) {
+    const implementation = entry[implementationKey] as string;
     const location: BranchLocation = {
       manifest,
       subpath,
@@ -110,9 +134,17 @@ function collectBranches(
       expectedTypes: declarationFor(implementation),
     };
     const types = entry.types;
+    const keys = Object.keys(entry);
     out.push(
       typeof types === "string"
-        ? { ...location, types, reason: "mismatch" }
+        ? {
+            ...location,
+            types,
+            reason: "mismatch",
+            // Node stops at the first matching condition, so a `types` declared
+            // after the implementation key is never reached.
+            typesBeforeImplementation: keys.indexOf("types") < keys.indexOf(implementationKey),
+          }
         : { ...location, types: undefined, reason: "missing" }
     );
   }
@@ -214,8 +246,7 @@ interface Manifest {
   readonly exports: Record<string, unknown>;
 }
 
-function manifestsWithExports(): Manifest[] {
-  const root = workspaceRoot();
+function manifestsWithExports(root: WorkspaceRoot): Manifest[] {
   const found: Manifest[] = [];
   for (const relative of workspaceManifests(root)) {
     const pkg = JSON.parse(readFileSync(join(root.dir, relative), "utf8")) as {
@@ -228,7 +259,8 @@ function manifestsWithExports(): Manifest[] {
 }
 
 describe("workspace exports maps", () => {
-  const manifests = manifestsWithExports();
+  const root = workspaceRoot();
+  const manifests = manifestsWithExports(root);
   const branches = manifests.flatMap((manifest) =>
     branchesFor(manifest.relative, manifest.exports)
   );
@@ -243,6 +275,45 @@ describe("workspace exports maps", () => {
       findViolations(manifest.relative, manifest.exports)
     );
     expect(violations).toEqual([]);
+  });
+
+  it("declares only targets a source entry file can emit", () => {
+    // Pairing alone cannot see a self-consistent branch for a build that does not
+    // exist — copying another package's `browser` block declares a `.d.ts`/`.js`
+    // pair naming each other correctly while nothing emits either file. The
+    // source entry beside them is the cheapest evidence that the build produces
+    // the target at all.
+    const unrecognized: string[] = [];
+    const missing: string[] = [];
+    for (const branch of branches) {
+      for (const target of [branch.types, branch.implementation]) {
+        if (target === undefined) continue;
+        const candidates = sourceCandidates(branch.manifest, target);
+        if (candidates === undefined) {
+          unrecognized.push(`${label(branch)}: "${target}" is not ./dist/<stem>.<ext>`);
+          continue;
+        }
+        if (candidates.some((candidate) => existsSync(join(root.dir, candidate)))) continue;
+        missing.push(
+          `${label(branch)}: "${target}" has no source entry (${candidates.join(" or ")})`
+        );
+      }
+    }
+    // A target whose layout the derivation cannot describe is reported, not
+    // skipped: silently skipping it would reopen the hole this closes.
+    expect(unrecognized).toEqual([]);
+    expect(missing).toEqual([]);
+  });
+
+  it("declares `types` before the implementation in the same branch", () => {
+    const late = branches
+      .filter((branch): branch is DeclaredBranch => branch.reason === "mismatch")
+      .filter((branch) => !branch.typesBeforeImplementation)
+      .map(
+        (branch) =>
+          `${label(branch)}: types="${branch.types}" is declared after "${branch.implementation}"`
+      );
+    expect(late).toEqual([]);
   });
 
   it("keeps the allowlist free of entries that no longer mismatch", () => {
@@ -378,5 +449,28 @@ describe("exports map violation detection", () => {
     expect(findViolations("fixture/package.json", { "./package.json": "./package.json" })).toEqual(
       []
     );
+  });
+
+  it("derives a source entry from a dist target", () => {
+    expect(sourceCandidates("providers/openai/package.json", "./dist/ai.browser.d.ts")).toEqual([
+      "providers/openai/src/ai.browser.ts",
+      "providers/openai/src/ai.browser.tsx",
+    ]);
+    // A nested stem keeps its directory, so `./dist/storage/bun.js` is built
+    // from `src/storage/bun.ts`, not from a flattened `src/bun.ts`.
+    expect(sourceCandidates("providers/sqlite/package.json", "./dist/storage/bun.js")).toEqual([
+      "providers/sqlite/src/storage/bun.ts",
+      "providers/sqlite/src/storage/bun.tsx",
+    ]);
+    // The declaration extension is part of the suffix, so `.d.cts` strips whole
+    // rather than leaving a `ai.d` stem.
+    expect(sourceCandidates("p/package.json", "./dist/ai.d.cts")).toEqual([
+      "p/src/ai.ts",
+      "p/src/ai.tsx",
+    ]);
+  });
+
+  it("reports a target outside ./dist as underivable rather than skipping it", () => {
+    expect(sourceCandidates("p/package.json", "./lib/ai.js")).toBeUndefined();
   });
 });
