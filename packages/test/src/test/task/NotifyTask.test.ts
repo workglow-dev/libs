@@ -988,6 +988,66 @@ describe("Webhook notification tasks", () => {
     });
   });
 
+  // `allowPrivate` and `privateResourceScopes` are what the transport itself
+  // enforces against, so the arguments each task hands it are pinned here
+  // rather than being left implied by the outcome assertions above.
+  describe("safeFetch private-destination arguments", () => {
+    const PRIVATE_URL = "http://127.0.0.1:9200/ingest";
+
+    test("a public destination is fetched with allowPrivate false and no scopes", async () => {
+      await webhookNotify({ url: WEBHOOK_URL, payload: {} });
+
+      expect(lastCall().options.allowPrivate).toBe(false);
+      expect(lastCall().options.privateResourceScopes).toBeUndefined();
+    });
+
+    test("a declared private destination is scoped to its own origin", async () => {
+      await webhookNotify({
+        url: PRIVATE_URL,
+        payload: {},
+        allow_private_destination: true,
+      });
+
+      expect(lastCall().options.allowPrivate).toBe(true);
+      expect(lastCall().options.privateResourceScopes).toEqual(["http://127.0.0.1:9200/*"]);
+    });
+
+    // The DNS-rebinding invariant: the flag is a declaration about the
+    // destination, never a licence to widen the transport for a public
+    // hostname. A name that resolves into private space at connect time must
+    // still be refused there.
+    test("a public URL keeps allowPrivate false even when allow_private_destination is set", async () => {
+      await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        allow_private_destination: true,
+      });
+
+      expect(lastCall().options.allowPrivate).toBe(false);
+      expect(lastCall().options.privateResourceScopes).toBeUndefined();
+    });
+
+    test("Slack and Discord share the same transport arguments", async () => {
+      mockFetch.mockImplementation(() => Promise.resolve(new Response(null, { status: 204 })));
+
+      await slackNotify({ url: PRIVATE_URL, text: "hi", allow_private_destination: true });
+      expect(lastCall().options.allowPrivate).toBe(true);
+      expect(lastCall().options.privateResourceScopes).toEqual(["http://127.0.0.1:9200/*"]);
+
+      await discordNotify({ url: PRIVATE_URL, content: "hi", allow_private_destination: true });
+      expect(lastCall().options.allowPrivate).toBe(true);
+      expect(lastCall().options.privateResourceScopes).toEqual(["http://127.0.0.1:9200/*"]);
+
+      await slackNotify({ url: SLACK_URL, text: "hi" });
+      expect(lastCall().options.allowPrivate).toBe(false);
+      expect(lastCall().options.privateResourceScopes).toBeUndefined();
+
+      await discordNotify({ url: DISCORD_URL, content: "hi" });
+      expect(lastCall().options.allowPrivate).toBe(false);
+      expect(lastCall().options.privateResourceScopes).toBeUndefined();
+    });
+  });
+
   describe("credential misconfiguration", () => {
     // Wiring a bearer token into `url_credential_key` is the likely mistake:
     // for these tasks the credential must BE the whole webhook URL.
