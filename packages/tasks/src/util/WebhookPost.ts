@@ -33,6 +33,7 @@ import {
   httpStatusToFetchUrlErrorCode,
   isFetchUrlJobError,
 } from "../task/FetchUrlJobError";
+import { retryDateFromEpochMs, retryDateFromRetryAfterHeader } from "./RetryAfter";
 import { isSafeFetchRedirectError, safeFetch } from "./SafeFetch";
 import { classifyUrl, urlResourcePattern } from "./UrlClassifier";
 
@@ -306,22 +307,19 @@ export interface WebhookPostResult {
  * Derives a retry date from a rate-limited response. The `Retry-After` header
  * is authoritative; Discord instead returns `{"retry_after": <seconds>}` in a
  * JSON body, which is consulted as a secondary source.
+ *
+ * Both sources are remote-controlled, so neither builds its own `Date`:
+ * {@link retryDateFromRetryAfterHeader} / {@link retryDateFromEpochMs} apply
+ * the ceiling that keeps a hostile value from parking the job.
  */
 function retryDateFromResponse(
   response: Response,
   bodyText: string,
   parseJsonBody: boolean
 ): Date | undefined {
-  const header = response.headers.get("Retry-After");
-  if (header) {
-    const seconds = Number(header);
-    if (Number.isFinite(seconds) && seconds > 0) {
-      return new Date(Date.now() + seconds * 1000);
-    }
-    const parsedDate = new Date(header);
-    if (!isNaN(parsedDate.getTime()) && parsedDate > new Date()) {
-      return parsedDate;
-    }
+  const fromHeader = retryDateFromRetryAfterHeader(response.headers.get("Retry-After"));
+  if (fromHeader !== undefined) {
+    return fromHeader;
   }
 
   if (!parseJsonBody || bodyText.length === 0) {
@@ -331,7 +329,7 @@ function retryDateFromResponse(
     const parsed = JSON.parse(bodyText) as { readonly retry_after?: unknown };
     const seconds = Number(parsed?.retry_after);
     if (Number.isFinite(seconds) && seconds > 0) {
-      return new Date(Date.now() + seconds * 1000);
+      return retryDateFromEpochMs(Date.now() + seconds * 1000);
     }
   } catch {
     // A non-JSON failure body simply carries no retry hint.

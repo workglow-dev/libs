@@ -233,6 +233,62 @@ describe("Webhook notification tasks", () => {
       expect(error.retryDate!.getTime()).toBeLessThan(expected + 1000);
     });
 
+    // `Retry-After` is whatever the endpoint says it is. Unclamped, a huge
+    // delay pushes the timestamp past the maximum representable Date, and the
+    // resulting Invalid Date is what the job queue reschedules from: its NaN
+    // delay throws a RangeError out of `toISOString()`, which the worker
+    // swallows, so the job is never rescheduled at all.
+    test("an absurd Retry-After is clamped instead of overflowing the date", async () => {
+      const before = Date.now();
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(
+          new Response("rate_limited", {
+            status: 429,
+            statusText: "Too Many Requests",
+            headers: { "Retry-After": "1e20" },
+          })
+        )
+      );
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "hi" }).catch(
+        (e: unknown) => e
+      )) as RetryableJobError;
+
+      expect(error).toBeInstanceOf(RetryableJobError);
+      expect(error.retryDate).toBeInstanceOf(Date);
+      expect(Number.isFinite(error.retryDate!.getTime())).toBe(true);
+      expect(error.retryDate!.getTime()).toBeGreaterThanOrEqual(before);
+      expect(error.retryDate!.getTime()).toBeLessThanOrEqual(
+        before + SECURITY_LIMITS.httpRetryAfterMaxSeconds * 1000 + 1000
+      );
+    });
+
+    // The HTTP-date form of the header needs the same ceiling for a different
+    // reason: this one parses into a perfectly valid Date, and parks the job
+    // until the year 9999.
+    test("a far-future HTTP-date Retry-After is clamped to the ceiling", async () => {
+      const before = Date.now();
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(
+          new Response("rate_limited", {
+            status: 429,
+            statusText: "Too Many Requests",
+            headers: { "Retry-After": "Fri, 01 Jan 9999 00:00:00 GMT" },
+          })
+        )
+      );
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "hi" }).catch(
+        (e: unknown) => e
+      )) as RetryableJobError;
+
+      expect(error).toBeInstanceOf(RetryableJobError);
+      expect(error.retryDate).toBeInstanceOf(Date);
+      expect(error.retryDate!.getTime()).toBeLessThanOrEqual(
+        before + SECURITY_LIMITS.httpRetryAfterMaxSeconds * 1000 + 1000
+      );
+    });
+
     test("a network rejection becomes a retryable network error", async () => {
       mockFetch.mockImplementation(() =>
         Promise.reject(new TypeError("connect ECONNREFUSED 93.184.216.34:443"))
@@ -329,6 +385,33 @@ describe("Webhook notification tasks", () => {
       const expected = before + 5_000;
       expect(error.retryDate!.getTime()).toBeGreaterThan(expected - 1000);
       expect(error.retryDate!.getTime()).toBeLessThan(expected + 1000);
+    });
+
+    // The JSON body is even more directly attacker-controlled than the header:
+    // it is a number straight out of the response payload.
+    test("an absurd JSON retry_after is clamped instead of overflowing the date", async () => {
+      const before = Date.now();
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ retry_after: 1e20 }), {
+            status: 429,
+            statusText: "Too Many Requests",
+            headers: { "Content-Type": "application/json" },
+          })
+        )
+      );
+
+      const error = (await discordNotify({ url: DISCORD_URL, content: "hi" }).catch(
+        (e: unknown) => e
+      )) as RetryableJobError;
+
+      expect(error).toBeInstanceOf(RetryableJobError);
+      expect(error.retryDate).toBeInstanceOf(Date);
+      expect(Number.isFinite(error.retryDate!.getTime())).toBe(true);
+      expect(error.retryDate!.getTime()).toBeGreaterThanOrEqual(before);
+      expect(error.retryDate!.getTime()).toBeLessThanOrEqual(
+        before + SECURITY_LIMITS.httpRetryAfterMaxSeconds * 1000 + 1000
+      );
     });
   });
 

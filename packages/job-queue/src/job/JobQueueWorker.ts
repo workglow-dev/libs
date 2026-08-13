@@ -1229,7 +1229,17 @@ export class JobQueueWorker<
     try {
       job.status = JobStatus.PENDING;
       const nextAvailableTime = await this.limiter.getNextAvailableTime();
-      job.visibleAt = retryDate instanceof Date ? retryDate : nextAvailableTime;
+      // `instanceof Date` alone is a type check wearing a validity check's
+      // clothes: an Invalid Date passes it, its NaN reaches `delaySeconds`
+      // below, and `claim.retry` throws a RangeError out of `toISOString()` —
+      // caught here, so the job is silently never rescheduled at all. The
+      // date comes from a job, provider or third-party error object, any of
+      // which can construct one. No clamping happens here: whatever parses
+      // the remote hint owns the retry-delay policy; this worker only refuses
+      // the impossible.
+      const usableRetryDate =
+        retryDate instanceof Date && Number.isFinite(retryDate.getTime()) ? retryDate : undefined;
+      job.visibleAt = usableRetryDate ?? nextAvailableTime;
       job.progress = 0;
       job.progressMessage = "";
       job.progressDetails = null;
