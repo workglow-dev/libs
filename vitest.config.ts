@@ -148,12 +148,14 @@ const discovered = discoverTestFiles();
  * package/relative import graph otherwise produces.
  *
  * `dist` turns the rewrite off, so `exports` resolution stands and the built
- * bundles are what gets loaded. The nightly Bun run already exercises them —
- * `bun test` resolves `exports` natively — so nothing in CI sets this; it is
- * the local escape hatch for reproducing a bundle-only failure under vitest.
- * Its plugin is a guard rather than nothing at all, because the tree a
- * developer reaches for it on is usually a `use-source` tree, where `dist`
- * re-exports `src` and the target would silently measure nothing.
+ * bundles are what gets loaded. The blocking `test-vitest-dist` CI job sets it:
+ * every other vitest job resolves to `src`, and the nightly Bun run that does
+ * load the bundles never blocks a merge, so without that job a `bun build`
+ * entry which silently dropped a re-export reaches main. It is also the local
+ * escape hatch for reproducing a bundle-only failure under vitest. Its plugin
+ * is a guard rather than nothing at all, because the tree a developer reaches
+ * for it on is usually a `use-source` tree, where `dist` re-exports `src` and
+ * the target would silently measure nothing.
  */
 const target = resolveTestTarget(process.env.WORKGLOW_TEST_TARGET);
 

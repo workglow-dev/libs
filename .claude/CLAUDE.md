@@ -613,6 +613,14 @@ download models or call live APIs); `WORKGLOW_TEST_TARGET=dist` turns the rewrit
 exercise the bundles instead, and refuses coverage there. The include/exclude globs are
 repo-root-relative, so coverage and `--project` cannot be combined.
 
+The rewrite is attached to every project unconditionally, so with the default in force NO
+vitest job resolves a `@workglow/*` specifier through `exports` — and the blocking workflow
+runs no `bun test` job at all. The nightly Bun parity run does resolve `exports` natively,
+but it is informational, never blocks a merge, runs on a cron and excludes six sections. So
+the `test-vitest-dist` job in `.github/workflows/test.yml` is what keeps bundle integrity
+blocking: it reuses the `build-output` artifact and runs the unit tier under
+`WORKGLOW_TEST_TARGET=dist`.
+
 ## Developing without building
 
 `bun run use-source` makes every package resolve to its source. It does **not** touch
