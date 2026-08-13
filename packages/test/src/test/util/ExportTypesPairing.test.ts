@@ -218,8 +218,129 @@ function findViolations(manifest: string, exportsMap: Record<string, unknown>): 
     .map(violationMessage);
 }
 
+/**
+ * Conditions a plain `import` under Node matches, in the order Node tries
+ * them. `browser`, `bun` and `react-native` are deliberately absent: the point
+ * is to find the target a NODE consumer lands on, which is what a browser split
+ * has to differ from.
+ */
+const NODE_IMPORT_CONDITIONS: ReadonlySet<string> = new Set(["node", "import", "default"]);
+
+/**
+ * The implementation a plain Node `import` of one subpath resolves to, or
+ * `undefined` when nothing in the branch resolves under Node's conditions.
+ * `types` is skipped because Node does not know that condition — only
+ * TypeScript does.
+ */
+function nodeImportTarget(node: unknown): string | undefined {
+  if (typeof node === "string") return MODULE_PATH.test(node) ? node : undefined;
+  if (typeof node !== "object" || node === null || Array.isArray(node)) return undefined;
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (key === "types" || !NODE_IMPORT_CONDITIONS.has(key)) continue;
+    const resolved = nodeImportTarget(value);
+    if (resolved !== undefined) return resolved;
+  }
+  return undefined;
+}
+
+/** Every implementation string reachable inside one condition branch. */
+function implementationsIn(node: unknown, out: string[]): void {
+  if (typeof node === "string") {
+    if (MODULE_PATH.test(node)) out.push(node);
+    return;
+  }
+  if (typeof node !== "object" || node === null || Array.isArray(node)) return;
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (key === "types") continue;
+    implementationsIn(value, out);
+  }
+}
+
+/**
+ * Subpaths that have a browser source entry beside them but do not route
+ * browser consumers to it.
+ *
+ * Every other check in this file is internally self-consistent — it compares a
+ * branch against itself — so a `browser` block that is a byte-for-byte copy of
+ * the default branch passes all six while sending browser consumers to the NODE
+ * bundle. That shape exists in the repo today (`providers/chrome-ai`,
+ * `providers/tf-mediapipe`), where it is inert because neither package HAS a
+ * browser source entry: the two bundles are legitimately the same file. The
+ * source entry is what turns the duplicate into a bug, so it is what this rule
+ * keys on — and why the probe is injected rather than performed here, so
+ * fixtures can drive both sides of it.
+ */
+function browserSplitViolations(
+  manifest: string,
+  exportsMap: Record<string, unknown>,
+  hasSourceEntry: (repoRelativePath: string) => boolean
+): string[] {
+  const out: string[] = [];
+  const packageDir = dirname(manifest);
+  for (const [subpath, value] of Object.entries(exportsMap)) {
+    const nodeTarget = nodeImportTarget(value);
+    if (nodeTarget === undefined) continue;
+    const stem = distStem(nodeTarget);
+    if (stem === undefined) continue;
+    const browserEntry = SOURCE_ENTRY_EXTENSIONS.map(
+      (ext) => `${packageDir}/src/${stem}.browser${ext}`
+    );
+    // No browser source entry: the packages under `packages/*` land here (stem
+    // `node`, no `src/node.browser.ts`), as do the byte-duplicate provider
+    // blocks. Nothing to split, so nothing to say.
+    if (!browserEntry.some((candidate) => hasSourceEntry(candidate))) continue;
+
+    const expected = `./dist/${stem}.browser.js`;
+    const at = `${manifest} exports["${subpath}"]`;
+    const branch = (value as Record<string, unknown>)?.browser;
+    if (branch === undefined) {
+      out.push(
+        `${at}: ${browserEntry[0]} exists but no "browser" condition is declared, so browser ` +
+          `consumers resolve the node bundle "${nodeTarget}" (expected "${expected}")`
+      );
+      continue;
+    }
+    const implementations: string[] = [];
+    implementationsIn(branch, implementations);
+    for (const implementation of implementations) {
+      if (implementation === expected) continue;
+      out.push(
+        `${at} [browser]: implementation "${implementation}" is not the browser bundle, but ` +
+          `${browserEntry[0]} exists (expected "${expected}")`
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether a value is selected unconditionally, so a runtime can never fall past
+ * it to a later sibling. A string target always is. An object is only when one
+ * of its own implementation keys resolves — a nested object holding nothing but
+ * further conditions (`{ browser: … }`) leaves a runtime free to fall through.
+ */
+function resolvesUnconditionally(value: unknown): boolean {
+  if (typeof value === "string") return true;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  return IMPLEMENTATION_KEYS.some((key) => key in entry && resolvesUnconditionally(entry[key]));
+}
+
 function isImplementationString(entry: Record<string, unknown>, key: string): boolean {
   return (IMPLEMENTATION_KEYS as readonly string[]).includes(key) && typeof entry[key] === "string";
+}
+
+/**
+ * Whether this key shadows the siblings declared after it. String-valued
+ * implementation keys always did; an implementation key holding an OBJECT does
+ * too whenever that object resolves unconditionally, which a string-only test
+ * missed — `{ "import": { default: … }, "browser": … }` reads as two conditions
+ * and behaves as one dead branch.
+ */
+function isShadowingImplementation(entry: Record<string, unknown>, key: string): boolean {
+  return (
+    (IMPLEMENTATION_KEYS as readonly string[]).includes(key) && resolvesUnconditionally(entry[key])
+  );
 }
 
 /**
@@ -249,7 +370,7 @@ function orderViolations(manifest: string, exportsMap: Record<string, unknown>):
     const entry = node as Record<string, unknown>;
     const keys = Object.keys(entry);
     const typesIndex = keys.indexOf("types");
-    const implementationIndex = keys.findIndex((key) => isImplementationString(entry, key));
+    const implementationIndex = keys.findIndex((key) => isShadowingImplementation(entry, key));
     const where = conditionPath.join(" > ") || "(default)";
     const at = `${manifest} exports["${subpath}"] [${where}]`;
 
@@ -397,6 +518,15 @@ describe("workspace exports maps", () => {
           `${label(branch)}: types="${branch.types}" is declared after "${branch.implementation}"`
       );
     expect(late).toEqual([]);
+  });
+
+  it("routes browser consumers to the browser bundle wherever one is built", () => {
+    const split = manifests.flatMap((manifest) =>
+      browserSplitViolations(manifest.relative, manifest.exports, (candidate) =>
+        existsSync(join(root.dir, candidate))
+      )
+    );
+    expect(split).toEqual([]);
   });
 
   it("declares every condition before the siblings that would shadow it", () => {
@@ -638,6 +768,134 @@ describe("exports map violation detection", () => {
             browser: { types: "./dist/browser.d.ts", import: "./dist/browser.js" },
             types: "./dist/node.d.ts",
             import: "./dist/node.js",
+          },
+        })
+      ).toEqual([]);
+    });
+  });
+
+  /**
+   * The browser/node split. The probe is injected, so each fixture states both
+   * the manifest shape AND whether the browser source entry exists — the pair
+   * this rule is a function of.
+   */
+  describe("browser split", () => {
+    const always = (): boolean => true;
+    const never = (): boolean => false;
+
+    /** `providers/chrome-ai` verbatim: `browser` duplicates the default branch. */
+    const duplicatedBrowserBlock = {
+      "./ai": {
+        browser: { types: "./dist/ai.d.ts", import: "./dist/ai.js" },
+        types: "./dist/ai.d.ts",
+        import: "./dist/ai.js",
+      },
+    };
+
+    it("reports a browser condition that names the node bundle", () => {
+      // The go-red proof: every other check in this file passes this manifest.
+      expect(findViolations("providers/chrome-ai/package.json", duplicatedBrowserBlock)).toEqual(
+        []
+      );
+      expect(orderViolations("providers/chrome-ai/package.json", duplicatedBrowserBlock)).toEqual(
+        []
+      );
+
+      expect(
+        browserSplitViolations("providers/chrome-ai/package.json", duplicatedBrowserBlock, always)
+      ).toEqual([
+        'providers/chrome-ai/package.json exports["./ai"] [browser]: implementation ' +
+          '"./dist/ai.js" is not the browser bundle, but providers/chrome-ai/src/ai.browser.ts ' +
+          'exists (expected "./dist/ai.browser.js")',
+      ]);
+    });
+
+    it("says nothing about that same shape while no browser source entry exists", () => {
+      // Today's tree. chrome-ai and tf-mediapipe are browser-only packages with
+      // one entry each, so the duplicate is honest and must not be repointed at
+      // a bundle nothing builds.
+      expect(
+        browserSplitViolations("providers/chrome-ai/package.json", duplicatedBrowserBlock, never)
+      ).toEqual([]);
+    });
+
+    it("accepts a provider that splits its browser entry properly", () => {
+      expect(
+        browserSplitViolations(
+          "providers/deepseek/package.json",
+          {
+            "./ai": {
+              browser: { types: "./dist/ai.browser.d.ts", import: "./dist/ai.browser.js" },
+              types: "./dist/ai.d.ts",
+              import: "./dist/ai.js",
+            },
+          },
+          always
+        )
+      ).toEqual([]);
+    });
+
+    it("reports a built browser entry that no condition routes to", () => {
+      expect(
+        browserSplitViolations(
+          "providers/deepseek/package.json",
+          { "./ai": { types: "./dist/ai.d.ts", import: "./dist/ai.js" } },
+          always
+        )
+      ).toEqual([
+        'providers/deepseek/package.json exports["./ai"]: providers/deepseek/src/ai.browser.ts ' +
+          'exists but no "browser" condition is declared, so browser consumers resolve the node ' +
+          'bundle "./dist/ai.js" (expected "./dist/ai.browser.js")',
+      ]);
+    });
+
+    it("leaves the packages/* browser/node layout alone", () => {
+      // Stem `node`, so the probe asks for `src/node.browser.ts` and finds
+      // nothing — the split here is expressed as two peer entries, not a
+      // `.browser` suffix, and must not be reported as missing one.
+      expect(
+        browserSplitViolations(
+          "packages/storage/package.json",
+          {
+            ".": {
+              browser: { types: "./dist/browser.d.ts", import: "./dist/browser.js" },
+              types: "./dist/node.d.ts",
+              import: "./dist/node.js",
+            },
+          },
+          never
+        )
+      ).toEqual([]);
+    });
+  });
+
+  /**
+   * A nested implementation object shadows exactly like a string one when it
+   * always resolves, and not at all when it does not.
+   */
+  describe("object-valued implementation keys as shadowers", () => {
+    it("reports a condition hidden behind a nested `import` that always resolves", () => {
+      expect(
+        orderViolations("fixture/package.json", {
+          ".": {
+            import: { types: "./dist/node.d.ts", default: "./dist/node.js" },
+            browser: { types: "./dist/browser.d.ts", import: "./dist/browser.js" },
+          },
+        })
+      ).toEqual([
+        'fixture/package.json exports["."] [(default)]: condition "browser" is declared after ' +
+          '"import", so resolution stops there and "browser" is never reached',
+      ]);
+    });
+
+    it("does not treat a nested object with no unconditional target as a shadower", () => {
+      // `{ import: { node: … } }` resolves to nothing off Node, so a runtime
+      // falls through to `browser` exactly as written.
+      expect(
+        orderViolations("fixture/package.json", {
+          ".": {
+            import: { node: "./dist/node.js" },
+            browser: { types: "./dist/browser.d.ts", import: "./dist/browser.js" },
           },
         })
       ).toEqual([]);
