@@ -11,12 +11,18 @@ import { ROOT } from "./lib/testDiscovery";
 /**
  * Runs the test runner in dry-run mode, which prints the command it would have
  * spawned as a JSON array instead of executing it.
+ *
+ * `target` is always passed explicitly rather than left to the ambient
+ * environment. The `test-vitest-dist` CI job exports `WORKGLOW_TEST_TARGET` for
+ * its whole step, so an inherited value silently rewrites the source-target
+ * case into a second copy of the dist case — which is exactly how this file
+ * first failed, in the very job it exists to support.
  */
-function dryRunCommand(env: Readonly<Record<string, string>>): string {
+function dryRunCommand(target: "source" | "dist"): string {
   const stdout = execFileSync("bun", ["scripts/test.ts", "unit", "vitest", "--dry-run"], {
     cwd: ROOT,
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...process.env, WORKGLOW_COVERAGE: "1", WORKGLOW_TEST_TARGET: target },
   });
   const line = stdout
     .split("\n")
@@ -31,7 +37,7 @@ describe("scripts/test.ts coverage flag", () => {
   // name — `WORKGLOW_COVERAGE`, not `CI` — so without this the second case
   // would pass on a run that was never going to collect coverage anyway.
   it("asks for coverage when coverage was asked for by name", () => {
-    expect(dryRunCommand({ WORKGLOW_COVERAGE: "1" })).toContain('"--coverage"');
+    expect(dryRunCommand("source")).toContain('"--coverage"');
   });
 
   /**
@@ -44,8 +50,6 @@ describe("scripts/test.ts coverage flag", () => {
    * `test:vitest:unit` unchanged rather than needing its own invocation.
    */
   it("does not ask for coverage when the run targets the built bundles", () => {
-    expect(
-      dryRunCommand({ WORKGLOW_COVERAGE: "1", WORKGLOW_TEST_TARGET: "dist" })
-    ).not.toContain('"--coverage"');
+    expect(dryRunCommand("dist")).not.toContain('"--coverage"');
   });
 });
