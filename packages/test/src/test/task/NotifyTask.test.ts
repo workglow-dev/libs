@@ -471,8 +471,9 @@ describe("Webhook notification tasks", () => {
 
     // The guard against over-redaction. `webhooks` is a real path segment of
     // every Discord webhook URL and is exactly 8 characters, so a length floor
-    // alone would delete the word from ordinary prose. All-lowercase-alphabetic
-    // runs are words, not tokens.
+    // alone would delete the word from ordinary prose. It is exempt because it
+    // is a named ROUTING segment of a supported provider, not because it is
+    // lowercase — this pins the replacement for the deleted lowercase rule.
     test("an ordinary word that happens to be a path segment survives", async () => {
       mockFetch.mockImplementation(() =>
         Promise.resolve(
@@ -486,6 +487,86 @@ describe("Webhook notification tasks", () => {
 
       expect(error.message).toContain("invalid webhooks payload");
       expect(error.message).not.toContain("SECRETTOKEN");
+    });
+
+    // A token in the query string is a real deployment shape — plenty of
+    // endpoints authenticate with `?token=…` rather than a path segment — and
+    // nothing admitted a query VALUE as a redaction candidate. The whole
+    // `?token=…` pair was a candidate, but an endpoint echoes the value alone,
+    // so the pair never matched and the secret went out verbatim.
+    test("a token carried in the query string is redacted from an echoed body", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(
+          new Response("bad token SUPERSECRET1", { status: 403, statusText: "Forbidden" })
+        )
+      );
+
+      const error = (await slackNotify({
+        url: "https://hooks.example.com/notify?token=SUPERSECRET1",
+        text: "hi",
+      }).catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error.message).not.toContain("SUPERSECRET1");
+      expect(String(error.stack)).not.toContain("SUPERSECRET1");
+      // The surrounding diagnostic survives; only the token is removed.
+      expect(error.message).toContain("bad token");
+    });
+
+    // An all-lowercase path segment was exempted outright, on the theory that
+    // such a run is a word rather than a token. A lowercase token is still a
+    // token, and the endpoint echoing it does not care about its character
+    // class.
+    test("an all-lowercase token in the path is redacted from an echoed body", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(
+          new Response("rejected: supersecrettoken", { status: 403, statusText: "Forbidden" })
+        )
+      );
+
+      const error = (await slackNotify({
+        url: "https://hooks.example.com/hooks/supersecrettoken",
+        text: "hi",
+      }).catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error.message).not.toContain("supersecrettoken");
+      expect(String(error.stack)).not.toContain("supersecrettoken");
+      expect(error.message).toContain("rejected");
+    });
+
+    // The stated cost of dropping the lowercase exemption, pinned rather than
+    // discovered later: a long lowercase word in a generic webhook's path is
+    // now redacted out of echoed diagnostics, because nothing distinguishes it
+    // from a lowercase token.
+    test("a long lowercase path word in a generic webhook is redacted, the accepted cost", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(
+          new Response("unknown notifications route", { status: 404, statusText: "Not Found" })
+        )
+      );
+
+      const error = (await slackNotify({
+        url: "https://hooks.example.com/notifications/deploy",
+        text: "hi",
+      }).catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error.message).not.toContain("notifications");
+      expect(error.message).toContain("unknown");
+    });
+
+    // `statusText` is caller-controlled text just like the body, and it was
+    // interpolated into the message and stored as `httpStatusText` with no
+    // redaction pass over it at all.
+    test("a reason phrase echoing the token is redacted", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(new Response("nope", { status: 403, statusText: "token SECRETTOKEN bad" }))
+      );
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "hi" }).catch(
+        (e: unknown) => e
+      )) as PermanentJobError & { httpStatusText?: string };
+
+      expect(error.message).not.toContain("SECRETTOKEN");
+      expect(String(error.httpStatusText)).not.toContain("SECRETTOKEN");
     });
 
     test("the webhook URL is absent from every output schema", () => {
@@ -1345,6 +1426,33 @@ describe("Webhook notification tasks", () => {
       // The status still reports; only the body is withheld.
       expect(error.message).toContain("400");
       expect(error.httpStatus).toBe(400);
+    });
+
+    // The body was withheld for a private destination but the reason phrase was
+    // not, and a server is free to put anything in it. That left the SSRF read
+    // open through a narrower channel: the internal service names its own index
+    // in the phrase, and it reached both the message and `httpStatusText`.
+    test("Slack does not echo a private endpoint's reason phrase", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(
+          new Response(ES_BODY, { status: 400, statusText: "index=cluster-secrets shard=3" })
+        )
+      );
+
+      const error = (await slackNotify({
+        url: PRIVATE_URL,
+        text: "x",
+        allow_private_destination: true,
+      }).catch((e: unknown) => e)) as PermanentJobError & {
+        httpStatus?: number;
+        httpStatusText?: string;
+      };
+
+      expect(error.message).not.toContain("cluster-secrets");
+      // The status still reports; only the caller-controlled text is withheld.
+      expect(error.message).toContain("400");
+      expect(error.httpStatus).toBe(400);
+      expect(error.httpStatusText).toBeUndefined();
     });
 
     test("Discord does not echo a private endpoint's failure body", async () => {

@@ -66,6 +66,14 @@ export function redactWebhookUrl(url: string): string {
 }
 
 /**
+ * Routing segments of the supported providers' webhook paths. Redacting these
+ * would mangle prose like `invalid webhooks payload` for no gain. Everything
+ * else long enough to be a token is redacted even when all-lowercase — a
+ * lowercase secret is still a secret.
+ */
+const STRUCTURAL_PATH_SEGMENTS: ReadonlySet<string> = new Set(["services", "webhooks"]);
+
+/**
  * Strips every trace of `url` out of `text`.
  *
  * Matching the literal full URL alone is not enough: an endpoint routinely
@@ -73,17 +81,32 @@ export function redactWebhookUrl(url: string): string {
  * `Cannot POST /services/T0.../SECRETTOKEN` — the path, never the origin — and
  * a validation error may quote the token on its own. So after the full URL
  * collapses to its origin (which stays the useful diagnostic), the path, the
- * query and each individual path segment are replaced too.
+ * query, each individual path segment AND each query VALUE are replaced too.
+ *
+ * Query values are a real carrier here, not a hypothetical one: plenty of
+ * webhook endpoints take their token as `?token=…` rather than as a path
+ * segment, and an echoing endpoint quotes back the value on its own.
  *
  * Candidates are applied LONGEST FIRST: replacing a short segment first would
  * break a longer candidate that contains it, leaving the rest of that longer
  * fragment behind.
  *
- * A candidate is admitted only when it is long enough to plausibly be a token
- * AND is not an all-lowercase word. Both clauses are load-bearing: `services`
- * and `webhooks` are real segments of the Slack and Discord webhook paths, and
- * redacting them would corrupt ordinary prose like `invalid webhooks payload`
- * for no security gain.
+ * Admission is by LENGTH only. A candidate shorter than
+ * `SECURITY_LIMITS.webhookMinRedactableSegmentChars` is far likelier to be an
+ * ordinary word than a token, and replacing it would mangle the diagnostic this
+ * redaction exists to preserve. That floor applies to query values too, so a
+ * short `?t=abc` still leaks — the same policy as segments, stated rather than
+ * silently special-cased.
+ *
+ * There is deliberately no "all-lowercase words are safe" exemption: a
+ * lowercase token is still a token, and the endpoint that echoes it does not
+ * care about its character class. The two lowercase strings actually worth
+ * keeping are the providers' own routing segments, which are named in
+ * {@link STRUCTURAL_PATH_SEGMENTS} instead.
+ *
+ * Cost, accepted: a generic webhook whose path carries a long lowercase WORD
+ * (`/notifications/deploy`) now has that word redacted out of echoed
+ * diagnostics.
  */
 export function redactWebhookUrlIn(text: string, url: string): string {
   if (url.length === 0) {
@@ -100,20 +123,40 @@ export function redactWebhookUrlIn(text: string, url: string): string {
 
   const candidates = new Set<string>();
   const admit = (candidate: string): void => {
-    if (
-      candidate.length >= SECURITY_LIMITS.webhookMinRedactableSegmentChars &&
-      !/^[a-z]+$/.test(candidate)
-    ) {
+    if (candidate.length >= SECURITY_LIMITS.webhookMinRedactableSegmentChars) {
       candidates.add(candidate);
     }
   };
+  const admitVariants = (candidate: string): void => {
+    admit(candidate);
+    const encoded = encodeURIComponent(candidate);
+    if (encoded !== candidate) {
+      admit(encoded);
+    }
+  };
+
   admit(`${parsed.pathname}${parsed.search}`);
   admit(parsed.search);
   for (const segment of parsed.pathname.split("/")) {
-    admit(segment);
-    const encoded = encodeURIComponent(segment);
-    if (encoded !== segment) {
-      admit(encoded);
+    if (STRUCTURAL_PATH_SEGMENTS.has(segment)) {
+      continue;
+    }
+    admitVariants(segment);
+  }
+  // Split the raw query rather than reading `searchParams`: the decoder turns
+  // `+` into a space, so the decoded value would not match the bytes an
+  // endpoint echoes back. Both forms are admitted.
+  for (const pair of parsed.search.replace(/^\?/, "").split("&")) {
+    const equals = pair.indexOf("=");
+    if (equals < 0) {
+      continue;
+    }
+    const raw = pair.slice(equals + 1);
+    admit(raw);
+    try {
+      admit(decodeURIComponent(raw));
+    } catch {
+      // Malformed escape: the raw form is what appears in an echo anyway.
     }
   }
 
@@ -582,14 +625,20 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
     request.includeBodyInError && !isPrivate && failureBody.length > 0
       ? `: ${truncate(redactWebhookUrlIn(failureBody, url), MAX_ERROR_BODY_CHARS)}`
       : "";
+  // The reason phrase is caller-controlled text like the body, so it gets the
+  // same two treatments: withheld entirely for a private destination, and
+  // redacted otherwise. A server is free to put anything in it, and the well
+  // known phrases ("Not Found", "Bad Request") survive redaction unchanged.
+  const statusText = isPrivate ? "" : redactWebhookUrlIn(response.statusText, url);
 
   throw createFetchUrlJobError(
     httpStatusToFetchUrlErrorCode(response.status),
-    `Failed to post ${label} to ${redacted}: ${response.status} ${response.statusText}${bodySuffix}`,
+    `Failed to post ${label} to ${redacted}: ${response.status}` +
+      `${statusText === "" ? "" : ` ${statusText}`}${bodySuffix}`,
     {
       url: redacted,
       httpStatus: response.status,
-      httpStatusText: response.statusText,
+      httpStatusText: statusText === "" ? undefined : statusText,
       retryDate,
     }
   );
