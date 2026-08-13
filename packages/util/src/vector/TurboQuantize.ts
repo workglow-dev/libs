@@ -375,8 +375,14 @@ function fastWalshHadamard(data: Float64Array): void {
  * Doubling uses `*= 2` rather than `<<= 1`: the shift operators coerce to 32-bit
  * signed integers, so at p = 2^30 a shift wraps to -2147483648 and then to 0,
  * leaving `p < n` true forever.
+ *
+ * Exported because every caller that reasons about TurboQuant's padded width needs
+ * exactly this function INCLUDING its {@link assertDimensions} guard. A local
+ * reimplementation without that guard accepts a non-integer, a zero, or a length past
+ * {@link MAX_TURBO_DIMENSIONS} and hands it on, so the caller's own carefully worded
+ * validation is bypassed and the failure surfaces later as a low-level message.
  */
-function nextPowerOf2(n: number): number {
+export function nextPowerOf2(n: number): number {
   assertDimensions(n);
   let p = 1;
   while (p < n) p *= 2;
@@ -971,20 +977,31 @@ export interface TurboQuantizeToTypedArrayOptions {
  * a per-seed change of basis, so mixing them yields meaningless rankings with no
  * error raised anywhere.
  *
- * ## Power-of-2 dimensions required
+ * ## Power-of-2 dimensions required, or opt into padding
  *
- * The rotation operates on `nextPowerOf2(d)` coordinates. Keeping only the first `d` of
- * them would make this a lossy random projection rather than an orthogonal rotation, and
- * it measures WORSE than plain linear quantization at exactly the dimensionalities real
- * embedding models use — cosine RMSE against the exact similarity (int8, seed 42, 40
- * random pairs), turbo vs linear: 0.0164 vs 0.0027 at d=768 (MiniLM), 0.0126 vs 0.0033 at
- * d=1536, 0.0094 vs 0.0026 at d=3072; turbo wins only at d=1024 (0.0008 vs 0.0033).
+ * The rotation operates on `nextPowerOf2(d)` coordinates, so a non-power-of-2 `d` has to
+ * either widen the output or discard coordinates. This function does the first on request
+ * and never the second.
  *
- * A non-power-of-2 `d` is therefore rejected rather than silently degraded. Pass
- * `{ padToPowerOf2: true }` to opt into a `nextPowerOf2(d)`-length result instead — note
- * this output is LONGER than the input, so a fixed-width storage column must be declared
- * at the padded width. {@link turboQuantize} is unaffected either way: it keeps all
- * `paddedLen` coordinates and stays fully invertible at any dimensionality.
+ * Pass `{ padToPowerOf2: true }` to receive a `nextPowerOf2(d)`-length result. Padding
+ * keeps the transform orthogonal, and at that width TurboQuant is the more accurate
+ * choice by a wide margin — cosine RMSE against the exact similarity (int8, seed 42, 40
+ * seeded pairs), padded turbo vs linear quantization: 0.00034 vs 0.00269 at d=768
+ * (MiniLM), 0.00024 vs 0.00331 at d=1536, 0.00021 vs 0.00263 at d=3072. The cost is
+ * purely the width: the output is LONGER than the input, so a fixed-width storage column
+ * must be declared at the padded width.
+ *
+ * Without that option a non-power-of-2 `d` is rejected rather than silently degraded. The
+ * rejected alternative is CROPPING — keeping the first `d` of the rotated coordinates —
+ * which makes this a lossy random projection rather than an orthogonal rotation and
+ * measures worse than plain linear quantization at exactly the sizes real embedding
+ * models use: cropped turbo vs linear, 0.0164 vs 0.0027 at d=768, 0.0126 vs 0.0033 at
+ * d=1536, 0.0094 vs 0.0026 at d=3072. Those cropped figures are recorded here only to
+ * explain why the variant is not offered; this function no longer emits it, so do not
+ * quote them as the cost of turbo at these dimensionalities — padding is.
+ *
+ * {@link turboQuantize} is unaffected either way: it keeps all `paddedLen` coordinates
+ * and stays fully invertible at any dimensionality.
  *
  * Note: The vector norm is not preserved (cosine similarity is scale-invariant,
  * so this is fine for similarity search).
@@ -1026,10 +1043,13 @@ export function turboQuantizeToTypedArray(
   if (paddedLen !== d && padToPowerOf2 !== true) {
     throw new Error(
       `turboQuantizeToTypedArray requires a power of 2 dimensionality, got ${d}. ` +
-        `Returning only the first ${d} of ${paddedLen} rotated coordinates is a lossy random ` +
-        `projection that measures worse than linear quantization at this size (int8 cosine RMSE ` +
-        `at d=768: turbo 0.0164 vs linear 0.0027). Pass { padToPowerOf2: true } to receive ` +
-        `${paddedLen} values instead, or quantize linearly.`
+        `Pass { padToPowerOf2: true } to receive ${paddedLen} values instead — padding keeps the ` +
+        `rotation orthogonal and is the most accurate option at this size (int8 cosine RMSE at ` +
+        `d=768: padded turbo 0.00034 vs linear 0.00269), at the cost of an output LONGER than the ` +
+        `input, so size any fixed-width storage column to ${paddedLen}. Quantize linearly instead ` +
+        `if the output must keep its ${d} length. Returning only the first ${d} of ${paddedLen} ` +
+        `rotated coordinates is not offered: cropping is a lossy random projection that measures ` +
+        `worse than linear here (0.0164 vs 0.0027).`
     );
   }
 

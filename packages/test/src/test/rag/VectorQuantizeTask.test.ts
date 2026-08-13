@@ -12,6 +12,21 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { report, snap } from "../../binding/testTiming";
 
+/**
+ * Deterministic PRNG (mulberry32). The accuracy comparison below asserts a ratio between
+ * two quantizers, so a `Math.random()` draw would make a real regression and an unlucky
+ * sample indistinguishable.
+ */
+function makeRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 let _snap = snap();
 beforeEach(() => {
   _snap = snap();
@@ -312,32 +327,123 @@ describe("VectorQuantizeTask", () => {
 
     test("should reject a non-power-of-2 dimensionality with an actionable message", async () => {
       // 768 is MiniLM's dimensionality, so this is the common case rather than an edge
-      // one. Turbo would have to discard 256 of 1024 rotated coordinates to return a
-      // 768-length vector, which measures worse than linear at that size — so the task
-      // refuses and names both remedies instead of silently returning worse vectors.
+      // one. Turbo rotates in 1024 dimensions, so it either widens the output or discards
+      // 256 coordinates; the task offers only the first, behind an explicit opt-in.
       const vector = new Float32Array(768);
       for (let i = 0; i < 768; i++) vector[i] = Math.sin(i * 0.1);
 
-      await expect(
-        vectorQuantize({ vector, targetType: TensorType.INT8, method: "turbo", turboSeed: 42 })
-      ).rejects.toThrow(/power of 2/);
+      const rejection = async (): Promise<Error> => {
+        try {
+          await vectorQuantize({
+            vector,
+            targetType: TensorType.INT8,
+            method: "turbo",
+            turboSeed: 42,
+          });
+        } catch (error) {
+          return error as Error;
+        }
+        throw new Error("expected turbo at d=768 to be rejected");
+      };
+      const message = (await rejection()).message;
 
-      await expect(
-        vectorQuantize({ vector, targetType: TensorType.INT8, method: "turbo", turboSeed: 42 })
-      ).rejects.toThrow(/768/);
+      expect(message).toMatch(/768/);
+      expect(message).toMatch(/1024/);
+      // The padding opt-in has to be named, and named first: it is the accurate remedy,
+      // and a user cannot discover an input the message does not mention.
+      expect(message).toMatch(/turboPadToPowerOf2/);
+      expect(message).toMatch(/linear/);
 
-      // Both remedies are named: switch method, or pad to the next power of 2.
-      await expect(
-        vectorQuantize({ vector, targetType: TensorType.INT8, method: "turbo", turboSeed: 42 })
-      ).rejects.toThrow(/linear/);
-
-      await expect(
-        vectorQuantize({ vector, targetType: TensorType.INT8, method: "turbo", turboSeed: 42 })
-      ).rejects.toThrow(/1024/);
+      // The stale figure the message used to quote is the CROPPED variant's RMSE, which
+      // this code path no longer emits. Quoting it steered users to `linear` on a
+      // comparison that does not describe either option now on offer.
+      expect(message).not.toContain("0.0164");
 
       // The same vector is fine under linear quantization.
       const linear = await vectorQuantize({ vector, targetType: TensorType.INT8 });
       expect((linear.vector as Int8Array).length).toBe(768);
+    });
+
+    test("should widen to the next power of 2 when turboPadToPowerOf2 is set", async () => {
+      const vector = new Float32Array(768);
+      for (let i = 0; i < 768; i++) vector[i] = Math.sin(i * 0.1);
+
+      const result = await vectorQuantize({
+        vector,
+        targetType: TensorType.INT8,
+        method: "turbo",
+        turboSeed: 42,
+        turboPadToPowerOf2: true,
+      });
+
+      const out = result.vector as Int8Array;
+      expect(out).toBeInstanceOf(Int8Array);
+      // The output is LONGER than the input. That is the whole reason the flag defaults
+      // to false: a storage column declared at 768 would reject this vector.
+      expect(out.length).toBe(1024);
+      expect(result.method).toBe("turbo");
+      expect(result.turboSeed).toBe(42);
+    });
+
+    test("should beat the linear path on similarity error at d=768 when padded", async () => {
+      // The measurement behind the rejection message, asserted rather than quoted. The
+      // message previously cited cropped-turbo RMSE (0.0164 at d=768) and told users
+      // linear was more accurate; padded turbo is roughly 8x MORE accurate here, so the
+      // guidance was backwards for the option the task now offers.
+      const d = 768;
+      const pairs = 40;
+      const rnd = makeRandom(d);
+
+      const cosine = (a: ArrayLike<number>, b: ArrayLike<number>): number => {
+        let dot = 0;
+        let na = 0;
+        let nb = 0;
+        for (let i = 0; i < a.length; i++) {
+          dot += a[i] * b[i];
+          na += a[i] * a[i];
+          nb += b[i] * b[i];
+        }
+        return dot / Math.sqrt(na * nb);
+      };
+
+      let turboSquaredError = 0;
+      let linearSquaredError = 0;
+      for (let p = 0; p < pairs; p++) {
+        const a = new Float32Array(d);
+        const b = new Float32Array(d);
+        for (let i = 0; i < d; i++) {
+          a[i] = rnd() - 0.5;
+          b[i] = rnd() - 0.5;
+        }
+        const exact = cosine(a, b);
+
+        const turboOf = async (v: Float32Array): Promise<Int8Array> =>
+          (
+            await vectorQuantize({
+              vector: v,
+              targetType: TensorType.INT8,
+              method: "turbo",
+              turboSeed: 42,
+              turboPadToPowerOf2: true,
+            })
+          ).vector as Int8Array;
+        const linearOf = async (v: Float32Array): Promise<Int8Array> =>
+          (await vectorQuantize({ vector: v, targetType: TensorType.INT8 })).vector as Int8Array;
+
+        const turboError = cosine(await turboOf(a), await turboOf(b)) - exact;
+        turboSquaredError += turboError * turboError;
+        const linearError = cosine(await linearOf(a), await linearOf(b)) - exact;
+        linearSquaredError += linearError * linearError;
+      }
+
+      const turboRmse = Math.sqrt(turboSquaredError / pairs);
+      const linearRmse = Math.sqrt(linearSquaredError / pairs);
+
+      // Measured: padded turbo 0.00034, linear 0.00269 — a 7.8x gap. The assertion
+      // demands only 4x so an unrelated tweak does not fail it, but the direction is
+      // exactly what the old message got wrong and must not silently reverse.
+      expect(turboRmse).toBeLessThan(linearRmse / 4);
+      expect(turboRmse).toBeLessThan(0.001);
     });
 
     test("should report method and turboSeed on the output", async () => {

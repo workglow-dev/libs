@@ -8,6 +8,7 @@ import type { IRunConfig, TaskConfig } from "@workglow/task-graph";
 import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, TypedArray } from "@workglow/util/schema";
 import {
+  nextPowerOf2,
   normalizeNumberArray,
   TensorType,
   turboQuantizeToTypedArray,
@@ -61,7 +62,7 @@ const inputSchema = {
       enum: Object.values(QuantizationMethod),
       title: "Method",
       description:
-        "Quantization method: 'linear' for simple min-max scaling, 'turbo' for TurboQuant (randomized Hadamard rotation + uniform scalar quantization at the MSE-optimal Gaussian clipping range). Turbo requires a signed integer targetType (int8 or int16) AND a power-of-2 vector dimensionality: it rotates in nextPowerOf2(d) dimensions, so a non-power-of-2 input is rejected rather than silently degraded. At equal byte width linear is measurably more accurate at the common embedding sizes — measured int8 cosine RMSE, turbo vs linear: 0.0164 vs 0.0027 at d=768, 0.0126 vs 0.0033 at d=1536, 0.0094 vs 0.0026 at d=3072. Turbo wins only at d=1024 (0.0008 vs 0.0033).",
+        "Quantization method: 'linear' for simple min-max scaling, 'turbo' for TurboQuant (randomized Hadamard rotation + uniform scalar quantization at the MSE-optimal Gaussian clipping range). Turbo requires a signed integer targetType (int8 or int16). It rotates in nextPowerOf2(d) dimensions, so a non-power-of-2 input needs turboPadToPowerOf2: true, which widens the output to nextPowerOf2(d); without it such an input is rejected rather than silently degraded. Padded turbo is substantially MORE accurate than linear at the common embedding sizes — measured int8 cosine RMSE over 40 seeded pairs, padded turbo vs linear: 0.00034 vs 0.00269 at d=768, 0.00024 vs 0.00331 at d=1536, 0.00021 vs 0.00263 at d=3072. Choose linear when the output must keep its input length.",
       default: QuantizationMethod.LINEAR,
     },
     turboSeed: {
@@ -70,6 +71,13 @@ const inputSchema = {
       description:
         "Seed for the random rotation in TurboQuant. All vectors in the same collection must use the same seed for similarity search to work.",
       default: 42,
+    },
+    turboPadToPowerOf2: {
+      type: "boolean",
+      title: "TurboQuant Pad To Power Of 2",
+      description:
+        "Allow method 'turbo' on a non-power-of-2 dimensionality by widening the output to nextPowerOf2(d). Defaults to false because enabling it lengthens the output vector: a storage column sized to d will reject the result, so it has to be an explicit choice rather than a silent one. Ignored unless method is 'turbo'.",
+      default: false,
     },
   },
   required: ["vector", "targetType"],
@@ -132,6 +140,11 @@ export type VectorQuantizeTaskInput = {
   targetType: "float16" | "float32" | "float64" | "int8" | "uint8" | "int16" | "uint16";
   readonly method?: QuantizationMethod | undefined;
   readonly turboSeed?: number | undefined;
+  /**
+   * Opt into a `nextPowerOf2(d)`-length output for `method: "turbo"` at a non-power-of-2
+   * dimensionality. Defaults to false: it lengthens the output vector.
+   */
+  readonly turboPadToPowerOf2?: boolean | undefined;
 };
 export type VectorQuantizeTaskOutput = {
   vector: TypedArray | TypedArray[];
@@ -143,13 +156,6 @@ export type VectorQuantizeTaskOutput = {
   readonly turboSeed: number | undefined;
 };
 export type VectorQuantizeTaskConfig = TaskConfig<VectorQuantizeTaskInput>;
-
-/** Smallest power of 2 that is >= n. Doubles rather than shifts to stay 32-bit safe. */
-function nextPowerOf2(n: number): number {
-  let p = 1;
-  while (p < n) p *= 2;
-  return p;
-}
 
 /**
  * Task for quantizing vectors to reduce storage and improve performance.
@@ -188,6 +194,7 @@ export class VectorQuantizeTask extends Task<
       normalize = true,
       method = QuantizationMethod.LINEAR,
       turboSeed = 42,
+      turboPadToPowerOf2 = false,
     } = input;
     const isArray = Array.isArray(vector);
     const vectors = isArray ? vector : [vector];
@@ -205,19 +212,30 @@ export class VectorQuantizeTask extends Task<
         );
       }
       // Checked here rather than left to turboQuantizeToTypedArray so the message names
-      // the task's own remedies. Turbo rotates in nextPowerOf2(d) dimensions and cannot
-      // return a d-length result without discarding coordinates, which measures worse
-      // than linear at exactly the dimensionalities embedding models use.
-      const unpadded = vectors.find((v) => v.length !== nextPowerOf2(v.length));
+      // the task's own input rather than the util's option object. Turbo rotates in
+      // nextPowerOf2(d) dimensions, so at a non-power-of-2 d it either widens the output
+      // or discards coordinates; only the first is offered.
+      const unpadded = turboPadToPowerOf2
+        ? undefined
+        : vectors.find((v) => v.length !== nextPowerOf2(v.length));
       if (unpadded !== undefined) {
+        const padded = nextPowerOf2(unpadded.length);
         throw new Error(
-          `VectorQuantizeTask: method "turbo" requires a power of 2 vector dimensionality, got ${unpadded.length}. ` +
-            `Either use method: "linear" at this dimensionality (it is measurably more accurate here — ` +
-            `int8 cosine RMSE at d=768: linear 0.0027 vs turbo 0.0164), or zero-pad the vectors to ` +
-            `${nextPowerOf2(unpadded.length)} before quantizing and size the storage column to match.`
+          `VectorQuantizeTask: method "turbo" needs turboPadToPowerOf2: true at a non-power-of-2 ` +
+            `vector dimensionality, got ${unpadded.length}. Setting it widens the output from ` +
+            `${unpadded.length} to ${padded} values, so size any fixed-width storage column to ` +
+            `${padded}. Padded turbo is the more accurate option at this size — measured int8 ` +
+            `cosine RMSE over 40 seeded pairs, padded turbo vs this task's linear path: 0.00034 ` +
+            `vs 0.00269 at d=768, 0.00024 vs 0.00331 at d=1536, 0.00021 vs 0.00263 at d=3072. ` +
+            `Use method: "linear" instead if the output must keep its ${unpadded.length} length.`
         );
       }
-      quantized = vectors.map((v) => turboQuantizeToTypedArray(v, targetType, turboSeed));
+      quantized = vectors.map((v) =>
+        turboQuantizeToTypedArray(v, targetType, {
+          seed: turboSeed,
+          padToPowerOf2: turboPadToPowerOf2,
+        })
+      );
     } else {
       quantized = vectors.map((v) => this.vectorQuantize(v, targetType, normalize));
     }
