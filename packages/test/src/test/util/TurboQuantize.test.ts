@@ -20,8 +20,8 @@ import {
   turboQuantizedCosineSimilarity,
   turboQuantizedInnerProduct,
 } from "@workglow/util/schema";
+import { getTestingLogger } from "@workglow/util/test";
 import { describe, expect, test } from "vitest";
-import { getTestingLogger } from "../../binding/TestingLogger";
 
 /**
  * Deterministic PRNG (mulberry32) so the fidelity tests below never depend on
@@ -117,6 +117,90 @@ describe("TurboQuantize", () => {
           42
         )
       ).toThrow("NaN or Infinity");
+    });
+
+    test("should quantize a vector whose squared norm overflows a double", () => {
+      // `sumSquares += v * v` squares the exponent, so it reached Infinity at ~1e154 —
+      // far below where the vector itself stops being representable. `Math.sqrt(Infinity)`
+      // is Infinity, which the finiteness guard then reported as "NaN or Infinity" for an
+      // input containing neither.
+      const huge = new Float64Array([1e200, 2e200, 3e200, 4e200]);
+      const reference = turboQuantize(new Float64Array([1, 2, 3, 4]), { bits: 8, seed: 42 });
+      const quantized = turboQuantize(huge, { bits: 8, seed: 42 });
+
+      expect(Number.isFinite(quantized.norm)).toBe(true);
+      expect(quantized.norm / 1e200).toBeCloseTo(Math.sqrt(30), 10);
+      // Scaling an input by a constant changes only the recorded norm: the direction is
+      // identical, so the codes must be too.
+      expect(Array.from(quantized.codes)).toEqual(Array.from(reference.codes));
+      expect(turboQuantizedCosineSimilarity(quantized, quantized)).toBeCloseTo(1, 10);
+      expect(turboQuantizedCosineSimilarity(quantized, reference)).toBeCloseTo(1, 10);
+
+      // Encoding succeeds; only the Float32 decode cannot represent it, and it says so
+      // rather than returning a vector of Infinity.
+      expect(() => turboDequantize(quantized)).toThrow(/exceeds the Float32 range/);
+      expect(() => turboDequantize(quantized)).not.toThrow(/NaN or Infinity/);
+    });
+
+    test("should quantize a vector whose squared norm underflows a double", () => {
+      // The mirror failure: below ~1e-162 every `v * v` flushed to zero, so `norm` came
+      // back 0 — indistinguishable from a genuine zero vector. The record then decoded to
+      // all zeroes and scored 0 against itself, silently discarding a perfectly good
+      // direction.
+      const tiny = new Float64Array([1e-200, 2e-200, 3e-200, 4e-200]);
+      const reference = turboQuantize(new Float64Array([1, 2, 3, 4]), { bits: 8, seed: 42 });
+      const quantized = turboQuantize(tiny, { bits: 8, seed: 42 });
+
+      expect(quantized.norm).toBeGreaterThan(0);
+      expect(quantized.norm * 1e200).toBeCloseTo(Math.sqrt(30), 10);
+      expect(Array.from(quantized.codes)).toEqual(Array.from(reference.codes));
+      expect(turboQuantizedCosineSimilarity(quantized, quantized)).toBeCloseTo(1, 10);
+
+      // Honest limitation: this record cannot round-trip through `turboDequantize`, and
+      // that is not a bug being papered over. The reconstruction is a Float32Array and
+      // 1e-200 is far below Float32's smallest subnormal (~1.4e-45), so every coordinate
+      // legitimately flushes to zero. The payoff of keeping the norm alive for a tiny
+      // vector is that SIMILARITY works — asserted above — not that decode does.
+      expect(Array.from(turboDequantize(quantized))).toEqual([0, 0, 0, 0]);
+    });
+
+    test("should keep an ordinary vector bit-identical across the norm rescaling", () => {
+      // The max-scaled norm is a different arithmetic sequence than `sum(v*v)`, so it has
+      // to be shown NOT to move the encoding of ordinary inputs: TURBO_QUANTIZE_VERSION
+      // stays 1 only if the code-to-value mapping is untouched. `turboDequantize` is a
+      // function of (codes, norm, seed, dimensions) alone, so identical codes and an
+      // identical norm are exactly what make the decode bit-identical.
+      const quantized = turboQuantize(new Float64Array([1, 2, 3, 4]), { bits: 8, seed: 42 });
+
+      expect(quantized.version).toBe(1);
+      expect(quantized.norm).toBe(Math.sqrt(30));
+      expect(Array.from(quantized.codes)).toEqual([175, 104, 163, 116]);
+      expect(Array.from(turboDequantize(quantized))).toEqual([
+        0.9718117117881775, 1.9858760833740234, 2.9999403953552246, 4.014004707336426,
+      ]);
+    });
+
+    test("should still reject a genuinely zero vector's direction, not a tiny one", () => {
+      // Max-scaling has to keep the one case that legitimately yields norm 0 distinct from
+      // the underflow case it fixes.
+      const zero = turboQuantize(new Float64Array([0, 0, 0, 0]), { bits: 8, seed: 42 });
+      expect(zero.norm).toBe(0);
+      expect(Array.from(turboDequantize(zero))).toEqual([0, 0, 0, 0]);
+    });
+
+    test("should reject a decode whose recorded norm is negative", () => {
+      // `norm` is always a Math.sqrt result, so a negative one is corrupt. The decode
+      // multiplies by it, so it silently sign-flips every coordinate: the reconstruction
+      // scores -1 against its own source with nothing reported anywhere.
+      const quantized = turboQuantize(new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]), {
+        bits: 8,
+        seed: 42,
+      });
+
+      const negative = { ...quantized, norm: -quantized.norm };
+      expect(() => turboDequantize(negative)).toThrow(/non-negative/);
+      expect(() => turboQuantizedInnerProduct(negative, quantized)).toThrow(/non-negative/);
+      expect(() => turboQuantizedCosineSimilarity(negative, quantized)).toThrow(/non-negative/);
     });
 
     test("should match hardcoded golden bytes (cross-process determinism)", () => {
@@ -299,55 +383,23 @@ describe("TurboQuantize", () => {
       expect(() => turboQuantizedInnerProduct(quantized, tampered)).toThrow("paddedDimensions");
     });
 
-    test("should preserve magnitude at every bit width", () => {
-      // A fixed 3-sigma clipping range put the two 1-bit reconstruction points at +/-3
-      // standard deviations, so a 1-bit reconstruction came back exactly 3x too long.
-      // Reconstruction is renormalized to the recorded norm, so magnitude is now carried
-      // by the one quantity the encoder stored exactly.
-      const d = 1024;
-      const rnd = makeRandom(42);
-      const original = new Float32Array(d);
-      for (let i = 0; i < d; i++) original[i] = rnd() - 0.5;
-
-      for (let bits = 1; bits <= 8; bits++) {
-        const reconstructed = turboDequantize(turboQuantize(original, { bits, seed: 42 }));
-        const ratio = magnitude(reconstructed) / magnitude(original);
-        expect(ratio).toBeGreaterThan(0.98);
-        expect(ratio).toBeLessThan(1.02);
-      }
-    });
-
-    test("should preserve magnitude at a cropped (non-power-of-2) dimensionality", () => {
-      const d = 768;
-      const rnd = makeRandom(7);
-      const original = new Float32Array(d);
-      for (let i = 0; i < d; i++) original[i] = rnd() - 0.5;
-
-      for (let bits = 1; bits <= 8; bits++) {
-        const ratio =
-          magnitude(turboDequantize(turboQuantize(original, { bits, seed: 42 }))) /
-          magnitude(original);
-        expect(ratio).toBeGreaterThan(0.9);
-        expect(ratio).toBeLessThan(1.02);
-      }
-    });
-
-    test("should reduce relative L2 error monotonically with bit width", () => {
-      // The monotonicity assertion is the point of this test. With a bits-independent
-      // 3-sigma clipping range, clipping error dominated everything the extra levels
-      // bought and relative L2 flattened out: 6, 7 and 8 bits all landed at ~0.035, so
-      // four times the levels bought nothing. Per-bit ceilings alone would not catch a
-      // regression back to a flat tail; requiring each step to be a real improvement does.
-      const d = 1024;
-      const rnd = makeRandom(42);
+    /**
+     * Relative L2 error of the reconstruction, per bit width, for one seeded vector.
+     * Returned alongside the magnitude ratio so the caller can assert both against one run.
+     */
+    function measureRelativeL2(
+      d: number,
+      randomSeed: number
+    ): { readonly relativeL2: readonly number[]; readonly magnitudeRatios: readonly number[] } {
+      const rnd = makeRandom(randomSeed);
       const original = new Float32Array(d);
       for (let i = 0; i < d; i++) original[i] = rnd() - 0.5;
 
       let originalEnergy = 0;
       for (let i = 0; i < d; i++) originalEnergy += original[i] * original[i];
 
-      const ceilings = [0.75, 0.45, 0.26, 0.15, 0.09, 0.05, 0.028, 0.016];
       const relativeL2: number[] = [];
+      const magnitudeRatios: number[] = [];
       for (let bits = 1; bits <= 8; bits++) {
         const reconstructed = turboDequantize(turboQuantize(original, { bits, seed: 42 }));
         let errorEnergy = 0;
@@ -356,39 +408,99 @@ describe("TurboQuantize", () => {
           errorEnergy += delta * delta;
         }
         relativeL2.push(Math.sqrt(errorEnergy / originalEnergy));
+        magnitudeRatios.push(magnitude(reconstructed) / magnitude(original));
       }
+      return { relativeL2, magnitudeRatios };
+    }
 
+    test("should reduce relative L2 error monotonically with bit width", () => {
+      // The monotonicity assertion is the point of this test. With a bits-independent
+      // 3-sigma clipping range, clipping error dominated everything the extra levels
+      // bought and relative L2 flattened out: 6, 7 and 8 bits all landed at ~0.035, so
+      // four times the levels bought nothing. Per-bit ceilings alone would not catch a
+      // regression back to a flat tail; requiring each step to be a real improvement does.
+      //
+      // Measured relative L2 here, shipped grid vs a fixed 3-sigma one:
+      //   shipped 0.635 0.347 0.189 0.110 0.065 0.038 0.021 0.010
+      //   3-sigma 0.635 0.523 0.243 0.123 0.065 0.043 0.035 0.033
+      // The ceilings below pass the first row and reject the second at 2 bits.
+      const { relativeL2, magnitudeRatios } = measureRelativeL2(1024, 42);
+
+      const ceilings = [0.75, 0.45, 0.26, 0.15, 0.09, 0.05, 0.028, 0.016];
       relativeL2.forEach((value, index) => {
         expect(value).toBeLessThan(ceilings[index]);
       });
       for (let i = 0; i + 1 < relativeL2.length; i++) {
         expect(relativeL2[i + 1]).toBeLessThan(relativeL2[i] * 0.85);
       }
+
+      // Magnitude preservation folded in as a one-line invariant rather than a test of its
+      // own: `turboDequantize` renormalizes to the recorded norm unconditionally, so this
+      // ratio is 1 for every input, bit width and grid and can never fail on its own. It
+      // is worth one assertion next to a measurement that CAN fail, and worth nothing
+      // apart from it.
+      for (const ratio of magnitudeRatios) expect(ratio).toBeCloseTo(1, 5);
     });
 
-    test("should improve quality with higher dimensions", () => {
-      // TurboQuant relies on concentration of measure, which improves with dimension
-      const d64 = 64;
-      const d256 = 256;
+    test("should reduce relative L2 error monotonically at a cropped (d=768) dimensionality", () => {
+      // The cropped path is a different code path: 768 pads to 1024 for the rotation and
+      // the decode renormalizes against the first 768 coordinates only, so the padded
+      // measurement above does not cover it.
+      //
+      // Measured relative L2 here, shipped grid vs a fixed 3-sigma one:
+      //   shipped 0.579 0.305 0.156 0.086 0.046 0.026 0.014 0.008
+      //   3-sigma 0.579 0.459 0.208 0.100 0.048 0.024 0.012 0.006
+      // Note the 3-sigma row is BETTER at 6-8 bits here, so the step assertion alone
+      // passes it; the 2- and 3-bit ceilings are what reject it.
+      const { relativeL2, magnitudeRatios } = measureRelativeL2(768, 7);
 
-      const v64 = new Float32Array(d64);
-      const v256 = new Float32Array(d256);
-      for (let i = 0; i < d64; i++) v64[i] = Math.random() - 0.5;
-      for (let i = 0; i < d256; i++) v256[i] = Math.random() - 0.5;
+      const ceilings = [0.68, 0.36, 0.185, 0.105, 0.058, 0.033, 0.019, 0.01];
+      relativeL2.forEach((value, index) => {
+        expect(value).toBeLessThan(ceilings[index]);
+      });
+      for (let i = 0; i + 1 < relativeL2.length; i++) {
+        expect(relativeL2[i + 1]).toBeLessThan(relativeL2[i] * 0.85);
+      }
+      for (const ratio of magnitudeRatios) expect(ratio).toBeCloseTo(1, 5);
+    });
 
-      const q64 = turboQuantize(v64, { bits: 4, seed: 42 });
-      const q256 = turboQuantize(v256, { bits: 4, seed: 42 });
+    test("should estimate pairwise similarity more accurately as dimension grows", () => {
+      // What concentration of measure actually buys, measured rather than assumed.
+      //
+      // It does NOT improve single-vector reconstruction: mean reconstruction cosine at
+      // 4 bits over 200 seeded draws is 0.99496 at d=64 and 0.99441 at d=256, i.e. very
+      // slightly WORSE, and d=256 beat d=64 in only 63 of those 200 draws. The old form
+      // of this test asserted "256-dim should be slightly better" in a comment while
+      // asserting only `> 0.8` floors on `Math.random()` input, so the false premise
+      // never had to hold. Do not reinstate `sim256 > sim64`; it is not true.
+      //
+      // What does improve, roughly as 1/sqrt(d), is the error of the PAIRWISE similarity
+      // estimate — which is what this quantizer exists to serve. Measured RMSE against
+      // the exact cosine at 4 bits: 0.0186 (d=64), 0.0101 (d=256), 0.0047 (d=1024).
+      const rmseByDimension = [64, 256, 1024].map((d) => {
+        const rnd = makeRandom(4000 + d);
+        const pairs = 40;
+        let squaredError = 0;
+        for (let p = 0; p < pairs; p++) {
+          const a = new Float32Array(d);
+          const b = new Float32Array(d);
+          for (let i = 0; i < d; i++) {
+            a[i] = rnd() - 0.5;
+            b[i] = rnd() - 0.5;
+          }
+          const error =
+            turboQuantizedCosineSimilarity(
+              turboQuantize(a, { bits: 4, seed: 42 }),
+              turboQuantize(b, { bits: 4, seed: 42 })
+            ) - cosineSimilarity(a, b);
+          squaredError += error * error;
+        }
+        return Math.sqrt(squaredError / pairs);
+      });
 
-      const r64 = turboDequantize(q64);
-      const r256 = turboDequantize(q256);
-
-      const sim64 = cosineSimilarity(v64, r64);
-      const sim256 = cosineSimilarity(v256, r256);
-
-      // Higher dimension should give better or comparable quality
-      // (both should be good, but 256-dim should be slightly better)
-      expect(sim64).toBeGreaterThan(0.8);
-      expect(sim256).toBeGreaterThan(0.8);
+      expect(rmseByDimension[1]).toBeLessThan(rmseByDimension[0] * 0.75);
+      expect(rmseByDimension[2]).toBeLessThan(rmseByDimension[1] * 0.75);
+      expect(rmseByDimension[2]).toBeLessThan(0.007);
     });
   });
 
@@ -495,22 +607,43 @@ describe("TurboQuantize", () => {
       expect(turboQuantizedCosineSimilarity(qa, qb)).toBeGreaterThan(0.95);
     });
 
-    test("should score a record against itself at exactly 1 for every bit width", () => {
-      // Treating the codes as if they were already unit vectors made self-similarity a
-      // function of how far the reconstruction's magnitude drifted from 1: at 1 bit the
-      // reconstruction was 3x too long and a record scored 9.0 against itself, on a
-      // function documented to return [-1, 1]. Dividing by each reconstruction's own norm
-      // makes this an actual cosine, so the identity holds by construction.
+    test("should track the exact cosine within a per-bit-width RMSE ceiling", () => {
+      // This replaces a self-similarity test that could not fail: `quantizedCosine` divides
+      // by each side's own `codeNorm`, so comparing a record with itself is 1 by algebra
+      // for any grid, any bit width and any input. It measured the identity, not the
+      // quantizer. What the quantizer is actually for is estimating the cosine between two
+      // DIFFERENT vectors, so that is what is measured here — against the exact cosine of
+      // the unquantized inputs, which is the only reference that cannot move with the code
+      // under test.
+      //
+      // Measured RMSE, shipped grid vs a fixed 3-sigma one:
+      //   shipped 0.0273 0.0130 0.0070 0.0049 0.0032 0.0013 0.0010 0.0005
+      //   3-sigma 0.0273 0.0210 0.0107 0.0058 0.0024 0.0015 0.0008 0.0012
+      // The ceilings pass the first row with >=21% headroom and reject the second at 2, 3
+      // and 8 bits. The two rows agree exactly at 1 bit because a 2-level grid is +/-a:
+      // the codes carry only sign, and the cosine is invariant to the scale of `a`.
       const d = 1024;
-      const rnd = makeRandom(42);
-      const v = new Float32Array(d);
-      for (let i = 0; i < d; i++) v[i] = rnd() - 0.5;
+      const pairs = 24;
+      const ceilings = [0.033, 0.016, 0.0085, 0.006, 0.004, 0.0017, 0.0013, 0.0007];
 
       for (let bits = 1; bits <= 8; bits++) {
-        const q = turboQuantize(v, { bits, seed: 42 });
-        const self = turboQuantizedCosineSimilarity(q, q);
-        expect(self).toBeGreaterThan(0.999);
-        expect(self).toBeLessThanOrEqual(1.0);
+        const rnd = makeRandom(2048 + bits);
+        let squaredError = 0;
+        for (let p = 0; p < pairs; p++) {
+          const a = new Float32Array(d);
+          const b = new Float32Array(d);
+          for (let i = 0; i < d; i++) {
+            a[i] = rnd() - 0.5;
+            b[i] = rnd() - 0.5;
+          }
+          const error =
+            turboQuantizedCosineSimilarity(
+              turboQuantize(a, { bits, seed: 42 }),
+              turboQuantize(b, { bits, seed: 42 })
+            ) - cosineSimilarity(a, b);
+          squaredError += error * error;
+        }
+        expect(Math.sqrt(squaredError / pairs)).toBeLessThan(ceilings[bits - 1]);
       }
     });
 
@@ -526,12 +659,14 @@ describe("TurboQuantize", () => {
             a[i] = rnd() - 0.5;
             b[i] = rnd() - 0.5;
           }
-          const sim = turboQuantizedCosineSimilarity(
-            turboQuantize(a, { bits, seed: 42 }),
-            turboQuantize(b, { bits, seed: 42 })
-          );
+          const qa = turboQuantize(a, { bits, seed: 42 });
+          const sim = turboQuantizedCosineSimilarity(qa, turboQuantize(b, { bits, seed: 42 }));
           expect(sim).toBeGreaterThanOrEqual(-1);
           expect(sim).toBeLessThanOrEqual(1);
+          // Self-similarity belongs here, as one line of the range invariant: dividing by
+          // each side's own norm makes it 1 by construction, so it is a statement about
+          // the range and not a measurement of quality.
+          expect(turboQuantizedCosineSimilarity(qa, qa)).toBeLessThanOrEqual(1);
         }
       }
     });

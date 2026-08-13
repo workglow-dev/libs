@@ -109,6 +109,9 @@ const MAX_SEED = 2 ** 31 - 1;
 /** Number of (sign-flip + Walsh-Hadamard) rounds applied by the randomized rotation. */
 const SIGN_ROUNDS = 3;
 
+/** Largest finite Float32 value; the ceiling on a norm {@link turboDequantize} can represent. */
+const MAX_FLOAT32 = 3.4028234663852886e38;
+
 /**
  * Validates a dimensionality before it is used to size any buffer.
  * @param n - Candidate dimensionality
@@ -506,9 +509,21 @@ function getQuantizationParams(
  * Normalizes a vector to unit length, returning both the unit-length coordinates
  * and the original L2 norm.
  *
- * A non-finite norm means the input carried NaN or Infinity. That must throw:
- * otherwise `norm > 0` is false for NaN and the freshly-allocated all-zero buffer
- * is returned, silently discarding the bad input.
+ * The sum of squares is accumulated on coordinates divided by the largest absolute
+ * coordinate rather than on the raw ones. Accumulating `v * v` directly squares the
+ * input's exponent, so the running sum leaves the double range long before the vector
+ * itself does: it overflows to Infinity above ~1e154 (a finite input then reported as
+ * "NaN or Infinity") and underflows to 0 below ~1e-162 (a finite input then reported as
+ * a zero vector, decoding to all zeroes and scoring 0 against itself). Max-scaling keeps
+ * every squared term in [0, 1], so the sum stays finite and non-zero for any finite input.
+ *
+ * The per-element `Number.isFinite` check is load-bearing under max-scaling, not
+ * belt-and-braces: an Infinity input would otherwise set `maxAbs = Infinity` and every
+ * scaled coordinate would become `Inf / Inf = NaN`, which no later check catches.
+ *
+ * The final division is by `maxAbs` and then by `rootS`, never by their product: for a
+ * subnormal input the product is what underflows, while each factor separately is
+ * representable and the two divisions reconstruct the unit direction exactly.
  *
  * A zero vector is not an error — it yields an all-zero `values` buffer and a
  * norm of 0.
@@ -518,22 +533,31 @@ function normalizeToUnit(vector: TypedArray): {
   readonly norm: number;
 } {
   const d = vector.length;
-  let sumSquares = 0;
+  let maxAbs = 0;
   for (let i = 0; i < d; i++) {
-    sumSquares += vector[i] * vector[i];
-  }
-  const norm = Math.sqrt(sumSquares);
-  if (!Number.isFinite(norm)) {
-    throw new Error("Cannot quantize a vector containing NaN or Infinity");
+    const value = vector[i];
+    if (!Number.isFinite(value)) {
+      throw new Error("Cannot quantize a vector containing NaN or Infinity");
+    }
+    const abs = Math.abs(value);
+    if (abs > maxAbs) maxAbs = abs;
   }
 
   const values = new Float64Array(d);
-  if (norm > 0) {
-    for (let i = 0; i < d; i++) {
-      values[i] = vector[i] / norm;
-    }
+  if (maxAbs === 0) {
+    return { values, norm: 0 };
   }
-  return { values, norm };
+
+  let sumSquares = 0;
+  for (let i = 0; i < d; i++) {
+    const scaled = vector[i] / maxAbs;
+    sumSquares += scaled * scaled;
+  }
+  const rootS = Math.sqrt(sumSquares);
+  for (let i = 0; i < d; i++) {
+    values[i] = vector[i] / maxAbs / rootS;
+  }
+  return { values, norm: maxAbs * rootS };
 }
 
 /**
@@ -720,8 +744,11 @@ function assertQuantizeResultShape(quantized: TurboQuantizeResult): void {
   assertBits(bits);
   assertDimensions(dimensions);
   assertSeed(seed);
-  if (!Number.isFinite(norm)) {
-    throw new Error(`TurboQuant norm must be a finite number, got ${norm}`);
+  // A negative norm is corrupt, not merely odd: `norm` is always a `Math.sqrt` result, and
+  // the decode rescale multiplies by it, so a negative one sign-flips every reconstructed
+  // coordinate — a vector that scores -1 against its own source with nothing reported.
+  if (!Number.isFinite(norm) || norm < 0) {
+    throw new Error(`TurboQuant norm must be a finite, non-negative number, got ${norm}`);
   }
   const expectedPadded = nextPowerOf2(dimensions);
   if (paddedDimensions !== expectedPadded) {
@@ -771,12 +798,27 @@ function reconstructRotatedCodes(quantized: TurboQuantizeResult): {
  * at low bit widths the clipped grid inflates it badly — and `norm` is the one quantity the
  * encoder stored exactly, so restoring it costs nothing and removes the bias.
  *
+ * A record whose norm exceeds the Float32 range is rejected rather than decoded. The output
+ * is a Float32Array whose L2 norm IS `norm`, so an out-of-range norm cannot be represented
+ * and every coordinate would come back as Infinity with nothing reported. The check is on
+ * the recorded scalar, so it costs O(1) and needs no scan of the result. Only the decode is
+ * affected: cosine similarity is scale-free, so such a record stays fully comparable through
+ * {@link turboQuantizedCosineSimilarity}.
+ *
  * @param quantized - The TurboQuant quantization result
  * @returns Reconstructed vector as Float32Array
  */
 export function turboDequantize(quantized: TurboQuantizeResult): Float32Array {
   assertQuantizeResultShape(quantized);
   const { dimensions, seed, norm } = quantized;
+  if (norm > MAX_FLOAT32) {
+    throw new Error(
+      `TurboQuant cannot dequantize a record whose norm ${norm} exceeds the Float32 range ` +
+        `(max ${MAX_FLOAT32}): the reconstruction is a Float32Array with that L2 norm, so every ` +
+        `coordinate would overflow to Infinity. Cosine similarity is scale-free and still works ` +
+        `on this record.`
+    );
+  }
 
   const result = new Float32Array(dimensions);
   // A zero vector has no direction to restore. The early return is also what keeps the
