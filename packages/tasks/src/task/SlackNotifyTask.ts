@@ -193,12 +193,16 @@ export function neutralizeSlackBroadcastsDeep(value: unknown, depth: number = 0)
     const elementType = (value as { readonly type?: unknown }).type;
     if (typeof elementType === "string" && STRUCTURAL_BROADCAST_TYPES.has(elementType)) {
       const range = (value as { readonly range?: unknown }).range;
+      // `range` is caller-supplied and this is the one string leaf the
+      // traversal builds rather than visits, so it would otherwise be the
+      // single value in the whole payload that skips the lexical escape — a
+      // `range` of `x<!channel>y` would be handed back live inside the very
+      // node written to neutralize a broadcast.
       return {
         type: "text",
-        text:
-          elementType === "broadcast" && typeof range === "string"
-            ? `@${range}`
-            : `@${elementType}`,
+        text: neutralizeSlackBroadcasts(
+          elementType === "broadcast" && typeof range === "string" ? `@${range}` : `@${elementType}`
+        ),
       };
     }
     const escaped: Record<string, unknown> = {};
@@ -264,8 +268,17 @@ export class SlackNotifyTask<
       payload: compactPayload({
         text: allowMentions ? input.text : (neutralizeSlackBroadcastsDeep(input.text) as string),
         blocks: allowMentions ? input.blocks : neutralizeSlackBroadcastsDeep(input.blocks),
-        username: input.username,
-        icon_emoji: input.icon_emoji,
+        // Defence in depth, NOT a closed bypass: whether Slack parses
+        // broadcast syntax inside a display name or an emoji code is
+        // unconfirmed, so this is not evidence of a leak that was open. The
+        // escape is free and side-effect-free on both fields, which is reason
+        // enough not to leave the question standing.
+        username: allowMentions
+          ? input.username
+          : (neutralizeSlackBroadcastsDeep(input.username) as string | undefined),
+        icon_emoji: allowMentions
+          ? input.icon_emoji
+          : (neutralizeSlackBroadcastsDeep(input.icon_emoji) as string | undefined),
         link_names: allowMentions ? undefined : false,
       }),
       headers: undefined,

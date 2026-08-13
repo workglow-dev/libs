@@ -337,8 +337,46 @@ function retryDateFromResponse(
   return undefined;
 }
 
+/**
+ * The `.stack` is checked alongside the message and the `url` field because
+ * V8 bakes the message into the stack string, and a frame can embed the URL on
+ * its own (a module specifier, a fetch wrapper argument). A typed error whose
+ * message happens to be clean but whose stack carries the token would
+ * otherwise be passed through untouched — and stacks are persisted by
+ * `formatErrorChainForDiagnostics`, so "logs are trusted" is not a defence.
+ */
 function leaksUrl(error: FetchUrlJobErrorInstance, url: string): boolean {
-  return error.message.includes(url) || error.url === url;
+  return (
+    error.message.includes(url) ||
+    error.url === url ||
+    (typeof error.stack === "string" && error.stack.includes(url))
+  );
+}
+
+/**
+ * Builds the diagnostic detail for an untyped throw, lifting ONE level of
+ * `.cause` message onto it.
+ *
+ * undici rejects every connection-level failure as `TypeError: fetch failed`
+ * and puts the text that says WHY — `ECONNREFUSED`, `ENOTFOUND`, a TLS
+ * failure — on `.cause`. Reporting the outer message alone renders every
+ * network failure as the same three unactionable words.
+ *
+ * Only the message is lifted, never the cause OBJECT — see the note in
+ * {@link toRedactedWebhookError}.
+ */
+function detailWithCause(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof Error)) {
+    return detail;
+  }
+  const cause = (error as { readonly cause?: unknown }).cause;
+  const causeMessage = (cause as { readonly message?: unknown } | undefined)?.message;
+  if (typeof causeMessage !== "string" || causeMessage.length === 0) {
+    return detail;
+  }
+  // A wrapper that already quotes its cause needs no second copy.
+  return detail.includes(causeMessage) ? detail : `${detail}: ${causeMessage}`;
 }
 
 /**
@@ -407,15 +445,33 @@ function toRedactedWebhookError(
     // a PERSISTED job-error string, which would re-import the unredacted URL
     // this rebuild just stripped. `createFetchUrlJobError` sets no cause today
     // and none must be added here.
+    //
+    // The same reasoning is why the generic branch below lifts only the cause's
+    // MESSAGE — already redacted — into its own message, and never attaches the
+    // cause object itself.
     rebuilt.stack = redactedStackFrom(error, rebuilt, url);
     return rebuilt;
   }
-  const detail = error instanceof Error ? error.message : String(error);
+  // Redacted BEFORE truncating: cutting first can slice a token in half so it
+  // no longer matches the candidates, leaving a usable prefix behind — the same
+  // ordering the response-body path uses.
+  const detail = truncate(redactWebhookUrlIn(detailWithCause(error), url), MAX_ERROR_BODY_CHARS);
   return createFetchUrlJobError(
     FetchUrlErrorCode.NETWORK_ERROR,
-    `Network error posting ${label} to ${redactWebhookUrl(url)}: ${redactWebhookUrlIn(detail, url)}`,
+    `Network error posting ${label} to ${redactWebhookUrl(url)}: ${detail}`,
     { url: redactWebhookUrl(url) }
   );
+}
+
+/** What {@link readBodyText} read, and whether that is the whole body. */
+interface WebhookBodyRead {
+  readonly text: string;
+  /**
+   * False when the read stopped short of the end of the body — the byte cap
+   * was hit, or the stream errored mid-body. The caller marks such a body as
+   * truncated rather than presenting a fragment as the endpoint's full reply.
+   */
+  readonly complete: boolean;
 }
 
 /**
@@ -427,18 +483,26 @@ function toRedactedWebhookError(
  * unconditionally for all three notification tasks. Streaming lets the read be
  * abandoned mid-body: once the cap is passed the reader is cancelled and
  * whatever arrived so far is returned.
+ *
+ * `complete` is reported rather than inferred. A mid-stream failure returns
+ * exactly what a successful short read returns, so without the flag a
+ * connection that died halfway through the reply is indistinguishable from the
+ * endpoint's complete answer — and the fragment is surfaced as the task's
+ * `response` under `success: true`. It is a flag and not a throw on purpose:
+ * the POST already returned 2xx, so the notification WAS delivered, and
+ * throwing here would have the caller retry and post the message twice.
  */
 async function readBodyText(
   response: Response,
   maxBytes: number = SECURITY_LIMITS.webhookMaxResponseBodyBytes
-): Promise<string> {
+): Promise<WebhookBodyRead> {
   const body = response.body;
   if (body === null || body === undefined || typeof body.getReader !== "function") {
     // A bodiless response (204) or a runtime without streaming support.
     try {
-      return await response.text();
+      return { text: await response.text(), complete: true };
     } catch {
-      return "";
+      return { text: "", complete: false };
     }
   }
 
@@ -450,7 +514,7 @@ async function readBodyText(
     for (;;) {
       const { done, value } = await reader.read();
       if (done) {
-        return text + decoder.decode();
+        return { text: text + decoder.decode(), complete: true };
       }
       if (value === undefined) {
         continue;
@@ -461,11 +525,11 @@ async function readBodyText(
         await reader.cancel().catch(() => {});
         // Flush the decoder here too: abandoning the read mid-body can leave a
         // partial multi-byte sequence buffered, which is dropped otherwise.
-        return text + decoder.decode();
+        return { text: text + decoder.decode(), complete: false };
       }
     }
   } catch {
-    return text;
+    return { text, complete: false };
   }
 }
 
@@ -607,14 +671,20 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
     // A residual gap remains and is deliberately not closed here: `readBodyText`
     // stops at `SECURITY_LIMITS.webhookMaxResponseBodyBytes`, so a token
     // straddling that boundary can still leave a partial behind.
-    const text = await readBodyText(response);
+    const { text, complete } = await readBodyText(response);
+    const surfaced = truncate(redactWebhookUrlIn(text, url), MAX_RESPONSE_BODY_CHARS);
     return {
       status: response.status,
-      body: truncate(redactWebhookUrlIn(text, url), MAX_RESPONSE_BODY_CHARS),
+      // An incomplete read carries the same marker `truncate` uses, so a body
+      // cut short by the byte cap or a dead connection cannot be read as the
+      // endpoint's whole reply. `truncate` may already have added it.
+      body: complete || surfaced.endsWith("...") ? surfaced : `${surfaced}...`,
     };
   }
 
-  const failureBody = await readBodyText(response);
+  // The failure path ignores `complete`: the status error is what this throw
+  // reports, and a partial diagnostic body does not change it.
+  const { text: failureBody } = await readBodyText(response);
   const retryDate = retryDateFromResponse(response, failureBody, request.retryAfterFromJsonBody);
   const redacted = redactWebhookUrl(url);
   // The status is still reported for a private destination — the reply BODY is

@@ -28,7 +28,7 @@
  * proceeds.
  */
 
-import { PermanentJobError } from "@workglow/job-queue";
+import { PermanentJobError, RetryableJobError } from "@workglow/job-queue";
 import { discordNotify, getSafeFetchImpl, slackNotify } from "@workglow/tasks";
 import { SECURITY_LIMITS } from "@workglow/util";
 import http from "node:http";
@@ -60,6 +60,18 @@ async function closeServer(server: http.Server): Promise<void> {
   // callback never fires and the hook times out.
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+/**
+ * Binds an ephemeral loopback port and immediately releases it, so a connection
+ * to it is refused. Not registered for teardown — it is already closed.
+ */
+async function refusedOrigin(): Promise<string> {
+  const server = http.createServer(() => {});
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return `http://127.0.0.1:${port}`;
 }
 
 /** Timer that is cleared on teardown, so a stalling handler cannot leak one. */
@@ -181,6 +193,29 @@ describe("Notification tasks over the real server transport (no mocks)", () => {
     expect(error).toBeInstanceOf(PermanentJobError);
     expect(error.httpStatus).toBe(400);
     // The URL is the credential; it must not survive into the diagnostic.
+    expect(error.message).not.toContain("SECRETTOKEN");
+
+    await drainRejections();
+    expect(unhandled).toEqual([]);
+  });
+
+  // The reason this case belongs in the real-transport file: the `.cause` here
+  // is undici's own, not a fixture's. undici rejects a refused connection as
+  // `TypeError: fetch failed` and puts the only actionable text — the errno —
+  // on the cause, so an operator reading the job error saw three words that
+  // never distinguished a refused port from an unresolvable host or a TLS
+  // failure.
+  test("a refused connection reports the underlying cause, not just 'fetch failed'", async () => {
+    const origin = await refusedOrigin();
+
+    const error = (await slackNotify({
+      url: `${origin}${slackPath}`,
+      text: "hi",
+      allow_private_destination: true,
+    }).catch((e: unknown) => e)) as RetryableJobError;
+
+    expect(error).toBeInstanceOf(RetryableJobError);
+    expect(error.message).toContain("ECONNREFUSED");
     expect(error.message).not.toContain("SECRETTOKEN");
 
     await drainRejections();

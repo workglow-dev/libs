@@ -302,6 +302,55 @@ describe("Webhook notification tasks", () => {
       expect(error.code).toBe(FetchUrlErrorCode.NETWORK_ERROR);
       expect(error.message).toContain("ECONNREFUSED");
     });
+
+    // undici rejects EVERY connection failure as `TypeError: fetch failed` and
+    // puts the text that says why on `.cause`. Reporting only the outer message
+    // makes a refused connection, an unresolvable host and a TLS failure read
+    // identically. The cause's message is lifted; the cause OBJECT is not,
+    // because `formatErrorChainForDiagnostics` persists every link's message
+    // and stack and would re-import the unredacted URL.
+    test("a network rejection lifts its cause message without importing the URL", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.reject(
+          new TypeError("fetch failed", {
+            cause: new Error(`connect ECONNREFUSED to ${SLACK_URL}`),
+          })
+        )
+      );
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "hi" }).catch(
+        (e: unknown) => e
+      )) as RetryableJobError;
+
+      expect(error).toBeInstanceOf(RetryableJobError);
+      expect(error.message).toContain("ECONNREFUSED");
+      expect(error.message).not.toContain("SECRETTOKEN");
+      expect(error.cause).toBeUndefined();
+      expect(formatErrorChainForDiagnostics(error)).not.toContain("SECRETTOKEN");
+    });
+
+    // `leaksUrl` used to ask only the message and the `url` field. A typed
+    // error can carry the token in its STACK alone — V8 bakes the message of
+    // whatever threw into it — and such an error was passed through untouched.
+    test("a typed error leaking the token only through its stack is rewritten", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.reject(
+          Object.assign(
+            createFetchUrlJobError(FetchUrlErrorCode.NETWORK_ERROR, "socket hang up", {
+              url: "https://hooks.slack.com",
+            }),
+            { stack: `FetchUrlJobError: socket hang up\n    at post (${SLACK_URL}:1:1)` }
+          )
+        )
+      );
+
+      const error = (await slackNotify({ url: SLACK_URL, text: "hi" }).catch(
+        (e: unknown) => e
+      )) as RetryableJobError;
+
+      expect(String(error.stack)).not.toContain("SECRETTOKEN");
+      expect(formatErrorChainForDiagnostics(error)).not.toContain("SECRETTOKEN");
+    });
   });
 
   describe("DiscordNotifyTask", () => {
@@ -508,6 +557,39 @@ describe("Webhook notification tasks", () => {
       expect(result.response).not.toContain("SECRETTOKEN");
       // The origin stays as the useful diagnostic.
       expect(result.response).toContain("https://example.com");
+    });
+
+    // A body cut short by a dead connection used to be returned exactly as a
+    // complete short body is, and surfaced as the task's `response` under
+    // `success: true` — a fragment presented as the endpoint's whole reply.
+    // It is marked, not thrown on: the POST already returned 2xx, so the
+    // notification WAS delivered and a throw would post it twice on retry.
+    test("a body whose stream fails mid-read is marked truncated, not passed off as whole", async () => {
+      // The error must land on a LATER read than the chunk: erroring in the
+      // same turn discards what was already enqueued, which would make the
+      // fixture a bodiless failure rather than a body cut in half.
+      mockFetch.mockImplementation(() => {
+        let reads = 0;
+        return Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (reads++ === 0) {
+                  controller.enqueue(new TextEncoder().encode("partial-"));
+                  return;
+                }
+                controller.error(new Error("connection reset"));
+              },
+            }),
+            { status: 200 }
+          )
+        );
+      });
+
+      const result = await webhookNotify({ url: WEBHOOK_URL, payload: {} });
+
+      expect(result.success).toBe(true);
+      expect(result.response).toBe("partial-...");
     });
 
     // An endpoint routinely echoes only PART of the URL, which the literal
@@ -1012,6 +1094,32 @@ describe("Webhook notification tasks", () => {
       // which would turn this control into an availability bug. `link_names`
       // is already false, so the literal text cannot auto-link.
       expect(body).toContain("@channel");
+    });
+
+    // `range` is caller-controlled and the replacement node is BUILT from it
+    // rather than visited, so it was the one string leaf in the whole traversal
+    // that skipped the lexical escape — a live `<!channel>` handed back inside
+    // the node written to neutralize a broadcast.
+    test("Slack escapes a broadcast range that smuggles its own sigil", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [{ type: "broadcast", range: "x<!channel>y" }],
+              },
+            ],
+          },
+        ],
+      });
+
+      const body = lastCall().options.body as string;
+      expect(body).not.toContain("<!channel>");
+      expect(body).toContain("&lt;!channel>");
     });
 
     test("Slack neutralizes a rich_text usergroup ping", async () => {
