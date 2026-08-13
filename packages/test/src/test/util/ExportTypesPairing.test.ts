@@ -47,6 +47,17 @@ interface BranchLocation {
   readonly manifest: string;
   readonly subpath: string;
   readonly condition: string;
+  /**
+   * Which of {@link IMPLEMENTATION_KEYS} named this implementation, or
+   * `undefined` for the string-shorthand form where the condition's own value
+   * IS the implementation and there is no separate key.
+   *
+   * Part of the identity because one object can now yield several branches —
+   * `{types, require, default}` produces one per string-valued implementation
+   * key — and they would otherwise share a label, colliding as the key for
+   * `ALLOWED_MISMATCHES` and the staleness check.
+   */
+  readonly implementationKey: string | undefined;
   readonly implementation: string;
   readonly expectedTypes: string;
 }
@@ -113,6 +124,7 @@ function collectBranches(
         manifest,
         subpath,
         condition,
+        implementationKey: undefined,
         types: undefined,
         reason: "missing",
         implementation: node,
@@ -123,18 +135,24 @@ function collectBranches(
   }
   if (typeof node !== "object" || node === null || Array.isArray(node)) return;
   const entry = node as Record<string, unknown>;
-  const implementationKey = IMPLEMENTATION_KEYS.find((key) => typeof entry[key] === "string");
-  if (implementationKey !== undefined) {
+  // EVERY string-valued implementation key, not just the first. A dual-package
+  // object writes them flat — `{types, import: "./a.mjs", require: "./a.cjs"}` —
+  // and taking only `import` left `require` unchecked, so a `.cjs` paired with a
+  // `.d.ts` sailed through. The file's own `.cjs` fixtures use the nested form,
+  // which is why the flat shape was never exercised.
+  const implementationKeys = IMPLEMENTATION_KEYS.filter((key) => typeof entry[key] === "string");
+  const keys = Object.keys(entry);
+  for (const implementationKey of implementationKeys) {
     const implementation = entry[implementationKey] as string;
     const location: BranchLocation = {
       manifest,
       subpath,
       condition,
+      implementationKey,
       implementation,
       expectedTypes: declarationFor(implementation),
     };
     const types = entry.types;
-    const keys = Object.keys(entry);
     out.push(
       typeof types === "string"
         ? {
@@ -162,7 +180,8 @@ function collectBranches(
 }
 
 function label(branch: Branch): string {
-  return `${branch.manifest} exports["${branch.subpath}"] [${branch.condition}]`;
+  const key = branch.implementationKey === undefined ? "" : ` > ${branch.implementationKey}`;
+  return `${branch.manifest} exports["${branch.subpath}"] [${branch.condition}${key}]`;
 }
 
 function isViolation(branch: Branch): boolean {
@@ -197,6 +216,70 @@ function findViolations(manifest: string, exportsMap: Record<string, unknown>): 
     .filter(isViolation)
     .filter((branch) => !ALLOWED_MISMATCHES.has(label(branch)))
     .map(violationMessage);
+}
+
+function isImplementationString(entry: Record<string, unknown>, key: string): boolean {
+  return (IMPLEMENTATION_KEYS as readonly string[]).includes(key) && typeof entry[key] === "string";
+}
+
+/**
+ * Condition keys made unreachable by a SIBLING declared before them.
+ *
+ * The pairing rule and its `typesBeforeImplementation` flag both look inside a
+ * single object, so they see nothing wrong with a map whose branches are
+ * individually well formed but ordered so that one can never be selected.
+ * Resolution stops at the first key that matches, so:
+ *
+ * - `{types, browser: {…}, import}` — TypeScript matches the outer `types` and
+ *   never looks at `browser`, which is exactly the browser-typed-as-node bug
+ *   this file exists to prevent, expressed through ordering instead of through
+ *   a wrong target; and
+ * - `{import, browser: {…}}` — a runtime honoring `browser` still matches
+ *   `import` first, so the browser build never loads.
+ *
+ * Both shapes yield `violations: []` and `late: []` from the existing checks.
+ *
+ * The string-shorthand form (`browser: "./dist/x.js"`) is included: it is just
+ * as dead as the object form, and this repo demonstrably writes it.
+ */
+function orderViolations(manifest: string, exportsMap: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const walk = (subpath: string, conditionPath: readonly string[], node: unknown): void => {
+    if (typeof node !== "object" || node === null || Array.isArray(node)) return;
+    const entry = node as Record<string, unknown>;
+    const keys = Object.keys(entry);
+    const typesIndex = keys.indexOf("types");
+    const implementationIndex = keys.findIndex((key) => isImplementationString(entry, key));
+    const where = conditionPath.join(" > ") || "(default)";
+    const at = `${manifest} exports["${subpath}"] [${where}]`;
+
+    keys.forEach((key, index) => {
+      // Only condition keys can be shadowed. `types` and the implementation
+      // strings are the things that DO the shadowing.
+      if (key === "types" || isImplementationString(entry, key)) return;
+      if (typesIndex >= 0 && typesIndex < index) {
+        out.push(
+          `${at}: condition "${key}" is declared after "types", so TypeScript resolves ` +
+            `"types" first and "${key}" is never reached`
+        );
+      }
+      if (implementationIndex >= 0 && implementationIndex < index) {
+        out.push(
+          `${at}: condition "${key}" is declared after "${keys[implementationIndex]}", so ` +
+            `resolution stops there and "${key}" is never reached`
+        );
+      }
+    });
+
+    for (const [key, value] of Object.entries(entry)) {
+      if (key === "types" || typeof value === "string") continue;
+      walk(subpath, [...conditionPath, key], value);
+    }
+  };
+  for (const [subpath, value] of Object.entries(exportsMap)) {
+    walk(subpath, [], value);
+  }
+  return out;
 }
 
 interface WorkspaceRoot {
@@ -316,6 +399,13 @@ describe("workspace exports maps", () => {
     expect(late).toEqual([]);
   });
 
+  it("declares every condition before the siblings that would shadow it", () => {
+    const shadowed = manifests.flatMap((manifest) =>
+      orderViolations(manifest.relative, manifest.exports)
+    );
+    expect(shadowed).toEqual([]);
+  });
+
   it("keeps the allowlist free of entries that no longer mismatch", () => {
     const stale = [...ALLOWED_MISMATCHES].filter(
       (entry) => !branches.some((branch) => label(branch) === entry && isViolation(branch))
@@ -413,9 +503,42 @@ describe("exports map violation detection", () => {
         },
       })
     ).toEqual([
-      'fixture/package.json exports["."] [browser]: implementation "./dist/ai.browser.js" ' +
-        'declares no types (expected types="./dist/ai.browser.d.ts")',
+      'fixture/package.json exports["."] [browser > import]: implementation ' +
+        '"./dist/ai.browser.js" declares no types (expected types="./dist/ai.browser.d.ts")',
     ]);
+  });
+
+  /**
+   * A flat dual-package object. `IMPLEMENTATION_KEYS.find(...)` stopped at
+   * `import`, so `require`'s `.cjs` was never paired against anything and its
+   * `.d.ts` mismatch went unreported. The nested `require: {types, default}`
+   * form the fixtures below use is what hid this.
+   */
+  it("checks every implementation key in a flat dual-package branch", () => {
+    expect(
+      findViolations("fixture/package.json", {
+        ".": {
+          types: "./dist/a.d.ts",
+          import: "./dist/a.js",
+          require: "./dist/a.cjs",
+        },
+      })
+    ).toEqual([
+      'fixture/package.json exports["."] [(default) > require]: types="./dist/a.d.ts" but ' +
+        'implementation is "./dist/a.cjs" (expected types="./dist/a.d.cts")',
+    ]);
+  });
+
+  it("does not turn extra agreeing implementation keys into noise", () => {
+    expect(
+      findViolations("fixture/package.json", {
+        ".": {
+          types: "./dist/a.d.ts",
+          import: "./dist/a.js",
+          default: "./dist/a.js",
+        },
+      })
+    ).toEqual([]);
   });
 
   it("accepts a `.cjs`/`.mjs` implementation declared by its own extension", () => {
@@ -440,8 +563,8 @@ describe("exports map violation detection", () => {
         },
       })
     ).toEqual([
-      'fixture/package.json exports["."] [require]: types="./dist/ai.d.ts" but implementation ' +
-        'is "./dist/ai.cjs" (expected types="./dist/ai.d.cts")',
+      'fixture/package.json exports["."] [require > default]: types="./dist/ai.d.ts" but ' +
+        'implementation is "./dist/ai.cjs" (expected types="./dist/ai.d.cts")',
     ]);
   });
 
@@ -449,6 +572,76 @@ describe("exports map violation detection", () => {
     expect(findViolations("fixture/package.json", { "./package.json": "./package.json" })).toEqual(
       []
     );
+  });
+
+  /**
+   * Ordering hazards. Each shape is internally well formed — every `types`
+   * names the right target beside the right implementation — so the pairing
+   * rule and the `typesBeforeImplementation` flag both pass them, which is the
+   * whole reason the order check has to exist separately.
+   */
+  describe("condition ordering", () => {
+    const outerTypesFirst = {
+      ".": {
+        types: "./dist/node.d.ts",
+        browser: { types: "./dist/browser.d.ts", import: "./dist/browser.js" },
+        import: "./dist/node.js",
+      },
+    };
+
+    it("reports a nested condition shadowed by an outer `types`", () => {
+      // Documenting WHY a second check is needed: the pairing rule is silent
+      // here, so without this the dead `browser` branch ships unnoticed.
+      expect(findViolations("fixture/package.json", outerTypesFirst)).toEqual([]);
+
+      expect(orderViolations("fixture/package.json", outerTypesFirst)).toEqual([
+        'fixture/package.json exports["."] [(default)]: condition "browser" is declared after ' +
+          '"types", so TypeScript resolves "types" first and "browser" is never reached',
+      ]);
+    });
+
+    it("reports a nested condition shadowed by an implementation key", () => {
+      const implementationFirst = {
+        ".": {
+          import: "./dist/node.js",
+          browser: { types: "./dist/browser.d.ts", import: "./dist/browser.js" },
+        },
+      };
+      expect(orderViolations("fixture/package.json", implementationFirst)).toEqual([
+        'fixture/package.json exports["."] [(default)]: condition "browser" is declared after ' +
+          '"import", so resolution stops there and "browser" is never reached',
+      ]);
+    });
+
+    // Guards against an "objects only" implementation: a string shorthand is
+    // just as dead, and this repo writes that form.
+    it("reports a string-shorthand condition declared after `types`", () => {
+      const shorthandLate = {
+        ".": {
+          types: "./dist/node.d.ts",
+          import: "./dist/node.js",
+          browser: "./dist/browser.js",
+        },
+      };
+      expect(orderViolations("fixture/package.json", shorthandLate)).toEqual([
+        'fixture/package.json exports["."] [(default)]: condition "browser" is declared after ' +
+          '"types", so TypeScript resolves "types" first and "browser" is never reached',
+        'fixture/package.json exports["."] [(default)]: condition "browser" is declared after ' +
+          '"import", so resolution stops there and "browser" is never reached',
+      ]);
+    });
+
+    it("accepts a condition declared before both", () => {
+      expect(
+        orderViolations("fixture/package.json", {
+          ".": {
+            browser: { types: "./dist/browser.d.ts", import: "./dist/browser.js" },
+            types: "./dist/node.d.ts",
+            import: "./dist/node.js",
+          },
+        })
+      ).toEqual([]);
+    });
   });
 
   it("derives a source entry from a dist target", () => {
