@@ -42,7 +42,7 @@ const inputSchema = {
       items: { type: "object", additionalProperties: true },
       title: "Blocks",
       description:
-        "Slack Block Kit blocks. Channel-wide broadcasts are neutralized in every string inside the structure, the same as 'text', unless 'allow_mentions' is set.",
+        "Slack Block Kit blocks. Channel-wide broadcasts are neutralized in every string inside the structure, the same as 'text', and rich_text broadcast/usergroup elements — which carry no escapable text — are rewritten to plain text, unless 'allow_mentions' is set.",
     },
     username: {
       type: "string",
@@ -59,7 +59,7 @@ const inputSchema = {
       default: false,
       title: "Allow Mentions",
       description:
-        "Send 'text' and 'blocks' unmodified. By default channel-wide broadcasts (<!channel>, <!here>, <!everyone>, <!subteam^ID>) are neutralized in both so piped or model-generated content cannot notify a whole workspace.",
+        "Send 'text' and 'blocks' unmodified. By default channel-wide broadcasts are neutralized in both — the text forms (<!channel>, <!here>, <!everyone>, <!subteam^ID>) by escaping, and the rich_text broadcast/usergroup element shapes by rewriting — so piped or model-generated content cannot notify a whole workspace.",
     },
     timeout: {
       type: "number",
@@ -114,11 +114,15 @@ export type SlackNotifyTaskOutput = FromSchema<typeof outputSchema>;
  * Defuses Slack's channel-wide broadcast sequences in caller-supplied text.
  *
  * Slack has no `allowed_mentions` equivalent; its documented control is
- * HTML-entity escaping. Broadcasts are all written `<!…>` — `<!channel>`,
- * `<!here>`, `<!everyone>` and the group form `<!subteam^ID>` — so escaping
- * just the opening `<!` kills every one of them while leaving `<https://…|label>`
- * links and single-user `<@U123>` mentions intact, which full `<`/`>` escaping
- * would break.
+ * HTML-entity escaping. In message TEXT every broadcast is written `<!…>` —
+ * `<!channel>`, `<!here>`, `<!everyone>` and the group form `<!subteam^ID>` —
+ * so escaping just the opening `<!` kills every one of them while leaving
+ * `<https://…|label>` links and single-user `<@U123>` mentions intact, which
+ * full `<`/`>` escaping would break.
+ *
+ * Text is not the only form: Block Kit `rich_text` expresses the same ping
+ * structurally, with no `<!` to escape. That half is handled by
+ * {@link neutralizeSlackBroadcastsDeep}.
  *
  * `link_names` is NOT a substitute: it governs auto-linking of bare `@name`
  * text, not these control sequences.
@@ -128,15 +132,43 @@ export function neutralizeSlackBroadcasts(text: string): string {
 }
 
 /**
- * Applies {@link neutralizeSlackBroadcasts} to every string inside a Block Kit
- * structure, so `text` and `blocks` share one escape rule rather than two.
+ * Block Kit element types that ARE a broadcast, rather than containing one as
+ * text. Slack renders these from their shape — no `<!` sigil is involved — so
+ * the lexical escape cannot see them.
+ */
+const STRUCTURAL_BROADCAST_TYPES: ReadonlySet<string> = new Set(["broadcast", "usergroup"]);
+
+/**
+ * Neutralizes channel-wide broadcasts inside a Block Kit structure, so `text`
+ * and `blocks` share one rule rather than two.
  *
- * EVERY string leaf is escaped, not just the ones that render as message body.
- * `<!` is a broadcast sigil wherever Slack finds it and has no legitimate
- * occurrence in a `type`, `block_id`, `action_id` or URL field, so escaping all
- * of them is complete and side-effect-free — it covers `fields[]`,
- * `elements[]`, accessories and header/context blocks without enumerating them,
- * and cannot miss a block shape Slack adds later.
+ * Two mechanisms, because Slack has two ways to say the same thing.
+ *
+ * 1. LEXICAL — {@link neutralizeSlackBroadcasts} on EVERY string leaf, not just
+ *    the ones that render as message body. `<!` is a broadcast sigil wherever
+ *    Slack finds it and has no legitimate occurrence in a `type`, `block_id`,
+ *    `action_id` or URL field, so escaping all of them is side-effect-free — it
+ *    covers `fields[]`, `elements[]`, accessories and header/context blocks
+ *    without enumerating them, and cannot miss a block SHAPE Slack adds later.
+ *
+ * 2. STRUCTURAL — a `rich_text` message says `@channel` with
+ *    `{type: "broadcast", range: "channel"}` and a group ping with
+ *    `{type: "usergroup", usergroup_id: "S…"}`. There is no `<!` anywhere in
+ *    either, so escaping string leaves leaves both fully live. Such an element
+ *    is REWRITTEN to a plain text node rather than deleted: dropping it can
+ *    leave an `elements[]` empty, which Slack rejects — turning a security
+ *    control into an availability bug. The replacement text is literal
+ *    (`@channel`), and `link_names: false` is already sent whenever mentions are
+ *    disallowed, so it cannot auto-link.
+ *
+ * Matching on `type` alone rather than on `rich_text` ancestry is deliberate:
+ * the only false positive is a caller who wanted a live usergroup ping, which is
+ * exactly what this control exists to stop.
+ *
+ * Residual: a NEW structural notification element type Slack introduces later is
+ * uncovered until it is added to {@link STRUCTURAL_BROADCAST_TYPES}. Unlike the
+ * lexical half, this one cannot be shape-agnostic — a structural broadcast is
+ * identified by nothing but its type name.
  *
  * New structures are returned; the input may be edge-owned and is never
  * mutated. Depth is capped rather than cycle-tracked: a cycle is infinitely
@@ -158,6 +190,17 @@ export function neutralizeSlackBroadcastsDeep(value: unknown, depth: number = 0)
     return value.map((entry) => neutralizeSlackBroadcastsDeep(entry, depth + 1));
   }
   if (typeof value === "object" && value !== null) {
+    const elementType = (value as { readonly type?: unknown }).type;
+    if (typeof elementType === "string" && STRUCTURAL_BROADCAST_TYPES.has(elementType)) {
+      const range = (value as { readonly range?: unknown }).range;
+      return {
+        type: "text",
+        text:
+          elementType === "broadcast" && typeof range === "string"
+            ? `@${range}`
+            : `@${elementType}`,
+      };
+    }
     const escaped: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value)) {
       escaped[key] = neutralizeSlackBroadcastsDeep(entry, depth + 1);

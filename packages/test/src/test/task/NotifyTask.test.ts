@@ -819,6 +819,101 @@ describe("Webhook notification tasks", () => {
       expect(body).not.toContain("&lt;!");
       expect(body).not.toContain("link_names");
     });
+
+    // The structural half. A `rich_text` message says @channel with an element
+    // SHAPE, not with the `<!channel>` sigil, so there is no `<!` for the
+    // lexical escape to find and the ping goes out fully live. Escaping every
+    // string leaf — which is what the docs called complete — does nothing here.
+    test("Slack neutralizes a rich_text broadcast element, which carries no escapable text", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [{ type: "broadcast", range: "channel" }],
+              },
+            ],
+          },
+        ],
+      });
+
+      const body = lastCall().options.body as string;
+      expect(body).not.toContain('"type":"broadcast"');
+      expect(body).not.toContain('"range":"channel"');
+      // Rewritten, not deleted: an emptied `elements[]` is rejected by Slack,
+      // which would turn this control into an availability bug. `link_names`
+      // is already false, so the literal text cannot auto-link.
+      expect(body).toContain("@channel");
+    });
+
+    test("Slack neutralizes a rich_text usergroup ping", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [{ type: "usergroup", usergroup_id: "S12345678" }],
+              },
+            ],
+          },
+        ],
+      });
+
+      const body = lastCall().options.body as string;
+      expect(body).not.toContain("usergroup_id");
+      expect(body).not.toContain("S12345678");
+      expect(body).toContain("@usergroup");
+    });
+
+    // Asserted rather than assumed: this currently passes for the wrong reason
+    // (nothing rewrites the element at all), so it pins the gate rather than
+    // documenting it.
+    test("allow_mentions leaves a rich_text broadcast element verbatim", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [{ type: "broadcast", range: "channel" }],
+              },
+            ],
+          },
+        ],
+        allow_mentions: true,
+      });
+
+      const body = lastCall().options.body as string;
+      expect(body).toContain('"type":"broadcast"');
+      expect(body).toContain('"range":"channel"');
+    });
+
+    // Narrowness guard: the rewrite keys on `type` alone, so an ordinary block
+    // whose type is not a broadcast must pass through untouched — including its
+    // own nested `type` fields.
+    test("an ordinary section block is not rewritten by the structural pass", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "deploy done" } }],
+      });
+
+      const body = lastCall().options.body as string;
+      expect(body).toContain('"type":"section"');
+      expect(body).toContain('"type":"mrkdwn"');
+      expect(body).toContain("deploy done");
+    });
   });
 
   describe("request timeouts", () => {
