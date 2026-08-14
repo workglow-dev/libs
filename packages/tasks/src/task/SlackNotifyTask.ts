@@ -15,6 +15,7 @@ import { SECURITY_LIMITS } from "@workglow/util";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import {
   compactPayload,
+  MAX_REQUEST_TIMEOUT_MS,
   postWebhookJson,
   resolveWebhookUrl,
   webhookBaseEntitlements,
@@ -62,12 +63,13 @@ const inputSchema = {
         "Send 'text' and 'blocks' unmodified. By default channel-wide broadcasts are neutralized in both — the text forms (<!channel>, <!here>, <!everyone>, <!subteam^ID>) by escaping, and the rich_text broadcast/usergroup element shapes by rewriting — so piped or model-generated content cannot notify a whole workspace. Slack's <!date^...> formatting token notifies nobody and is left live either way, so a date does not need this setting.",
     },
     timeout: {
-      type: "number",
+      type: "integer",
       default: 30000,
       minimum: 1,
+      maximum: MAX_REQUEST_TIMEOUT_MS,
       title: "Timeout",
       description:
-        "Request timeout in milliseconds. There is no 'wait forever' setting: a black-holed endpoint would pin the task until the caller aborts.",
+        "Request timeout in milliseconds, a whole number no greater than 2147483647 (~24.8 days). There is no 'wait forever' setting: a black-holed endpoint would pin the task until the caller aborts, and a larger value would silently fire after 1 ms.",
     },
     allow_private_destination: {
       type: "boolean",

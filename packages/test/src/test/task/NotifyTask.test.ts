@@ -10,6 +10,7 @@ import {
   PermanentJobError,
   RetryableJobError,
 } from "@workglow/job-queue";
+import type { IExecuteContext } from "@workglow/task-graph";
 import {
   createPolicyEnforcer,
   createProfilePolicy,
@@ -79,6 +80,21 @@ function lastCall(): { url: string; options: SafeFetchOptions } {
 
 function requestHeaders(): Record<string, string> {
   return lastCall().options.headers as Record<string, string>;
+}
+
+/**
+ * Minimal execute context, used by the few cases that must reach `execute()`
+ * directly to bypass schema validation and exercise a runtime guard.
+ */
+function makeContext(): IExecuteContext {
+  return {
+    signal: new AbortController().signal,
+    updateProgress: async () => {},
+    own: <T>(t: T) => t,
+    disown: () => {},
+    registry: undefined as unknown as IExecuteContext["registry"],
+    resourceScope: undefined,
+  };
 }
 
 describe("Webhook notification tasks", () => {
@@ -1297,6 +1313,92 @@ describe("Webhook notification tasks", () => {
       expect(error).toBeInstanceOf(AbortSignalJobError);
       expect(error).not.toBeInstanceOf(RetryableJobError);
       expect((error as { code?: string }).code).not.toBe(FetchUrlErrorCode.NETWORK_ERROR);
+    });
+
+    // `AbortSignal.timeout` validates its delay as a uint32 INTEGER: a
+    // fractional value throws a bare `RangeError` a queued consumer cannot
+    // classify, and anything past the SIGNED 32-bit range is clamped to 1 ms
+    // with a `TimeoutOverflowWarning` — so "effectively never time out" aborts
+    // instantly and blames the endpoint. Both are refused, at the schema and
+    // again at the runtime guard.
+    test("the schema rejects a fractional timeout before any request", async () => {
+      const error = await slackNotify({ url: SLACK_URL, text: "hi", timeout: 500.5 }).catch(
+        (e: unknown) => e
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      // Rejected by validation, not by the platform timer blowing up on it.
+      expect(error).not.toBeInstanceOf(RangeError);
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    test("the schema rejects a timeout past the 32-bit timer bound", async () => {
+      const error = await slackNotify({
+        url: SLACK_URL,
+        text: "hi",
+        timeout: 3_000_000_000,
+      }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    // Reached through `execute` directly, bypassing schema validation, because
+    // that is what a queued consumer classifying a failure sees: the guard has
+    // to produce a PERMANENT, coded error rather than the platform's
+    // `RangeError`, which would be retried forever.
+    test("the timeout guard is a classifiable configuration error, not a RangeError", async () => {
+      const error = (await new SlackNotifyTask()
+        .execute({ url: SLACK_URL, text: "hi", timeout: 500.5 } as never, makeContext())
+        .catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error).not.toBeInstanceOf(RetryableJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(error.message).toContain("2147483647");
+      expect(error.message).not.toContain("SECRETTOKEN");
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    test("a timeout past the bound is refused rather than firing after 1 ms", async () => {
+      const error = (await new SlackNotifyTask()
+        .execute({ url: SLACK_URL, text: "hi", timeout: 3_000_000_000 } as never, makeContext())
+        .catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(error.message).not.toContain("Timed out");
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    test("the largest honored timeout is accepted", async () => {
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+      try {
+        await expect(
+          slackNotify({ url: SLACK_URL, text: "hi", timeout: 2147483647 })
+        ).resolves.toBeDefined();
+        expect(timeoutSpy).toHaveBeenLastCalledWith(2147483647);
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
+
+    // The port is duplicated across three task schemas, so the bound is
+    // asserted on all three: fixing one and missing the others is the shape
+    // this defect already had.
+    test("all three notify tasks bound the timeout port identically", () => {
+      for (const schema of [
+        SlackNotifyTask.inputSchema(),
+        DiscordNotifyTask.inputSchema(),
+        WebhookNotifyTask.inputSchema(),
+      ]) {
+        expect((schema.properties as Record<string, unknown>).timeout).toMatchObject({
+          type: "integer",
+          minimum: 1,
+          maximum: 2147483647,
+          default: 30000,
+        });
+      }
     });
   });
 

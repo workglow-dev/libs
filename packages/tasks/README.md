@@ -151,7 +151,7 @@ output schema and error messages report only the endpoint's origin.
 - `url` (string, optional): Webhook endpoint to POST to. Kept out of errors and output, but a value set here is stored verbatim in the graph JSON — use `url_credential_key` to keep the secret out of the saved workflow.
 - `payload` (object, required): JSON body to send
 - `headers` (object, optional): Additional headers, merged over the JSON content type
-- `timeout` (number, optional): Request timeout in milliseconds. Default: `30000`
+- `timeout` (integer, optional): Request timeout in milliseconds, a whole number from 1 to 2147483647 (~24.8 days). Default: `30000`
 - `allow_private_destination` (boolean, optional): Permit posting to a private/internal/loopback destination. Requires the `network:private` entitlement. Default: `false`
 - `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`. A value that is not an absolute `http(s)` URL (e.g. a bearer token) is rejected with a configuration error.
 
@@ -210,7 +210,7 @@ Sends a message to a Slack incoming webhook.
 - `username` (string, optional): Overrides the display name of the posting bot
 - `icon_emoji` (string, optional): Overrides the bot icon, e.g. `:rocket:`
 - `allow_mentions` (boolean, optional): Send `text` unmodified. Default: `false`
-- `timeout` (number, optional): Request timeout in milliseconds. Default: `30000`
+- `timeout` (integer, optional): Request timeout in milliseconds, a whole number from 1 to 2147483647 (~24.8 days). Default: `30000`
 - `allow_private_destination` (boolean, optional): Permit posting to a private/internal/loopback destination. Requires the `network:private` entitlement. Default: `false`
 - `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
 
@@ -267,7 +267,7 @@ Sends a message to a Discord webhook.
 - `avatar_url` (string, optional): Overrides the avatar of the webhook
 - `embeds` (array, optional): Discord embed objects
 - `allow_mentions` (boolean, optional): Let the message ping. Default: `false`
-- `timeout` (number, optional): Request timeout in milliseconds. Default: `30000`
+- `timeout` (integer, optional): Request timeout in milliseconds, a whole number from 1 to 2147483647 (~24.8 days). Default: `30000`
 - `allow_private_destination` (boolean, optional): Permit posting to a private/internal/loopback destination. Requires the `network:private` entitlement. Default: `false`
 - `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
 

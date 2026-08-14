@@ -14,6 +14,7 @@ import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import { classifyUrl } from "../util/UrlClassifier";
 import {
+  MAX_REQUEST_TIMEOUT_MS,
   postWebhookJson,
   resolveWebhookUrl,
   webhookBaseEntitlements,
@@ -43,12 +44,13 @@ const inputSchema = {
       description: "Additional headers merged over the JSON content type",
     },
     timeout: {
-      type: "number",
+      type: "integer",
       default: 30000,
       minimum: 1,
+      maximum: MAX_REQUEST_TIMEOUT_MS,
       title: "Timeout",
       description:
-        "Request timeout in milliseconds. There is no 'wait forever' setting: a black-holed endpoint would pin the task until the caller aborts.",
+        "Request timeout in milliseconds, a whole number no greater than 2147483647 (~24.8 days). There is no 'wait forever' setting: a black-holed endpoint would pin the task until the caller aborts, and a larger value would silently fire after 1 ms.",
     },
     allow_private_destination: {
       type: "boolean",

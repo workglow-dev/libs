@@ -49,6 +49,23 @@ const MAX_RESPONSE_BODY_CHARS = 1024;
 /** Maximum characters of a failure body surfaced in an error message. */
 const MAX_ERROR_BODY_CHARS = 256;
 
+/**
+ * Largest request timeout the platform timer honors, in milliseconds.
+ *
+ * `AbortSignal.timeout` validates its delay as a uint32 and accepts up to
+ * 2^32-1, but anything above the SIGNED 32-bit range is stored in a 32-bit int
+ * and clamped to 1 ms with a `TimeoutOverflowWarning` — so a caller asking to
+ * "effectively never time out" would abort instantly and the failure would be
+ * reported against the endpoint. Accepted-but-silently-wrong is worse than
+ * rejected, so the bound is the signed maximum rather than the unsigned one.
+ *
+ * Deliberately not part of `SECURITY_LIMITS`: that object holds hard ceilings
+ * against resource exhaustion and injection, and this is a platform-timer
+ * bound. Keeping it here lets the three task schemas import the same literal,
+ * so the schema bound and the runtime guard below cannot drift.
+ */
+export const MAX_REQUEST_TIMEOUT_MS = 2147483647;
+
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}...`;
 }
@@ -259,7 +276,14 @@ export interface WebhookPostRequest {
   readonly payload: unknown;
   /** Extra request headers merged over the JSON content type. */
   readonly headers: Readonly<Record<string, string>> | undefined;
-  /** Request timeout in milliseconds. */
+  /**
+   * Request timeout in milliseconds: a whole number from 1 to
+   * {@link MAX_REQUEST_TIMEOUT_MS}. Anything else is a permanent configuration
+   * error, raised before the timer is armed.
+   *
+   * `undefined` means no timer at all, which only a direct caller can ask for
+   * — all three notify task schemas carry `default: 30000`.
+   */
   readonly timeout: number | undefined;
   readonly signal: AbortSignal;
   /**
@@ -615,10 +639,24 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
   if (isPrivate) {
     await assertPrivateDestinationGranted(request.registry, url, label);
   }
-  const timeoutSignal =
-    request.timeout !== undefined && request.timeout > 0
-      ? AbortSignal.timeout(request.timeout)
-      : undefined;
+  // Validated BEFORE the signal is armed, for the same reason the
+  // `JSON.stringify` guard below exists: `AbortSignal.timeout` throws a bare
+  // `RangeError` for a non-integer delay, which is not a `FetchUrlJobError`, so
+  // a queued consumer cannot classify it and retries a permanent configuration
+  // mistake forever.
+  const timeout = request.timeout;
+  if (
+    timeout !== undefined &&
+    (!Number.isInteger(timeout) || timeout < 1 || timeout > MAX_REQUEST_TIMEOUT_MS)
+  ) {
+    throw createFetchUrlJobError(
+      FetchUrlErrorCode.CONFIGURATION,
+      `Cannot post ${label} to ${redactWebhookUrl(url)}: 'timeout' must be a whole number of ` +
+        `milliseconds between 1 and ${MAX_REQUEST_TIMEOUT_MS}; received ${String(timeout)}.`,
+      { url: redactWebhookUrl(url) }
+    );
+  }
+  const timeoutSignal = timeout === undefined ? undefined : AbortSignal.timeout(timeout);
   const signal = timeoutSignal ? AbortSignal.any([request.signal, timeoutSignal]) : request.signal;
 
   // Built BEFORE the request `try`. A payload carrying a circular reference or

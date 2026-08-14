@@ -14,6 +14,7 @@ import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import {
   compactPayload,
+  MAX_REQUEST_TIMEOUT_MS,
   postWebhookJson,
   resolveWebhookUrl,
   webhookBaseEntitlements,
@@ -60,12 +61,13 @@ const inputSchema = {
         "Let the message ping. By default `allowed_mentions: { parse: [] }` is sent, suppressing @everyone/@here, role and user pings so piped or model-generated content cannot notify a whole server.",
     },
     timeout: {
-      type: "number",
+      type: "integer",
       default: 30000,
       minimum: 1,
+      maximum: MAX_REQUEST_TIMEOUT_MS,
       title: "Timeout",
       description:
-        "Request timeout in milliseconds. There is no 'wait forever' setting: a black-holed endpoint would pin the task until the caller aborts.",
+        "Request timeout in milliseconds, a whole number no greater than 2147483647 (~24.8 days). There is no 'wait forever' setting: a black-holed endpoint would pin the task until the caller aborts, and a larger value would silently fire after 1 ms.",
     },
     allow_private_destination: {
       type: "boolean",
