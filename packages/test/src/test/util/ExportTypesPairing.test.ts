@@ -269,6 +269,18 @@ function implementationsIn(node: unknown, out: string[]): void {
  * source entry is what turns the duplicate into a bug, so it is what this rule
  * keys on — and why the probe is injected rather than performed here, so
  * fixtures can drive both sides of it.
+ *
+ * One case is decided BEFORE that probe: a `browser` block declaring only
+ * `types` and no implementation. `collectBranches` records a branch only when a
+ * string-valued implementation key is present, so such a block produces no
+ * branch at all and is invisible to every other rule in this file — including
+ * the source-entry rule, which can only check targets a branch declared.
+ * Bundlers, meanwhile, enter the `browser` condition, match nothing in it, and
+ * fall through to the node target: the browser-typed-as-node inversion this
+ * file exists to prevent, reached by omission instead of by a wrong target.
+ * Hoisting it past the source-entry guard is deliberate — the `packages/*`
+ * layout (stem `node`, no `src/node.browser.ts`) never reaches the guarded code
+ * and would otherwise carry the same bug unreported.
  */
 function browserSplitViolations(
   manifest: string,
@@ -280,6 +292,22 @@ function browserSplitViolations(
   for (const [subpath, value] of Object.entries(exportsMap)) {
     const nodeTarget = nodeImportTarget(value);
     if (nodeTarget === undefined) continue;
+    const at = `${manifest} exports["${subpath}"]`;
+    const branch = (value as Record<string, unknown> | undefined)?.browser;
+
+    if (branch !== undefined) {
+      const declared: string[] = [];
+      implementationsIn(branch, declared);
+      if (declared.length === 0) {
+        out.push(
+          `${at} [browser]: the "browser" condition declares no implementation, so a browser ` +
+            `bundler enters it, matches nothing, and falls through to the node target ` +
+            `"${nodeTarget}"`
+        );
+        continue;
+      }
+    }
+
     const stem = distStem(nodeTarget);
     if (stem === undefined) continue;
     const browserEntry = SOURCE_ENTRY_EXTENSIONS.map(
@@ -291,8 +319,6 @@ function browserSplitViolations(
     if (!browserEntry.some((candidate) => hasSourceEntry(candidate))) continue;
 
     const expected = `./dist/${stem}.browser.js`;
-    const at = `${manifest} exports["${subpath}"]`;
-    const branch = (value as Record<string, unknown>)?.browser;
     if (branch === undefined) {
       out.push(
         `${at}: ${browserEntry[0]} exists but no "browser" condition is declared, so browser ` +
@@ -309,6 +335,95 @@ function browserSplitViolations(
           `${browserEntry[0]} exists (expected "${expected}")`
       );
     }
+  }
+  return out;
+}
+
+/**
+ * Packages whose `build*` scripts drive their entries from a glob rather than
+ * from a written-out list, so there is no entry text for
+ * {@link buildEntryViolations} to read.
+ *
+ * Pinned to a set of one, and guarded below by a test that each exempted
+ * package really does hand its build off to a repo-local `*.ts` program — so
+ * the exemption dies the moment that package goes back to naming its entries,
+ * rather than quietly exempting a hand-written list from the rule.
+ */
+const GLOB_BUILT_PACKAGES: ReadonlySet<string> = new Set(["packages/workglow/package.json"]);
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Whether any `build*` script passes `src/<stem>.ts(x)` as an entry.
+ *
+ * Matched as a WHOLE TOKEN — optional `./`, bounded by whitespace or the end of
+ * the script — and both halves of that are load-bearing:
+ *
+ * - `bun build --outdir ./dist/storage ./src/storage/browser.ts` has to satisfy
+ *   the stem `storage/browser` that its nested `--outdir` produces, so the
+ *   match is on the whole `src/`-relative path rather than on a basename; and
+ * - `./src/ai.browser.ts` must NOT satisfy the stem `ai`. A substring test would
+ *   let a package that builds only its browser entry pass while declaring the
+ *   node one, which is the exact miss this rule exists to catch.
+ */
+function buildsSourceEntry(buildScriptText: string, stem: string): boolean {
+  return new RegExp(`(^|\\s)\\.?/?src/${escapeRegExp(stem)}\\.tsx?(\\s|$)`).test(buildScriptText);
+}
+
+/**
+ * Implementation targets no `build*` script builds a source entry for.
+ *
+ * The source-entry rule below proves only the DECLARATION half. `build-types`
+ * runs `tsgo` over the package's whole `src` tree, so every source file yields
+ * a `.d.ts` whether or not anything lists it; the `.js` half comes from the
+ * hand-written entry lists in each package's `build-code` / `build-browser` /
+ * `build-*` scripts, which nothing read. Add `providers/foo/src/ai.browser.ts`
+ * and a `browser` block, forget to append `./src/ai.browser.ts` to
+ * `build-browser`, and every other check here passes while
+ * `dist/ai.browser.js` is never emitted — the package publishes a `browser`
+ * condition pointing at a file that does not exist.
+ *
+ * This is checked HERE, in the file that reviews the manifest, rather than as a
+ * prepack assertion in `publish-workspaces.ts`: a prepack assertion fires after
+ * review and after merge, and the defect being fixed is a guard test that does
+ * not guard what it claims. It has to be able to fail the PR that introduces it.
+ */
+function buildEntryViolations(
+  manifest: string,
+  exportsMap: Record<string, unknown>,
+  scripts: Readonly<Record<string, string>>
+): string[] {
+  const buildScriptText = Object.entries(scripts)
+    .filter(([name]) => name.startsWith("build"))
+    .map(([, body]) => body)
+    .join("\n");
+
+  // First subpath wins, so one target shared by several subpaths is reported
+  // once — the fix is one entry line either way.
+  const declaredAt = new Map<string, string>();
+  for (const [subpath, value] of Object.entries(exportsMap)) {
+    const targets: string[] = [];
+    implementationsIn(value, targets);
+    for (const target of targets) if (!declaredAt.has(target)) declaredAt.set(target, subpath);
+  }
+
+  const out: string[] = [];
+  for (const [target, subpath] of declaredAt) {
+    const at = `${manifest} exports["${subpath}"]`;
+    const stem = distStem(target);
+    // Reported, not skipped: a layout the derivation cannot describe is exactly
+    // where an unbuilt target would hide.
+    if (stem === undefined) {
+      out.push(`${at}: "${target}" is not ./dist/<stem>.<ext>, so no source entry is derivable`);
+      continue;
+    }
+    if (buildsSourceEntry(buildScriptText, stem)) continue;
+    out.push(
+      `${at}: "${target}" is declared but no build* script names its source entry ` +
+        `(expected src/${stem}.ts among the entries passed to a build command)`
+    );
   }
   return out;
 }
@@ -448,6 +563,8 @@ function workspaceManifests(root: WorkspaceRoot): string[] {
 interface Manifest {
   readonly relative: string;
   readonly exports: Record<string, unknown>;
+  /** The manifest's `scripts`, which is where the build entry lists live. */
+  readonly scripts: Readonly<Record<string, string>>;
 }
 
 function manifestsWithExports(root: WorkspaceRoot): Manifest[] {
@@ -455,9 +572,14 @@ function manifestsWithExports(root: WorkspaceRoot): Manifest[] {
   for (const relative of workspaceManifests(root)) {
     const pkg = JSON.parse(readFileSync(join(root.dir, relative), "utf8")) as {
       exports?: Record<string, unknown>;
+      scripts?: Record<string, unknown>;
     };
     if (!pkg.exports) continue;
-    found.push({ relative, exports: pkg.exports });
+    const scripts: Record<string, string> = {};
+    for (const [name, body] of Object.entries(pkg.scripts ?? {})) {
+      if (typeof body === "string") scripts[name] = body;
+    }
+    found.push({ relative, exports: pkg.exports, scripts });
   }
   return found;
 }
@@ -484,9 +606,15 @@ describe("workspace exports maps", () => {
   it("declares only targets a source entry file can emit", () => {
     // Pairing alone cannot see a self-consistent branch for a build that does not
     // exist — copying another package's `browser` block declares a `.d.ts`/`.js`
-    // pair naming each other correctly while nothing emits either file. The
-    // source entry beside them is the cheapest evidence that the build produces
-    // the target at all.
+    // pair naming each other correctly while nothing emits either file.
+    //
+    // A source entry beside them is NECESSARY for either half and sufficient for
+    // only one: `build-types` runs `tsgo` over the package's whole `src` tree, so
+    // the existence of the file is exactly what makes the `.d.ts` appear, but the
+    // `.js` comes from a hand-written entry list in a `build*` script that this
+    // check never reads. `buildEntryViolations` is what covers that half; keep
+    // the two together, because passing this one alone proves only that the
+    // declaration will be emitted.
     const unrecognized: string[] = [];
     const missing: string[] = [];
     for (const branch of branches) {
@@ -534,6 +662,39 @@ describe("workspace exports maps", () => {
       orderViolations(manifest.relative, manifest.exports)
     );
     expect(shadowed).toEqual([]);
+  });
+
+  it("builds a source entry for every implementation target it declares", () => {
+    const unbuilt = manifests
+      .filter((manifest) => !GLOB_BUILT_PACKAGES.has(manifest.relative))
+      .flatMap((manifest) =>
+        buildEntryViolations(manifest.relative, manifest.exports, manifest.scripts)
+      );
+    expect(unbuilt).toEqual([]);
+  });
+
+  it("exempts only packages that really hand their build to a repo-local program", () => {
+    // The exemption exists because a glob-driven build has no entry list to
+    // read. Tie it to that fact rather than to the package name: if
+    // `packages/workglow` goes back to naming its entries in `bun build`
+    // commands, no `bun run <file>.ts` remains and this fails, which is the
+    // signal to delete the exemption rather than to widen it.
+    expect(GLOB_BUILT_PACKAGES.size).toBeGreaterThan(0);
+    for (const relative of GLOB_BUILT_PACKAGES) {
+      const manifest = manifests.find((entry) => entry.relative === relative);
+      expect(manifest, `${relative} is exempt but declares no exports`).toBeDefined();
+      const buildScriptText = Object.entries(manifest?.scripts ?? {})
+        .filter(([name]) => name.startsWith("build"))
+        .map(([, body]) => body)
+        .join("\n");
+      // `bun run build.ts` / `bun build.ts` — the program itself, not a `.ts`
+      // handed to `bun build` as an entry (there the token after `bun` is
+      // `build`, which this does not match).
+      const programs = [...buildScriptText.matchAll(/\bbun(?:\s+run)?\s+([\w./-]+\.tsx?)(?=\s|$)/g)]
+        .map((match) => match[1] as string)
+        .filter((program) => existsSync(join(root.dir, dirname(relative), program)));
+      expect(programs, `${relative} runs no repo-local build program`).not.toEqual([]);
+    }
   });
 
   it("keeps the allowlist free of entries that no longer mismatch", () => {
@@ -849,6 +1010,79 @@ describe("exports map violation detection", () => {
       ]);
     });
 
+    /**
+     * `providers/openai` with its browser `"import"` deleted. The block still
+     * declares `types`, so `tsc` under `customConditions: ["browser"]` matches
+     * `browser > types` and type-checks against the browser declarations, while
+     * Vite/webpack enter the same block, recognize no key in it, and fall
+     * through to the outer `"import"` — bundling the NODE build. Browser typed
+     * as node, which is the inversion this whole file exists to prevent.
+     */
+    const browserTypesOnly = {
+      "./ai": {
+        browser: { types: "./dist/ai.browser.d.ts" },
+        types: "./dist/ai.d.ts",
+        import: "./dist/ai.js",
+      },
+    };
+
+    it("reports a browser condition that declares types but no implementation", () => {
+      // The go-red proof: `collectBranches` pushes no branch at all for a
+      // `browser` block with no string-valued implementation key, so every
+      // other rule in this file is silent on this manifest.
+      expect(findViolations("providers/openai/package.json", browserTypesOnly)).toEqual([]);
+      expect(orderViolations("providers/openai/package.json", browserTypesOnly)).toEqual([]);
+
+      expect(
+        browserSplitViolations("providers/openai/package.json", browserTypesOnly, always)
+      ).toEqual([
+        'providers/openai/package.json exports["./ai"] [browser]: the "browser" condition ' +
+          "declares no implementation, so a browser bundler enters it, matches nothing, and " +
+          'falls through to the node target "./dist/ai.js"',
+      ]);
+    });
+
+    it("reports it for the packages/* layout too, where no browser source entry exists", () => {
+      // Decided BEFORE the source-entry probe on purpose. `packages/*` splits
+      // browser and node as two peer entries, so the probe for
+      // `src/node.browser.ts` finds nothing and the rest of this rule never
+      // runs — an empty `browser` block there is the same bug and would
+      // otherwise go unreported for every package in the repo.
+      expect(
+        browserSplitViolations(
+          "packages/storage/package.json",
+          {
+            ".": {
+              browser: { types: "./dist/browser.d.ts" },
+              types: "./dist/node.d.ts",
+              import: "./dist/node.js",
+            },
+          },
+          never
+        )
+      ).toEqual([
+        'packages/storage/package.json exports["."] [browser]: the "browser" condition declares ' +
+          "no implementation, so a browser bundler enters it, matches nothing, and falls " +
+          'through to the node target "./dist/node.js"',
+      ]);
+    });
+
+    it("says nothing about a browser block that does declare its implementation", () => {
+      expect(
+        browserSplitViolations(
+          "packages/storage/package.json",
+          {
+            ".": {
+              browser: { types: "./dist/browser.d.ts", import: "./dist/browser.js" },
+              types: "./dist/node.d.ts",
+              import: "./dist/node.js",
+            },
+          },
+          never
+        )
+      ).toEqual([]);
+    });
+
     it("leaves the packages/* browser/node layout alone", () => {
       // Stem `node`, so the probe asks for `src/node.browser.ts` and finds
       // nothing — the split here is expressed as two peer entries, not a
@@ -898,6 +1132,123 @@ describe("exports map violation detection", () => {
             browser: { types: "./dist/browser.d.ts", import: "./dist/browser.js" },
           },
         })
+      ).toEqual([]);
+    });
+  });
+
+  /**
+   * The `.js` half. Every fixture states the manifest AND the build scripts,
+   * because the rule is a function of the pair.
+   */
+  describe("build entries", () => {
+    const openaiExports = {
+      "./ai": {
+        browser: { types: "./dist/ai.browser.d.ts", import: "./dist/ai.browser.js" },
+        types: "./dist/ai.d.ts",
+        import: "./dist/ai.js",
+      },
+    };
+
+    it("reports a browser bundle no build script emits", () => {
+      // The go-red proof: the manifest is internally perfect and the source
+      // entry exists, so pairing, ordering and the browser split all pass —
+      // `build-browser` simply never got the new entry appended.
+      expect(findViolations("providers/openai/package.json", openaiExports)).toEqual([]);
+      expect(orderViolations("providers/openai/package.json", openaiExports)).toEqual([]);
+
+      expect(
+        buildEntryViolations("providers/openai/package.json", openaiExports, {
+          "build-code": "bun build --packages=external --outdir ./dist ./src/ai.ts",
+          "build-types": "tsgo",
+        })
+      ).toEqual([
+        'providers/openai/package.json exports["./ai"]: "./dist/ai.browser.js" is declared but ' +
+          "no build* script names its source entry (expected src/ai.browser.ts among the " +
+          "entries passed to a build command)",
+      ]);
+    });
+
+    it("accepts both entries once each build script names one", () => {
+      expect(
+        buildEntryViolations("providers/openai/package.json", openaiExports, {
+          "build-code": "bun build --packages=external --outdir ./dist ./src/ai.ts",
+          "build-browser": "bun build --target=browser --outdir ./dist ./src/ai.browser.ts",
+          "build-types": "tsgo",
+        })
+      ).toEqual([]);
+    });
+
+    it("does not let a `.browser` entry satisfy the plain stem", () => {
+      // Whole-token matching. A substring test finds `src/ai` inside
+      // `./src/ai.browser.ts` and passes a package that builds only its
+      // browser bundle while publishing the node one.
+      expect(
+        buildEntryViolations("providers/openai/package.json", openaiExports, {
+          "build-browser": "bun build --target=browser --outdir ./dist ./src/ai.browser.ts",
+        })
+      ).toEqual([
+        'providers/openai/package.json exports["./ai"]: "./dist/ai.js" is declared but no ' +
+          "build* script names its source entry (expected src/ai.ts among the entries passed " +
+          "to a build command)",
+      ]);
+    });
+
+    it("matches a nested stem produced by a nested --outdir", () => {
+      // `providers/duckdb` verbatim: the target is `./dist/storage/browser.js`
+      // because `--outdir ./dist/storage` moves the output, while the entry is
+      // still written `./src/storage/browser.ts`.
+      expect(
+        buildEntryViolations(
+          "providers/duckdb/package.json",
+          {
+            "./storage": {
+              browser: {
+                types: "./dist/storage/browser.d.ts",
+                import: "./dist/storage/browser.js",
+              },
+              types: "./dist/storage/node.d.ts",
+              import: "./dist/storage/node.js",
+            },
+          },
+          {
+            "build-storage-browser":
+              "bun build --target=browser --outdir ./dist/storage ./src/storage/browser.ts",
+            "build-storage-node-bun":
+              "bun build --target=node --outdir ./dist/storage ./src/storage/node.ts",
+          }
+        )
+      ).toEqual([]);
+    });
+
+    it("ignores non-build scripts", () => {
+      // `test`/`lint`/`watch` can mention a source path for unrelated reasons;
+      // only a `build*` script emits anything.
+      expect(
+        buildEntryViolations(
+          "p/package.json",
+          { ".": { types: "./dist/node.d.ts", import: "./dist/node.js" } },
+          { test: "vitest run ./src/node.ts", "build-types": "tsgo" }
+        )
+      ).toEqual([
+        'p/package.json exports["."]: "./dist/node.js" is declared but no build* script names ' +
+          "its source entry (expected src/node.ts among the entries passed to a build command)",
+      ]);
+    });
+
+    it("reports an unrecognized layout rather than skipping it", () => {
+      expect(
+        buildEntryViolations("p/package.json", { ".": "./lib/node.js" }, { "build-js": "tsc" })
+      ).toEqual([
+        'p/package.json exports["."]: "./lib/node.js" is not ./dist/<stem>.<ext>, so no source ' +
+          "entry is derivable",
+      ]);
+    });
+
+    it("says nothing about a `types`-only entry", () => {
+      // Declarations are emitted from the whole `src` tree, so they are the
+      // half this rule deliberately does not speak to.
+      expect(
+        buildEntryViolations("p/package.json", { "./types": { types: "./dist/x.d.ts" } }, {})
       ).toEqual([]);
     });
   });
