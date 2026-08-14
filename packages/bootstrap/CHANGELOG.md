@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.38
+## 0.3.39
 
 ### Features
 
