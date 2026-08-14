@@ -617,14 +617,26 @@ describe("TurboQuantize", () => {
       // under test.
       //
       // Measured RMSE, shipped grid vs a fixed 3-sigma one:
-      //   shipped 0.0273 0.0130 0.0070 0.0049 0.0032 0.0013 0.0010 0.0005
-      //   3-sigma 0.0273 0.0210 0.0107 0.0058 0.0024 0.0015 0.0008 0.0012
+      //   shipped 0.0356 0.0130 0.0070 0.0049 0.0032 0.0013 0.0010 0.0005
+      //   3-sigma 0.0356 0.0210 0.0107 0.0058 0.0024 0.0015 0.0008 0.0012
       // The ceilings pass the first row with >=21% headroom and reject the second at 2, 3
       // and 8 bits. The two rows agree exactly at 1 bit because a 2-level grid is +/-a:
       // the codes carry only sign, and the cosine is invariant to the scale of `a`.
+      //
+      // THE 1-BIT CEILING IS A TRADE, not headroom. It was 0.033 against a measured
+      // 0.0273 while the 1-bit estimator returned the raw sign-agreement statistic
+      // `1 - 2*theta/pi`. Inverting that to recover the cosine removed a bias of up to
+      // 0.21 on correlated pairs (see the signed-bias case below) and cost variance:
+      // d/dr of cos(pi*(1 - r)/2) peaks at ~1.57 near theta = pi/2, which is exactly
+      // where i.i.d. uniform pairs at d=1024 land, so THIS test's regime pays the
+      // amplification in full and gets none of the bias correction. Measured RMSE went
+      // 0.0273 -> 0.0356; the ceiling follows to 0.050. Unbiased-but-noisier is the right
+      // side of that trade — the noise is symmetric and averages out over a candidate
+      // set, and it is worst precisely where the answer is "unrelated" either way, while
+      // the bias moved every absolute threshold in one direction.
       const d = 1024;
       const pairs = 24;
-      const ceilings = [0.033, 0.016, 0.0085, 0.006, 0.004, 0.0017, 0.0013, 0.0007];
+      const ceilings = [0.05, 0.016, 0.0085, 0.006, 0.004, 0.0017, 0.0013, 0.0007];
 
       for (let bits = 1; bits <= 8; bits++) {
         const rnd = makeRandom(2048 + bits);
@@ -707,6 +719,56 @@ describe("TurboQuantize", () => {
      * and `quantizedCosine` inverts it — which is why the 1-bit row sits at
      * zero while the 2-bit row, four times finer, is the worst in the table.
      */
+    /**
+     * The angle correction lives in `quantizedCosine`, so it reaches
+     * `turboQuantizedCosineSimilarity` and `turboQuantizedInnerProduct` and NOTHING ELSE.
+     * Decoding with `turboDequantize` and running plain `cosineSimilarity` over the
+     * results is a different number at 1 bit — lower, by the sign-statistic shrinkage the
+     * correction exists to undo.
+     *
+     * That asymmetry is worth pinning rather than leaving to be discovered: the two
+     * routes look interchangeable at every other bit width, and a caller who decodes once
+     * and compares many times (the natural optimisation) would silently drop back to the
+     * biased estimator at exactly the bit width where the bias is largest.
+     */
+    test("turboDequantize + plain cosineSimilarity is NOT angle-corrected at 1 bit", () => {
+      const d = 1024;
+      const rnd = makeRandom(31337);
+      const a = new Float32Array(d);
+      const noise = new Float32Array(d);
+      for (let i = 0; i < d; i++) {
+        a[i] = rnd() - 0.5;
+        noise[i] = rnd() - 0.5;
+      }
+      const t = 0.8;
+      const k = Math.sqrt(1 - t * t);
+      const b = new Float32Array(d);
+      for (let i = 0; i < d; i++) b[i] = t * a[i]! + k * noise[i]!;
+
+      const exact = cosineSimilarity(a, b);
+      const qa = turboQuantize(a, { bits: 1, seed: 42 });
+      const qb = turboQuantize(b, { bits: 1, seed: 42 });
+
+      const corrected = turboQuantizedCosineSimilarity(qa, qb);
+      const viaDecode = cosineSimilarity(turboDequantize(qa), turboDequantize(qb));
+
+      // The corrected estimator tracks the exact cosine.
+      expect(Math.abs(corrected - exact)).toBeLessThan(0.05);
+      // The decode route does not — it is the raw sign statistic, biased low.
+      expect(viaDecode).toBeLessThan(exact - 0.1);
+      expect(corrected).toBeGreaterThan(viaDecode + 0.1);
+
+      // At 4 bits there is no correction, so the two routes agree closely.
+      const wa = turboQuantize(a, { bits: 4, seed: 42 });
+      const wb = turboQuantize(b, { bits: 4, seed: 42 });
+      expect(
+        Math.abs(
+          turboQuantizedCosineSimilarity(wa, wb) -
+            cosineSimilarity(turboDequantize(wa), turboDequantize(wb))
+        )
+      ).toBeLessThan(0.01);
+    });
+
     test("should have a per-bit-width, per-correlation signed bias within measured bands", () => {
       const d = 1024;
       const pairs = 32;

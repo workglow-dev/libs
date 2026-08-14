@@ -7,8 +7,11 @@
 /**
  * Vector quantization by randomized rotation plus uniform scalar quantization.
  *
+ * THE NAME REFERS TO THE BORROWED ROTATION STRATEGY, not to the paper's quantizer or its
+ * distortion bound — what ships here is a classical construction that predates the paper.
+ *
  * Inspired by "TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate"
- * by Zandieh, Daliri, Hadian, and Mirrokni (2025).
+ * by Zandieh, Daliri, Hadian, and Mirrokni (2025), arXiv:2504.19874.
  *
  * Why rotate: a random orthogonal rotation spreads a vector's energy evenly over its
  * coordinates, so no coordinate dominates and every coordinate ends up with the same
@@ -18,16 +21,48 @@
  * What this module implements: the randomized Hadamard rotation, plus a UNIFORM scalar
  * quantizer whose clipping range is the MSE-optimal loading factor for a unit-variance
  * Gaussian at the given bit width. Reconstruction is renormalized back to the recorded
- * L2 norm, which keeps reconstructed magnitude and the similarity estimates unbiased.
+ * L2 norm, which keeps reconstructed MAGNITUDE unbiased.
  *
  * What it does NOT implement: the paper's non-uniform, distribution-fitted (Beta) level
- * placement. Distortion here is that of an optimal *uniform* quantizer, which is coarser
- * than the paper's near-optimal one.
+ * placement — the contribution that buys the near-optimal distortion rate. Distortion here
+ * is that of an optimal *uniform* quantizer, which is coarser.
+ *
+ * ## Similarity is biased LOW at low bit widths
+ *
+ * Magnitude is unbiased; similarity is not. Clipping and rounding shrink the reconstructed
+ * dot product relative to each side's `codeNorm`, so
+ * {@link turboQuantizedCosineSimilarity} — and {@link turboQuantizedInnerProduct}, which
+ * is that times the two norms — systematically UNDER-report similar pairs. Mean signed
+ * error against the exact cosine, 32 correlated pairs per cell, d=1024, seeded:
+ *
+ * | bits | true 0.50 | true 0.80 | true 0.95 |
+ * | ---- | --------- | --------- | --------- |
+ * | 1    |  +0.002   |  +0.001   |  -0.000   |
+ * | 2    |  -0.056   |  -0.080   |  -0.075   |
+ * | 3    |  -0.017   |  -0.027   |  -0.028   |
+ * | 4    |  -0.005   |  -0.007   |  -0.009   |
+ * | 5    |  -0.002   |  -0.003   |  -0.003   |
+ * | 6    |  -0.000   |  -0.001   |  -0.001   |
+ * | 7    |  -0.000   |  -0.000   |  -0.000   |
+ * | 8    |  -0.000   |  -0.000   |  -0.000   |
+ *
+ * The 1-bit row is zero because that case alone HAS a closed form and is corrected: a
+ * 2-level grid is exactly ±scale, so the estimator degenerates to the sign-agreement
+ * statistic `1 - 2*theta/pi`, which `quantizedCosine` inverts. At 2-8 bits there is no
+ * closed form, and a fitted gain would be tuned at one dimensionality and wrong at the
+ * next — so the bias is documented rather than papered over. That is why 2 bits, four
+ * times finer than 1, is the worst row in the table.
+ *
+ * RANKING SURVIVES this — the shrinkage is monotone in the true cosine, so ordering a
+ * candidate set is unaffected. ABSOLUTE THRESHOLDS AND CALIBRATION DO NOT. At 2 bits a
+ * `cos > 0.8` cut (an ordinary RAG threshold) drops pairs whose real cosine is 0.87. Use
+ * 4 bits or more when a stored threshold has to mean what it says, or re-tune the
+ * threshold against the table above.
  *
  * Properties:
  * - Data-oblivious: no training or codebook construction needed
  * - Per-vector: each vector quantized independently (streaming-friendly)
- * - Preserves inner products and cosine similarity for similarity search
+ * - Preserves the RANKING induced by inner products and cosine similarity
  */
 
 import { TensorType } from "./Tensor";
@@ -896,6 +931,29 @@ function assertComparablePair(a: TurboQuantizeResult, b: TurboQuantizeResult): v
  * makes the result an actual cosine: Cauchy-Schwarz then bounds it to [-1, 1] by
  * construction and a record compared with itself scores exactly 1. The clamp only absorbs
  * floating-point rounding at the endpoints.
+ *
+ * At 1 BIT that ratio is not an estimate of the cosine at all, and the last line corrects
+ * for it. A 2-level grid is exactly ±scale, so both reconstructions are constant-magnitude
+ * sign vectors: the normalized dot product reduces to the fraction of coordinates whose
+ * signs agree, mapped to [-1, 1]. For a random rotation that statistic converges to
+ * `1 - 2*theta/pi` (Goemans-Williamson), a DIFFERENT function of the angle rather than a
+ * noisy cosine — it reads a true 0.80 as 0.59 and a true 0.95 as 0.79. It is also exactly
+ * invertible, and the inversion costs one `Math.cos` per comparison, changes no stored
+ * bytes, and needs no version bump: `theta = pi*(1 - ratio)/2`, so `cos(theta)` recovers
+ * the cosine.
+ *
+ * The inversion is NOT extended to 2-8 bits, where the shrinkage is ordinary quantization
+ * error (clipping and rounding shrink the reconstructed dot product relative to each
+ * side's `codeNorm`) with no closed form to invert. A fitted per-bit gain would be a
+ * constant tuned at one dimensionality, and the shrinkage varies with d — so it would
+ * correct one corpus and skew the next. That residual bias is documented in the module
+ * header instead, with the measured per-bit table.
+ *
+ * The trade at 1 bit is real: the derivative of `cos(pi*(1 - r)/2)` peaks at ~pi/2 ≈ 1.57
+ * near theta = pi/2, so whatever noise the sign statistic carries is amplified by up to
+ * ~1.57x for near-orthogonal pairs. Measured on i.i.d. uniform inputs at d=1024, RMSE
+ * against the exact cosine rises from 0.027 to 0.036 — paid to remove a bias of up to
+ * 0.21, and paid in the regime where the answer is "these are unrelated" either way.
  */
 function quantizedCosine(a: TurboQuantizeResult, b: TurboQuantizeResult): number {
   const { values: valuesA, codeNorm: codeNormA } = reconstructRotatedCodes(a);
@@ -906,7 +964,11 @@ function quantizedCosine(a: TurboQuantizeResult, b: TurboQuantizeResult): number
   for (let i = 0; i < valuesA.length; i++) {
     dot += valuesA[i] * valuesB[i];
   }
-  return Math.max(-1, Math.min(1, dot / (codeNormA * codeNormB)));
+  const cosine = Math.max(-1, Math.min(1, dot / (codeNormA * codeNormB)));
+  // After the clamp, so the argument is a valid angle even when rounding pushed the
+  // ratio a hair past ±1.
+  if (a.bits === 1) return Math.cos((Math.PI * (1 - cosine)) / 2);
+  return cosine;
 }
 
 /**
