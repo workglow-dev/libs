@@ -32,15 +32,18 @@ import { KNOWLEDGE_BASE_REPOSITORY, KNOWLEDGE_BASES } from "@workglow/knowledge-
 import { MCP_SERVER_REPOSITORY, MCP_SERVERS } from "@workglow/mcp/util";
 import { TABULAR_REPOSITORIES } from "@workglow/storage";
 import { TASK_CONSTRUCTORS, TRANSFORM_DEFS } from "@workglow/task-graph";
-import type { ServiceToken } from "@workglow/util";
+import type { InputCompactorFn, InputResolverFn, ServiceToken } from "@workglow/util";
 import {
   Container,
   CREDENTIAL_STORE,
   getInputCompactors,
   getInputResolvers,
+  InMemoryCredentialStore,
   INPUT_COMPACTORS,
   INPUT_RESOLVERS,
   LOGGER,
+  registerInputCompactor,
+  registerInputResolver,
   ServiceRegistry,
   TELEMETRY_PROVIDER,
   WORKER_MANAGER,
@@ -143,6 +146,65 @@ describe("registerAllDefaults", () => {
     expect(presentTokens(registry)).toEqual(EXPECTED_TOKENS.map(([name]) => name));
     expect([...getInputResolvers(registry).keys()].sort()).toEqual([...EXPECTED_RESOLVER_PREFIXES]);
     expect(getInputResolvers(registry).get("model")).toBe(firstModelResolver);
+  });
+
+  /**
+   * The executable half of the README's "two halves, two behaviors" section.
+   *
+   * The claim that used to stand — "defaults register with `registerIfAbsent`,
+   * so an earlier explicit registration is never overwritten" — held for the
+   * factory tokens and not for the resolver/compactor maps, whose registrars
+   * are an unconditional `Map.set`. That half-truth was worse than a plain
+   * error, because the example the README picked (a custom storage backend) is
+   * exactly the case that DOES survive.
+   */
+  describe("what an earlier registration survives", () => {
+    it("keeps a pre-registered factory token — registerIfAbsent", () => {
+      const registry = bareRegistry();
+      const custom = new InMemoryCredentialStore();
+      registry.registerInstance(CREDENTIAL_STORE, custom);
+
+      registerAllDefaults(registry);
+
+      expect(registry.get(CREDENTIAL_STORE)).toBe(custom);
+    });
+
+    it("OVERWRITES a pre-registered input resolver — last writer wins", () => {
+      const registry = bareRegistry();
+      const customResolver: InputResolverFn = () => "from-my-catalog";
+      registerInputResolver("model", customResolver, registry);
+
+      registerAllDefaults(registry);
+
+      // Silent: no warning, and nothing in the registry records the loss.
+      expect(getInputResolvers(registry).get("model")).not.toBe(customResolver);
+    });
+
+    it("keeps a resolver installed in the documented order — after the defaults", () => {
+      const registry = bareRegistry();
+      const customResolver: InputResolverFn = () => "from-my-catalog";
+
+      registerAllDefaults(registry);
+      registerInputResolver("model", customResolver, registry);
+
+      expect(getInputResolvers(registry).get("model")).toBe(customResolver);
+      // And it did not disturb its neighbours.
+      expect([...getInputResolvers(registry).keys()].sort()).toEqual([
+        ...EXPECTED_RESOLVER_PREFIXES,
+      ]);
+    });
+
+    it("overwrites a pre-registered input compactor too", () => {
+      const registry = bareRegistry();
+      const customCompactor: InputCompactorFn = () => "my-id";
+      registerInputCompactor("model", customCompactor, registry);
+
+      registerAllDefaults(registry);
+      expect(getInputCompactors(registry).get("model")).not.toBe(customCompactor);
+
+      registerInputCompactor("model", customCompactor, registry);
+      expect(getInputCompactors(registry).get("model")).toBe(customCompactor);
+    });
   });
 
   /**

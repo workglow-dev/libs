@@ -45,9 +45,39 @@ import { TsLogLogger } from "workglow";
 bootstrapWorkglow({ logger: new TsLogLogger() });
 ```
 
-`bootstrapWorkglow()` is idempotent — defaults register with `registerIfAbsent`,
-so an earlier explicit registration (a custom storage backend, say) is never
-overwritten, and repeat calls are harmless.
+`bootstrapWorkglow()` is idempotent — repeat calls are harmless.
+
+**Two halves, two behaviors, and the difference decides where your own
+registrations go.**
+
+The **factory tokens** (logger, telemetry, worker manager, credential store,
+model repository, AI provider registry, knowledge-base and MCP maps, tabular
+repositories, task constructors, transform defs) register with
+`registry.registerIfAbsent`. An earlier explicit registration — a custom storage
+backend, say — survives, so those may be installed **before**
+`bootstrapWorkglow()`.
+
+The **input resolvers and compactors** do not. `registerInputResolver` /
+`registerInputCompactor` are an unconditional `resolvers.set(formatPrefix, fn)`:
+last writer wins. Nine of the fourteen registrars call them, covering the
+`credential`, `image`, `knowledge-base`, `mcp-server`, `model`,
+`storage:tabular` and `tasks` prefixes. A custom resolver installed **before**
+`bootstrapWorkglow()` is silently replaced by the built-in one, with no warning
+and nothing in the registry to inspect:
+
+```typescript
+// WRONG — bootstrapWorkglow() overwrites this during startup, and every
+// `format: "model"` input then resolves from the built-in MODEL_REPOSITORY.
+registerInputResolver("model", myCatalogResolver);
+bootstrapWorkglow();
+
+// RIGHT — install custom resolvers AFTER the defaults are in place.
+bootstrapWorkglow();
+registerInputResolver("model", myCatalogResolver);
+```
+
+The same ordering applies to `registerAllDefaults(registry)` and
+`createOrchestrationContext()`.
 
 ### Isolated context
 

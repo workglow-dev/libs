@@ -24,9 +24,18 @@ import { registerWorkerManagerDefaults } from "@workglow/util/worker";
  * Registers every default factory and input resolver/compactor from the
  * core Workglow packages onto the given registry.
  *
- * Idempotent — safe to call multiple times. `registerIfAbsent` ensures
- * earlier explicit registrations (e.g. a custom storage backend) are not
- * overwritten.
+ * Idempotent — safe to call multiple times.
+ *
+ * The two halves behave differently, and only one of them is safe to pre-empt:
+ *
+ * - **Factory tokens** go through `registry.registerIfAbsent`, so an earlier
+ *   explicit registration (a custom storage backend, say) is not overwritten.
+ * - **Input resolvers and compactors** do not. `registerInputResolver` /
+ *   `registerInputCompactor` are an unconditional `Map.set` — last writer
+ *   wins — and nine of the fourteen calls below register one of each. A custom
+ *   resolver installed BEFORE this function is silently replaced by the
+ *   built-in one, so install custom resolvers AFTER `bootstrapWorkglow()` /
+ *   `registerAllDefaults()`.
  *
  * The registry is required, never defaulted: this mutates whichever container
  * it is handed, so the target is always stated at the call site. Pass
