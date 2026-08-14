@@ -670,6 +670,96 @@ describe("TurboQuantize", () => {
         }
       }
     });
+
+    /**
+     * MEAN SIGNED error on CORRELATED pairs, per (bit width, correlation) cell.
+     *
+     * Both halves of that sentence are the point.
+     *
+     * Signed, not RMSE, because RMSE is what every other accuracy case here
+     * already measures — and RMSE is exactly what hides a one-directional
+     * shrinkage. An estimator that reads every similar pair 0.08 low and an
+     * estimator with 0.08 of symmetric noise score the same RMSE; only one of
+     * them silently moves a threshold.
+     *
+     * Correlated, because the existing cases draw both vectors i.i.d. uniform
+     * at d=1024, where the true cosine concentrates at 0 ± ~0.03 — the one
+     * regime where this bias vanishes. `b = t*a + sqrt(1-t^2)*noise` puts the
+     * pair at a chosen similarity instead.
+     *
+     * The reference is `cosineSimilarity(a, b)` on the UNQUANTIZED inputs,
+     * never `t`: `t` is what the construction aims at, and the realized cosine
+     * of a finite sample differs from it by ~1/sqrt(d). Scoring against `t`
+     * would fold that sampling error into the measured bias.
+     *
+     * Bands are the MEASURED value ±30%, floored at ±0.005 so a cell whose bias
+     * is genuinely at the noise level is not pinned to a number that is itself
+     * noise. They are two-sided: an estimator that stopped under-reporting
+     * would fail these, which is the intent — this is a record of behavior, not
+     * a ceiling. Re-measure and re-record when the estimator changes.
+     *
+     * What the table shows: shrinkage grows as the bit width falls, and it is
+     * an ordinary quantization effect at 2-8 bits (clipping and rounding shrink
+     * the reconstructed dot product relative to each side's codeNorm). At 1 bit
+     * it is not: a 2-level grid is exactly ±scale, so the estimator degenerates
+     * to the sign-agreement statistic 1 - 2*theta/pi, which is a different
+     * function of the angle rather than a noisy cosine. That one is invertible,
+     * and `quantizedCosine` inverts it — which is why the 1-bit row sits at
+     * zero while the 2-bit row, four times finer, is the worst in the table.
+     */
+    test("should have a per-bit-width, per-correlation signed bias within measured bands", () => {
+      const d = 1024;
+      const pairs = 32;
+      const correlations = [0.5, 0.8, 0.95] as const;
+
+      /** Measured mean signed error, indexed [bits - 1][correlation]. */
+      const measured: readonly (readonly number[])[] = [
+        [0.0015, 0.0014, -0.0001],
+        [-0.0561, -0.0799, -0.075],
+        [-0.0171, -0.0271, -0.028],
+        [-0.0055, -0.0075, -0.0094],
+        [-0.0019, -0.003, -0.003],
+        [-0.0001, -0.001, -0.0009],
+        [-0.0001, -0.0003, -0.0003],
+        [0.0, -0.0001, -0.0001],
+      ];
+
+      for (let bits = 1; bits <= 8; bits++) {
+        for (let c = 0; c < correlations.length; c++) {
+          const t = correlations[c]!;
+          const rnd = makeRandom(9000 + bits * 31 + Math.round(t * 100));
+          const k = Math.sqrt(1 - t * t);
+          let signedError = 0;
+
+          for (let p = 0; p < pairs; p++) {
+            const a = new Float32Array(d);
+            const noise = new Float32Array(d);
+            for (let i = 0; i < d; i++) {
+              a[i] = rnd() - 0.5;
+              noise[i] = rnd() - 0.5;
+            }
+            const b = new Float32Array(d);
+            for (let i = 0; i < d; i++) b[i] = t * a[i]! + k * noise[i]!;
+
+            signedError +=
+              turboQuantizedCosineSimilarity(
+                turboQuantize(a, { bits, seed: 42 }),
+                turboQuantize(b, { bits, seed: 42 })
+              ) - cosineSimilarity(a, b);
+          }
+
+          const mean = signedError / pairs;
+          const expected = measured[bits - 1]![c]!;
+          const tolerance = Math.max(Math.abs(expected) * 0.3, 0.005);
+          expect(mean, `bits=${bits} t=${t} mean=${mean.toFixed(5)}`).toBeGreaterThan(
+            expected - tolerance
+          );
+          expect(mean, `bits=${bits} t=${t} mean=${mean.toFixed(5)}`).toBeLessThan(
+            expected + tolerance
+          );
+        }
+      }
+    });
   });
 
   describe("sign table cache", () => {
