@@ -31,6 +31,7 @@ import {
   registerSafeFetch,
   slackNotify,
   SlackNotifyTask,
+  urlResourcePattern,
   webhookNotify,
   WebhookNotifyTask,
   type SafeFetchFn,
@@ -1506,6 +1507,24 @@ describe("Webhook notification tasks", () => {
       expect(error.url).not.toContain("SECRETTOKEN");
     });
 
+    // The suppression follows the declaration for the same reason the
+    // transport does: the URL alone cannot say whether the host is internal,
+    // so a caller who declared it MAY be private never gets its reply back.
+    test("a declared private destination never echoes its body, even for a public-looking hostname", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(new Response("AKIAEXAMPLESECRET", { status: 200 }))
+      );
+
+      const result = await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        allow_private_destination: true,
+      });
+
+      expect(result.response).toBe("");
+      expect(JSON.stringify(result)).not.toContain("AKIA");
+    });
+
     test("still echoes a public destination's body", async () => {
       mockFetch.mockImplementation(() => Promise.resolve(new Response("pong", { status: 200 })));
 
@@ -1539,19 +1558,33 @@ describe("Webhook notification tasks", () => {
       expect(lastCall().options.privateResourceScopes).toEqual(["http://127.0.0.1:9200/*"]);
     });
 
-    // The DNS-rebinding invariant: the flag is a declaration about the
-    // destination, never a licence to widen the transport for a public
-    // hostname. A name that resolves into private space at connect time must
-    // still be refused there.
-    test("a public URL keeps allowPrivate false even when allow_private_destination is set", async () => {
+    // The DECLARATION governs the transport, not the URL's spelling. A
+    // hostname that is no literal IP and matches no reserved suffix classifies
+    // public even when it resolves into private space (split-horizon DNS), so
+    // deriving `allowPrivate` from that classification leaves the declaration
+    // unable to reach the destination it declares. What authorizes the
+    // widening is the `network:private` GRANT, re-checked against the URL
+    // actually resolved — see the graph-root enforcement cases below.
+    test("a declared private destination widens the transport even for a public-looking hostname", async () => {
       await webhookNotify({
         url: WEBHOOK_URL,
         payload: {},
         allow_private_destination: true,
       });
 
-      expect(lastCall().options.allowPrivate).toBe(false);
-      expect(lastCall().options.privateResourceScopes).toBeUndefined();
+      expect(lastCall().options.allowPrivate).toBe(true);
+      expect(lastCall().options.privateResourceScopes).toEqual(["https://example.com/*"]);
+    });
+
+    // The pattern the enforcer graded and the scope the transport re-enforces
+    // are the same string, computed once — two independent computations could
+    // drift and hand out a scope no grant covered.
+    test("the widened transport is scoped to exactly the pattern the grant was checked against", async () => {
+      await webhookNotify({ url: PRIVATE_URL, payload: {}, allow_private_destination: true });
+      expect(lastCall().options.privateResourceScopes).toEqual([urlResourcePattern(PRIVATE_URL)]);
+
+      await webhookNotify({ url: WEBHOOK_URL, payload: {}, allow_private_destination: true });
+      expect(lastCall().options.privateResourceScopes).toEqual([urlResourcePattern(WEBHOOK_URL)]);
     });
 
     test("Slack and Discord share the same transport arguments", async () => {
@@ -2075,6 +2108,48 @@ describe("Webhook notification tasks", () => {
       expect(error).toBeInstanceOf(PermanentJobError);
       expect(error.code).toBe(FetchUrlErrorCode.PRIVATE_DENIED);
       expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    // THE LOAD-BEARING CASE for letting the declaration govern the transport:
+    // the authorization check must key on the DECLARATION, not on the URL's
+    // static classification. Keyed on the classification, a public-looking
+    // hostname would receive the widened transport with no grant check at all.
+    test("a declared private destination is refused without the grant even when the URL looks public", async () => {
+      const error = (await new WebhookNotifyTask()
+        .run(
+          { url: WEBHOOK_URL, payload: {}, allow_private_destination: true },
+          { registry: browserRegistry() }
+        )
+        .catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.PRIVATE_DENIED);
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    // A gate, not a blanket relaxation: the same post runs once the declared
+    // origin is granted.
+    test("a grant scoped to the declared origin permits a public-looking private destination", async () => {
+      const browserPolicy = createProfilePolicy("browser");
+      const registry = new ServiceRegistry(new Container());
+      registry.register(ENTITLEMENT_ENFORCER, () =>
+        createPolicyEnforcer({
+          deny: browserPolicy.deny,
+          grant: [
+            ...browserPolicy.grant,
+            { id: Entitlements.NETWORK_PRIVATE, resources: ["https://example.com/*"] },
+          ],
+          ask: browserPolicy.ask,
+        })
+      );
+
+      await expect(
+        new WebhookNotifyTask().run(
+          { url: WEBHOOK_URL, payload: {}, allow_private_destination: true },
+          { registry }
+        )
+      ).resolves.toBeDefined();
+      expect(lastCall().options.allowPrivate).toBe(true);
     });
 
     // The contract is opt-in: with no enforcer registered there is no policy to

@@ -12,7 +12,6 @@ import type {
 } from "@workglow/task-graph";
 import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
-import { classifyUrl } from "../util/UrlClassifier";
 import {
   MAX_REQUEST_TIMEOUT_MS,
   postWebhookJson,
@@ -57,7 +56,7 @@ const inputSchema = {
       default: false,
       title: "Allow Private Destination",
       description:
-        "Permit posting to a private/internal/loopback destination. Requires the `network:private` entitlement.",
+        "Permit posting to a private/internal/loopback destination — including a public-looking hostname that resolves into private address space. Requires the `network:private` entitlement, re-checked at execute time against the URL actually resolved. A declared private destination's reply body and reason phrase are never surfaced.",
     },
     url_credential_key: {
       type: "string",
@@ -145,13 +144,6 @@ export class WebhookNotifyTask<
       Object.hasOwn(input, "url_credential_key"),
       "WebhookNotifyTask"
     );
-    // A private destination is reachable only once `allow_private_destination`
-    // declares it (enforced in postWebhookJson), but the `response` port would
-    // turn this task into an SSRF *read* primitive: a POST to
-    // http://169.254.169.254/latest/meta-data/iam/security-credentials/ would
-    // hand a kilobyte of the reply back into the graph. Notification needs no
-    // reply body, so the private path never reads one.
-    const isPrivate = classifyUrl(url).kind === "private";
     const result = await postWebhookJson({
       url,
       payload: input.payload,
@@ -159,7 +151,14 @@ export class WebhookNotifyTask<
       timeout: input.timeout,
       signal: context.signal,
       registry: context.registry,
-      readSuccessBody: !isPrivate,
+      // A ceiling, not the decision: `postWebhookJson` forces this to `false`
+      // for a DECLARED private destination and is the single decider, because
+      // the `response` port would otherwise turn this task into an SSRF *read*
+      // primitive — a POST to
+      // http://169.254.169.254/latest/meta-data/iam/security-credentials/ would
+      // hand a kilobyte of the reply back into the graph. Classifying the URL a
+      // second time here is how the two halves drift apart.
+      readSuccessBody: true,
       includeBodyInError: false,
       retryAfterFromJsonBody: false,
       allowPrivateDestination: input.allow_private_destination === true,
@@ -168,7 +167,7 @@ export class WebhookNotifyTask<
     return {
       success: true,
       status: result.status,
-      response: isPrivate ? "" : result.body,
+      response: result.body,
     } as Output;
   }
 }
