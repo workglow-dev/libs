@@ -398,6 +398,7 @@
         "pg": "catalog:",
         "playwright": "catalog:",
         "vitest": "catalog:",
+        "workglow": "workspace:*",
       },
     },
     "packages/test-contract": {

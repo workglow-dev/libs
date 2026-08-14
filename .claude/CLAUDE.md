@@ -621,6 +621,21 @@ the `test-vitest-dist` job in `.github/workflows/test.yml` is what keeps bundle 
 blocking: it reuses the `build-output` artifact and runs the unit tier under
 `WORKGLOW_TEST_TARGET=dist`.
 
+That job runs the UNIT tier only, which on its own would make the blocking check
+**tier-shaped**: a bundle reachable only from an `.integration.test.ts` file would be
+loaded by no blocking job at all. What closes that gap is
+`packages/test/src/test/util/PublishedEntryImports.test.ts`, a unit-tier file that
+enumerates every workspace manifest's `exports`, resolves each subpath under the Node
+conditions, and dynamically imports the result, asserting the module is non-empty. Under
+`WORKGLOW_TEST_TARGET=dist` that one file loads every published bundle regardless of which
+tier a suite happens to exercise it from; under the default target it costs nothing,
+because it loads the same sources the rest of the suite already does. Its exemption maps
+are deliberately tiny and each entry states its reason, so a new package defaults to being
+checked and a stale exemption fails the test rather than silently exempting nothing.
+Adding a published `exports` subpath therefore needs no CI change, and importing
+`workglow` — the meta-package `packages/test` devDepends on — is what pulls the provider
+bundles into the sweep transitively.
+
 ## Developing without building
 
 `bun run use-source` makes every package resolve to its source. It does **not** touch
