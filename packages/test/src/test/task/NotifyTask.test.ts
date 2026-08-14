@@ -977,6 +977,64 @@ describe("Webhook notification tasks", () => {
       expect(body).toContain("<@U1>");
     });
 
+    // `<!` is Slack's CONTROL-SEQUENCE sigil, not a broadcast sigil, and
+    // `<!date^…>` is the one documented member of that family that can notify
+    // nobody. Escaping it is pure collateral: Slack un-escapes the entity for
+    // display, so the message shows the raw token, and the only opt-out
+    // (`allow_mentions`) re-enables live channel-wide pings in the same field.
+    test("a Slack date token survives the broadcast escape", async () => {
+      const text = "Deploy at <!date^1700000000^{date_short}|Nov 14>";
+      await slackNotify({ url: SLACK_URL, text });
+
+      expect(JSON.parse(lastCall().options.body as string).text).toBe(text);
+    });
+
+    // The exemption is the two-character `<!` occurrence, not "everything after
+    // the first `<!date`": a broadcast written inside the token's fallback text
+    // is still a live broadcast.
+    test("a broadcast inside a date token's fallback is still escaped", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "<!date^1700000000^{date_short}|<!channel>>",
+      });
+
+      const posted = JSON.parse(lastCall().options.body as string).text as string;
+      expect(posted).toContain("&lt;!channel");
+      expect(posted).toContain("<!date^");
+    });
+
+    // Whether Slack accepts an upper-case token is unverified, so the exemption
+    // fails closed rather than opening a path nobody has checked.
+    test("a case-variant date token is still escaped", async () => {
+      await slackNotify({ url: SLACK_URL, text: "<!DATE^1700000000^{date_short}|x>" });
+
+      expect(JSON.parse(lastCall().options.body as string).text).toContain("&lt;!DATE");
+    });
+
+    test("channel broadcasts are still neutralized alongside a date token", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "<!channel> ships <!date^1700000000^{date_short}|Nov 14>",
+      });
+
+      const posted = JSON.parse(lastCall().options.body as string).text as string;
+      expect(posted).toContain("&lt;!channel>");
+      expect(posted).not.toContain("<!channel>");
+      expect(posted).toContain("<!date^1700000000^{date_short}|Nov 14>");
+    });
+
+    test("a date token inside blocks survives the deep walk", async () => {
+      const token = "<!date^1700000000^{date_short}|Nov 14>";
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: `ships ${token}` } }],
+      });
+
+      const posted = JSON.parse(lastCall().options.body as string);
+      expect(posted.blocks[0].text.text).toBe(`ships ${token}`);
+    });
+
     // `blocks` is as reachable from a pipe or a model as `text` is, so leaving
     // it unescaped left the whole neutering one field away from being bypassed.
     test("Slack neutralizes broadcasts inside blocks", async () => {

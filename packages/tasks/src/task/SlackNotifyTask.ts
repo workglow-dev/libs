@@ -42,7 +42,7 @@ const inputSchema = {
       items: { type: "object", additionalProperties: true },
       title: "Blocks",
       description:
-        "Slack Block Kit blocks. Channel-wide broadcasts are neutralized in every string inside the structure, the same as 'text', and rich_text broadcast/usergroup elements — which carry no escapable text — are rewritten to plain text, unless 'allow_mentions' is set.",
+        "Slack Block Kit blocks. Channel-wide broadcasts are neutralized in every string inside the structure, the same as 'text', and rich_text broadcast/usergroup elements — which carry no escapable text — are rewritten to plain text, unless 'allow_mentions' is set. Slack's <!date^...> formatting token notifies nobody and survives by default.",
     },
     username: {
       type: "string",
@@ -59,7 +59,7 @@ const inputSchema = {
       default: false,
       title: "Allow Mentions",
       description:
-        "Send 'text' and 'blocks' unmodified. By default channel-wide broadcasts are neutralized in both — the text forms (<!channel>, <!here>, <!everyone>, <!subteam^ID>) by escaping, and the rich_text broadcast/usergroup element shapes by rewriting — so piped or model-generated content cannot notify a whole workspace.",
+        "Send 'text' and 'blocks' unmodified. By default channel-wide broadcasts are neutralized in both — the text forms (<!channel>, <!here>, <!everyone>, <!subteam^ID>) by escaping, and the rich_text broadcast/usergroup element shapes by rewriting — so piped or model-generated content cannot notify a whole workspace. Slack's <!date^...> formatting token notifies nobody and is left live either way, so a date does not need this setting.",
     },
     timeout: {
       type: "number",
@@ -111,14 +111,39 @@ export type SlackNotifyTaskInput = FromSchema<typeof inputSchema>;
 export type SlackNotifyTaskOutput = FromSchema<typeof outputSchema>;
 
 /**
+ * A `<!` that opens a broadcast — every occurrence except the date token.
+ *
+ * `<!` is Slack's CONTROL-SEQUENCE sigil, not a broadcast sigil, and
+ * `<!date^1700000000^{date_short}|Nov 14>` is the one documented member of
+ * that family that can notify nobody: it renders a localized date. Escaping it
+ * is pure collateral damage — Slack un-escapes the entity for display, so the
+ * message shows the raw token, and the only opt-out (`allow_mentions`)
+ * re-enables live channel-wide pings in the same field.
+ *
+ * The exemption is an exact lowercase prefix matched at the `<!` itself: a
+ * `<!channel>` written inside a date token's fallback text is still escaped,
+ * and a case variant (`<!DATE^`) is escaped too — whether Slack accepts one is
+ * unverified, so this fails closed.
+ *
+ * With the exemption in place, everything the escape still removes
+ * (`<!channel>`, `<!here>`, `<!everyone>`, `<!subteam^…>`) IS a mention, so the
+ * single `allow_mentions` control governs a single concern: the lexical escape,
+ * the structural broadcast/usergroup rewrite and `link_names: false` all belong
+ * to it. That is why no separate port is introduced — splitting them would add
+ * a control with no behavior behind it.
+ */
+const BROADCAST_SIGIL = /<!(?!date\^)/g;
+
+/**
  * Defuses Slack's channel-wide broadcast sequences in caller-supplied text.
  *
  * Slack has no `allowed_mentions` equivalent; its documented control is
  * HTML-entity escaping. In message TEXT every broadcast is written `<!…>` —
  * `<!channel>`, `<!here>`, `<!everyone>` and the group form `<!subteam^ID>` —
  * so escaping just the opening `<!` kills every one of them while leaving
- * `<https://…|label>` links and single-user `<@U123>` mentions intact, which
- * full `<`/`>` escaping would break.
+ * `<https://…|label>` links, single-user `<@U123>` mentions and the
+ * `<!date^…>` formatting token intact, which full `<`/`>` escaping would break.
+ * The date token is exempted by {@link BROADCAST_SIGIL}, which explains why.
  *
  * Text is not the only form: Block Kit `rich_text` expresses the same ping
  * structurally, with no `<!` to escape. That half is handled by
@@ -128,7 +153,7 @@ export type SlackNotifyTaskOutput = FromSchema<typeof outputSchema>;
  * text, not these control sequences.
  */
 export function neutralizeSlackBroadcasts(text: string): string {
-  return text.split("<!").join("&lt;!");
+  return text.replace(BROADCAST_SIGIL, "&lt;!");
 }
 
 /**
@@ -145,11 +170,13 @@ const STRUCTURAL_BROADCAST_TYPES: ReadonlySet<string> = new Set(["broadcast", "u
  * Two mechanisms, because Slack has two ways to say the same thing.
  *
  * 1. LEXICAL — {@link neutralizeSlackBroadcasts} on EVERY string leaf, not just
- *    the ones that render as message body. `<!` is a broadcast sigil wherever
- *    Slack finds it and has no legitimate occurrence in a `type`, `block_id`,
- *    `action_id` or URL field, so escaping all of them is side-effect-free — it
- *    covers `fields[]`, `elements[]`, accessories and header/context blocks
- *    without enumerating them, and cannot miss a block SHAPE Slack adds later.
+ *    the ones that render as message body. A non-date `<!` is a broadcast sigil
+ *    wherever Slack finds it and has no legitimate occurrence in a `type`,
+ *    `block_id`, `action_id` or URL field, so escaping all of them is
+ *    side-effect-free — it covers `fields[]`, `elements[]`, accessories and
+ *    header/context blocks without enumerating them, and cannot miss a block
+ *    SHAPE Slack adds later. Calling that one function is also what carries the
+ *    date-token exemption to every leaf, rather than a second copy of the rule.
  *
  * 2. STRUCTURAL — a `rich_text` message says `@channel` with
  *    `{type: "broadcast", range: "channel"}` and a group ping with
