@@ -257,6 +257,35 @@ function implementationsIn(node: unknown, out: string[]): void {
 }
 
 /**
+ * The `browser` block of one subpath, wherever it is nested.
+ *
+ * A top-level `value.browser` lookup finds only the flat shape. Its sibling
+ * {@link nodeImportTarget} recurses, so the two disagreed about the same
+ * manifest: `{ "import": { "browser": {…}, "default": … } }` resolves its node
+ * target through the recursion while the browser block sat one level down,
+ * invisible — every rule keyed on `branch` then behaved as if the subpath
+ * declared no `browser` condition at all, which is the "reports a built browser
+ * entry that no condition routes to" message pointed at a manifest that does
+ * route to one.
+ *
+ * The first block found wins: resolution stops at the first matching condition,
+ * so a second `browser` deeper in a sibling branch is unreachable anyway.
+ */
+function findBrowserBlock(node: unknown): unknown {
+  if (typeof node !== "object" || node === null || Array.isArray(node)) return undefined;
+  const entry = node as Record<string, unknown>;
+  if ("browser" in entry) return entry.browser;
+  for (const [key, value] of Object.entries(entry)) {
+    // `types` is TypeScript's, never a runtime's, so a `browser` under it would
+    // not be entered by the bundler this rule is about.
+    if (key === "types") continue;
+    const found = findBrowserBlock(value);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/**
  * Subpaths that have a browser source entry beside them but do not route
  * browser consumers to it.
  *
@@ -293,7 +322,7 @@ function browserSplitViolations(
     const nodeTarget = nodeImportTarget(value);
     if (nodeTarget === undefined) continue;
     const at = `${manifest} exports["${subpath}"]`;
-    const branch = (value as Record<string, unknown> | undefined)?.browser;
+    const branch = findBrowserBlock(value);
 
     if (branch !== undefined) {
       const declared: string[] = [];
@@ -335,6 +364,86 @@ function browserSplitViolations(
           `${browserEntry[0]} exists (expected "${expected}")`
       );
     }
+  }
+  return out;
+}
+
+/**
+ * One `src/<stem>.browser.ts` and the `src/<stem>.ts` beside it, as text.
+ *
+ * Injected rather than read inside the rule so the fixtures below can state
+ * both halves, the same way {@link browserSplitViolations} takes its probe.
+ */
+interface EntryPair {
+  readonly browserPath: string;
+  readonly nodePath: string;
+  readonly browserText: string;
+  readonly nodeText: string;
+}
+
+/**
+ * The part of an entry file that decides what it exports. Block comments (the
+ * license header), whole-line `//` comments (`organize-imports-ignore`, and any
+ * prose explaining the entry) and whitespace are boilerplate every entry
+ * carries, so two entries differing only in those are the same module — and a
+ * comment alone can never talk this rule out of a real duplicate.
+ */
+function entryBody(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^[ \t]*\/\/.*$/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Every module specifier the entry names, in source order. */
+function specifiersIn(text: string): string[] {
+  return [...text.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1] as string);
+}
+
+/**
+ * Browser entries that are a copy of the node entry beside them AND name only
+ * relative specifiers.
+ *
+ * **The relative/bare distinction is the entire rule.** Two identical entry
+ * files mean opposite things depending on what they import:
+ *
+ * - A **relative** specifier (`"./ai/index"`) is resolved once, by the file's
+ *   own path, and nothing in this toolchain substitutes `X.browser.ts` for
+ *   `X.ts` on one (`--target=browser` changes the compile target, not the
+ *   resolver; the `browser` field in a manifest applies to BARE specifiers).
+ *   So both entries pull in the same module graph and the declaration split is
+ *   nominal — two `.d.ts` files that must be hand-kept in sync, with nothing
+ *   but diligence stopping them drifting. `providers/llamacpp-server` and
+ *   `providers/stable-diffusion-server` were exactly this. The fix is for the
+ *   browser entry to `export * from "./ai"`, which cannot drift.
+ *
+ * - A **bare** specifier (`"@workglow/openai/ai"`) is re-resolved at every hop
+ *   under the CONSUMER's conditions, so the two identical files land on
+ *   different modules: the split really happens one layer down, in the
+ *   provider's own exports map. The nine `packages/workglow/src/*.browser.ts`
+ *   shims are this shape, and their being byte-identical IS the mechanism —
+ *   collapsing one into `export * from "./openai"` would pin browser consumers
+ *   to whatever the shim's own condition resolved and destroy the split. They
+ *   must stay identical; this rule must never report them.
+ *
+ * A pair with no specifiers at all is not reported: there is no import graph to
+ * reason about, so "the two resolve the same graph" says nothing.
+ */
+function duplicateBrowserEntryViolations(pairs: readonly EntryPair[]): string[] {
+  const out: string[] = [];
+  for (const pair of pairs) {
+    const browserBody = entryBody(pair.browserText);
+    if (browserBody !== entryBody(pair.nodeText)) continue;
+    const specifiers = specifiersIn(browserBody);
+    if (specifiers.length === 0) continue;
+    if (!specifiers.every((specifier) => specifier.startsWith("."))) continue;
+    out.push(
+      `${pair.browserPath} is identical to ${pair.nodePath} and names only relative ` +
+        `specifiers (${specifiers.map((specifier) => `"${specifier}"`).join(", ")}), so both ` +
+        `entries resolve the same module graph and the declaration split is nominal — ` +
+        `re-export the node entry from it instead of duplicating it`
+    );
   }
   return out;
 }
@@ -695,6 +804,35 @@ describe("workspace exports maps", () => {
         .filter((program) => existsSync(join(root.dir, dirname(relative), program)));
       expect(programs, `${relative} runs no repo-local build program`).not.toEqual([]);
     }
+  });
+
+  it("re-exports rather than duplicates a browser entry that has no split", () => {
+    // Collected from `src/*.browser.ts` — the ENTRY layer, which is what the
+    // manifests above name. A `.browser.ts` with no `.ts` beside it (e.g.
+    // `packages/tasks/src/codec.browser.ts`) is not an entry pair and has
+    // nothing to be a duplicate of.
+    const pairs: EntryPair[] = [];
+    for (const manifest of manifests) {
+      const srcDir = join(root.dir, dirname(manifest.relative), "src");
+      if (!existsSync(srcDir)) continue;
+      for (const file of readdirSync(srcDir)) {
+        const stem = /^(.+)\.browser\.(tsx?)$/.exec(file);
+        if (stem === null) continue;
+        const nodeFile = `${stem[1]}.${stem[2]}`;
+        if (!existsSync(join(srcDir, nodeFile))) continue;
+        pairs.push({
+          browserPath: `${dirname(manifest.relative)}/src/${file}`,
+          nodePath: `${dirname(manifest.relative)}/src/${nodeFile}`,
+          browserText: readFileSync(join(srcDir, file), "utf8"),
+          nodeText: readFileSync(join(srcDir, nodeFile), "utf8"),
+        });
+      }
+    }
+    // The nine `packages/workglow` shims are pairs, and correctly identical —
+    // they are the negative case the rule has to keep passing, so a scan that
+    // found nothing would prove nothing.
+    expect(pairs.length).toBeGreaterThan(9);
+    expect(duplicateBrowserEntryViolations(pairs)).toEqual([]);
   });
 
   it("keeps the allowlist free of entries that no longer mismatch", () => {
@@ -1083,6 +1221,34 @@ describe("exports map violation detection", () => {
       ).toEqual([]);
     });
 
+    /**
+     * `{ import: { browser: …, default: … } }`. `nodeImportTarget` recurses
+     * into `import` and resolves the node target, so the subpath IS checked —
+     * but the browser block was looked up flatly on `value`, found nothing, and
+     * every rule keyed on it behaved as though no `browser` condition existed.
+     */
+    it("finds a browser block nested inside another condition", () => {
+      expect(
+        browserSplitViolations(
+          "providers/openai/package.json",
+          {
+            "./ai": {
+              import: {
+                browser: { types: "./dist/ai.browser.d.ts" },
+                types: "./dist/ai.d.ts",
+                default: "./dist/ai.js",
+              },
+            },
+          },
+          always
+        )
+      ).toEqual([
+        'providers/openai/package.json exports["./ai"] [browser]: the "browser" condition ' +
+          "declares no implementation, so a browser bundler enters it, matches nothing, and " +
+          'falls through to the node target "./dist/ai.js"',
+      ]);
+    });
+
     it("leaves the packages/* browser/node layout alone", () => {
       // Stem `node`, so the probe asks for `src/node.browser.ts` and finds
       // nothing — the split here is expressed as two peer entries, not a
@@ -1250,6 +1416,96 @@ describe("exports map violation detection", () => {
       expect(
         buildEntryViolations("p/package.json", { "./types": { types: "./dist/x.d.ts" } }, {})
       ).toEqual([]);
+    });
+  });
+
+  /**
+   * The duplicate-entry rule. No pair in the tree violates it after
+   * `providers/llamacpp-server` and `providers/stable-diffusion-server` were
+   * collapsed onto `export * from "./ai"`, so both branches need fixtures.
+   */
+  describe("duplicate browser entries", () => {
+    const license =
+      "/**\n * @license\n * Copyright 2026 Steven Roussey <sroussey@gmail.com>\n" +
+      " * SPDX-License-Identifier: Apache-2.0\n */\n\n// organize-imports-ignore\n\n";
+
+    it("reports a browser entry that duplicates the node entry through a relative specifier", () => {
+      // `providers/llamacpp-server` as it stood: two files, one module graph.
+      // Nothing substitutes `./ai/index.browser` for `./ai/index` on a relative
+      // specifier, so `dist/ai.browser.d.ts` and `dist/ai.d.ts` describe the
+      // same exports and stay equal only by hand.
+      expect(
+        duplicateBrowserEntryViolations([
+          {
+            browserPath: "providers/llamacpp-server/src/ai.browser.ts",
+            nodePath: "providers/llamacpp-server/src/ai.ts",
+            browserText: `${license}export * from "./ai/index";\n`,
+            nodeText: `${license}export * from "./ai/index";\n`,
+          },
+        ])
+      ).toEqual([
+        "providers/llamacpp-server/src/ai.browser.ts is identical to " +
+          'providers/llamacpp-server/src/ai.ts and names only relative specifiers ("./ai/index"), ' +
+          "so both entries resolve the same module graph and the declaration split is nominal — " +
+          "re-export the node entry from it instead of duplicating it",
+      ]);
+    });
+
+    it("says nothing about identical shims that re-export a bare specifier", () => {
+      // The `packages/workglow` shape, and the reason this rule tests the
+      // SPECIFIERS rather than just the text. A bare specifier is re-resolved
+      // under the consumer's own conditions at every hop, so these two files
+      // land on `@workglow/openai`'s browser and node bundles respectively —
+      // the split happens one layer down, in that package's exports map. Their
+      // being byte-identical is the mechanism, not a defect: collapsing the
+      // browser shim onto `export * from "./openai"` would resolve the bare
+      // specifier once, under the shim's own condition, and destroy the split.
+      expect(
+        duplicateBrowserEntryViolations([
+          {
+            browserPath: "packages/workglow/src/openai.browser.ts",
+            nodePath: "packages/workglow/src/openai.ts",
+            browserText: `${license}export * from "@workglow/openai/ai";\n`,
+            nodeText: `${license}export * from "@workglow/openai/ai";\n`,
+          },
+        ])
+      ).toEqual([]);
+    });
+
+    it("says nothing about a browser entry with a genuinely different graph", () => {
+      // `providers/deepseek`: the browser entry names its own barrel, so the
+      // two declarations describe different modules and cannot drift together.
+      expect(
+        duplicateBrowserEntryViolations([
+          {
+            browserPath: "providers/deepseek/src/ai.browser.ts",
+            nodePath: "providers/deepseek/src/ai.ts",
+            browserText: `${license}export * from "./ai/index.browser";\n`,
+            nodeText: `${license}export * from "./ai/index";\n`,
+          },
+        ])
+      ).toEqual([]);
+    });
+
+    it("ignores the license header and comments when comparing", () => {
+      // A differing copyright year, or prose added above the export, does not
+      // make two entries different modules — and must not be a way to silence
+      // the rule.
+      expect(
+        duplicateBrowserEntryViolations([
+          {
+            browserPath: "p/src/ai.browser.ts",
+            nodePath: "p/src/ai.ts",
+            browserText: `${license}// browser build\nexport * from "./ai/index";\n`,
+            nodeText:
+              '/**\n * @license\n * Copyright 2025 Someone\n */\n\nexport * from "./ai/index";\n',
+          },
+        ])
+      ).toEqual([
+        "p/src/ai.browser.ts is identical to p/src/ai.ts and names only relative specifiers " +
+          '("./ai/index"), so both entries resolve the same module graph and the declaration ' +
+          "split is nominal — re-export the node entry from it instead of duplicating it",
+      ]);
     });
   });
 

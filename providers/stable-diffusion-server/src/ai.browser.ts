@@ -6,4 +6,10 @@
 
 // organize-imports-ignore
 
-export * from "./ai/index";
+// This package has no platform-specific source: the browser bundle is the same
+// graph compiled `--target=browser`. Re-exporting the node entry is what stops
+// the two declarations drifting apart. Safe because the specifier is RELATIVE —
+// resolved once, identically under either condition. A future toolchain plugin
+// that substituted `X.browser.ts` for `X.ts` on relative specifiers would make
+// this a cycle.
+export * from "./ai";

@@ -6,4 +6,7 @@
 
 // organize-imports-ignore
 
-export * from "./ai/runtime";
+// See `ai.browser.ts`: no platform-specific source here either, so the browser
+// entry re-exports the node one rather than duplicating it. Relative specifier,
+// resolved identically under both conditions.
+export * from "./ai-runtime";
