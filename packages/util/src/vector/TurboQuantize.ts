@@ -27,6 +27,45 @@
  * placement — the contribution that buys the near-optimal distortion rate. Distortion here
  * is that of an optimal *uniform* quantizer, which is coarser.
  *
+ * ## Two encoders; only one has a storage path
+ *
+ * This module ships two independent encoders, and they are not interchangeable in where
+ * their output can live. Pick by where the comparison happens, not by compression ratio.
+ *
+ * {@link turboQuantizeToTypedArray} returns a plain `Int8Array` / `Int16Array` of finite
+ * numbers, one per coordinate. That is exactly the shape every `IVectorStorage` backend in
+ * this repo accepts, so it drops into any of them that declares a fixed-width column at
+ * the output's length (mind that `padToPowerOf2` makes that length longer than the input's
+ * — declare the column at the padded width).
+ *
+ * {@link turboQuantize}, {@link turboDequantize}, {@link turboQuantizedInnerProduct} and
+ * {@link turboQuantizedCosineSimilarity} are an **in-process codec**. They are the
+ * interesting half — sub-byte bit widths, 1-8 bits per dimension, with the angle
+ * correction and the pairwise comparability checks — and **no storage backend in this repo
+ * can accept their output**, nor could one without a new column type:
+ *
+ * - A {@link TurboQuantizeResult} is a record (`codes`, `bits`, `seed`, `norm`, `version`,
+ *   `dimensions`, `paddedDimensions`), not an array of numbers.
+ *   `assertVectorShape` — which every backend calls on write and on query — requires an
+ *   array-like whose `length` equals the store's declared dimensionality and whose every
+ *   entry is a finite number. A packed record fails on the first check; the packed
+ *   `codes` buffer fails on the second, since at 4 bits it holds two coordinates per byte
+ *   and its length is `ceil(paddedDimensions * bits / 8)`, not `dimensions`.
+ * - The backends that score in-process (`InMemoryVectorStorage`, `SqliteVectorStorage`,
+ *   `SqliteAiVectorStorage`) all call `cosineSimilarity(query, vector)` on raw numbers.
+ *   There is no hook to substitute {@link turboQuantizedCosineSimilarity}, which is the
+ *   only function that can read these codes.
+ * - The pgvector-backed backends (`PostgresVectorStorage`, `SupabaseVectorStorage`)
+ *   compute the distance **server-side** — a pgvector operator (`<=>`, `<->`, `<#>`) or
+ *   an RPC. A client-side scorer cannot be injected into either at all.
+ *
+ * So use the packed record where the comparison happens in-process: an in-memory candidate
+ * cache, or a client-side rerank over a shortlist retrieved by other means. **Do not
+ * persist it expecting a retrieval path to exist** — there is none today, and building one
+ * means a new column type plus a client-side scoring path plus per-backend fallbacks for
+ * the server-side-distance engines. Tracked in
+ * https://github.com/workglow-dev/libs/issues/798.
+ *
  * ## Similarity is biased LOW at low bit widths
  *
  * Magnitude is unbiased; similarity is not. Clipping and rounding shrink the reconstructed
