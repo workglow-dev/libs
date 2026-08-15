@@ -29,7 +29,13 @@
  */
 
 import { PermanentJobError, RetryableJobError } from "@workglow/job-queue";
-import { discordNotify, getSafeFetchImpl, slackNotify } from "@workglow/tasks";
+import {
+  discordNotify,
+  FetchUrlErrorCode,
+  getSafeFetchImpl,
+  slackNotify,
+  webhookNotify,
+} from "@workglow/tasks";
 import { SECURITY_LIMITS } from "@workglow/util";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -240,6 +246,62 @@ describe("Notification tasks over the real server transport (no mocks)", () => {
 
     expect(result).toEqual({ success: true, status: 204 });
     expect(await waitForNoConnections(server, 5000)).toBe(0);
+
+    await drainRejections();
+    expect(unhandled).toEqual([]);
+  });
+
+  // The header guard belongs in this file for the same reason everything else
+  // here does: the mocked `safeFetch` in `NotifyTask.test.ts` never constructs
+  // a `Headers` object, so it can prove the guard fires but not that the guard
+  // is still in FRONT of the thing it guards. Only the real transport can.
+  //
+  // This is the tripwire for undici changing its validation out from under the
+  // guard. If undici ever tightened on a header this guard admits, the request
+  // would start rejecting with a bare `TypeError` classified as a retryable
+  // NETWORK_ERROR again — so the accepted-header case below is asserted too,
+  // and it is the half that would actually break.
+  test("an invalid header is refused before the request reaches the server", async () => {
+    let requests = 0;
+    const { origin } = await withServer((_req, res) => {
+      requests += 1;
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+    });
+
+    const error = (await webhookNotify({
+      url: `${origin}/hooks/SECRETTOKEN`,
+      payload: {},
+      headers: { "X-Bad Name": "v" },
+      allow_private_destination: true,
+    }).catch((e: unknown) => e)) as PermanentJobError;
+
+    expect(error).toBeInstanceOf(PermanentJobError);
+    expect(error).not.toBeInstanceOf(RetryableJobError);
+    expect(error.code).toBe(FetchUrlErrorCode.CONFIGURATION);
+    expect(requests).toBe(0);
+
+    await drainRejections();
+    expect(unhandled).toEqual([]);
+  });
+
+  test("a header the guard admits is accepted by the transport and arrives intact", async () => {
+    let seen: string | undefined;
+    const { origin } = await withServer((req, res) => {
+      seen = req.headers["x-signature"] as string | undefined;
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+    });
+
+    const result = await webhookNotify({
+      url: `${origin}/hooks/SECRETTOKEN`,
+      payload: {},
+      headers: { "X-Signature": "sha256=abcdef" },
+      allow_private_destination: true,
+    });
+
+    expect(result.status).toBe(200);
+    expect(seen).toBe("sha256=abcdef");
 
     await drainRejections();
     expect(unhandled).toEqual([]);

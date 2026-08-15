@@ -25,6 +25,7 @@ import type { TaskEntitlements } from "@workglow/task-graph";
 import { ENTITLEMENT_ENFORCER, Entitlements, mergeEntitlements } from "@workglow/task-graph";
 import type { ServiceRegistry } from "@workglow/util";
 import { SECURITY_LIMITS } from "@workglow/util";
+import { isBareHeaderName } from "../task/FetchUrlCredentials";
 import type { FetchUrlJobErrorInstance } from "../task/FetchUrlJobError";
 import {
   createFetchUrlAbortedError,
@@ -609,6 +610,97 @@ export async function assertPrivateDestinationGranted(
 }
 
 /**
+ * Characters a header VALUE may never carry: NUL, CR and LF.
+ *
+ * CR/LF are the response-splitting pair; NUL is rejected by undici alongside
+ * them and would be truncated by some intermediaries rather than transmitted.
+ */
+const FORBIDDEN_HEADER_VALUE_CHARS = /[\0\r\n]/;
+
+/**
+ * Rejects request headers `fetch` would throw on, as a permanent configuration
+ * error rather than a retried network failure.
+ *
+ * undici builds the `Headers` object INSIDE `fetch`, and a malformed name or
+ * value rejects with a bare `TypeError` — no `code`, not a `FetchUrlJobError`,
+ * name `"TypeError"`. {@link toRedactedWebhookError} matches none of its named
+ * branches, so such a throw fell through to `NETWORK_ERROR` and a
+ * `RetryableJobError`: a queued consumer then retried a typo forever.
+ *
+ * The message names the offending HEADER but NEVER its value. undici's own
+ * message quotes the value back (`Headers.append: "…" is an invalid header
+ * value.`), which {@link detailWithCause} splices into a PERSISTED job-error
+ * string — so a bearer token carrying a stray newline would be written to
+ * durable storage by the very error that reported it. Half the reason this
+ * guard exists is to get in front of that message.
+ *
+ * This is deliberately STRICTER than undici, in both halves, and the difference
+ * is a new rejection rather than a mirror:
+ *
+ * - Names are held to {@link isBareHeaderName} — letters, digits and hyphens —
+ *   which is narrower than RFC 9110's token production (`!#$%&'*+.^_\`|~` are
+ *   token characters undici accepts). It is the same rule the credential ports
+ *   already enforce, so a name is legal here exactly when it is legal there.
+ * - Values are rejected for NUL/CR/LF ANYWHERE, whereas `fetch` first trims
+ *   leading and trailing HTTP whitespace: probed on Node 22, `{"X-Ok": "\nabc"}`
+ *   and `{"X-Ok": " "}` are both NORMALIZED and sent, not rejected. Accepting a
+ *   value whose framing depends on a trim step is not worth the compatibility.
+ */
+export function assertValidRequestHeaders(
+  headers: Readonly<Record<string, string>> | undefined,
+  url: string,
+  label: string
+): void {
+  if (headers === undefined) {
+    return;
+  }
+  for (const [name, value] of Object.entries(headers)) {
+    if (!isBareHeaderName(name)) {
+      throw createFetchUrlJobError(
+        FetchUrlErrorCode.CONFIGURATION,
+        `Cannot post ${label} to ${redactWebhookUrl(url)}: ${JSON.stringify(name)} is not a valid ` +
+          `header name. Header names must be 1-64 characters of letters, digits, or hyphens.`,
+        { url: redactWebhookUrl(url) }
+      );
+    }
+    if (typeof value !== "string" || FORBIDDEN_HEADER_VALUE_CHARS.test(value)) {
+      // The value is a caller secret as often as not, so it is described rather
+      // than quoted — naming the header is enough to find it.
+      throw createFetchUrlJobError(
+        FetchUrlErrorCode.CONFIGURATION,
+        `Cannot post ${label} to ${redactWebhookUrl(url)}: the value of header ` +
+          `${JSON.stringify(name)} is not a valid header value. It must be a string carrying no ` +
+          `NUL, carriage return, or line feed. The value itself is withheld — it may be a secret.`,
+        { url: redactWebhookUrl(url) }
+      );
+    }
+  }
+}
+
+/**
+ * Merges the JSON content type UNDER the caller's headers, case-insensitively.
+ *
+ * A plain `{ "Content-Type": "application/json", ...headers }` leaves a
+ * caller's lowercase `content-type` in place as a second, distinct object
+ * property — and the `Headers` constructor folds the two into one comma-joined
+ * field, so the request goes out declaring both content types at once. Header
+ * names are case-insensitive, so the override has to be too.
+ */
+export function withJsonContentType(
+  headers: Readonly<Record<string, string>> | undefined
+): Record<string, string> {
+  const supplied = Object.entries(headers ?? {});
+  const callerSetsType = supplied.some(([name]) => name.toLowerCase() === "content-type");
+  const merged: Record<string, string> = callerSetsType
+    ? {}
+    : { "Content-Type": "application/json" };
+  for (const [name, value] of supplied) {
+    merged[name] = value;
+  }
+  return merged;
+}
+
+/**
  * POSTs `payload` as JSON to a webhook endpoint through {@link safeFetch}.
  *
  * Private/loopback destinations are refused unless the caller declared
@@ -699,10 +791,8 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
   // treat anything it does not recognize as a transient network failure — so a
   // throw from here would be retried forever under a misleading message.
   let body: string | undefined;
-  let headers: Record<string, string>;
   try {
     body = JSON.stringify(request.payload);
-    headers = { "Content-Type": "application/json", ...request.headers };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     throw createFetchUrlJobError(
@@ -712,6 +802,15 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
       { url: redactWebhookUrl(url) }
     );
   }
+
+  // Outside the `try` above, which exists for `JSON.stringify` alone: the merge
+  // cannot throw, and wrapping it would report a header rejection under the
+  // stringify branch's wording. Validated BEFORE the merge so the guard sees
+  // exactly what the caller supplied, and before the request for the same reason
+  // the `timeout` guard runs early — `fetch` would raise a bare `TypeError` that
+  // the catch below classifies as a retryable network failure.
+  assertValidRequestHeaders(request.headers, url, label);
+  const headers = withJsonContentType(request.headers);
 
   let response: Response;
   try {
@@ -758,7 +857,18 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
   // The failure path ignores `complete`: the status error is what this throw
   // reports, and a partial diagnostic body does not change it.
   const { text: failureBody } = await readBodyText(response);
-  const retryDate = retryDateFromResponse(response, failureBody, request.retryAfterFromJsonBody);
+  // The BODY-derived hint follows the same invariant as the body and the reason
+  // phrase: a DECLARED private destination's reply is never surfaced, and a
+  // retry timestamp derived from `{"retry_after": …}` is that reply leaking out
+  // through the error's `retryDate`. Discord asks for the body source AND is
+  // reachable with `allow_private_destination`, so the two do meet. The
+  // `Retry-After` HEADER is transport-level rather than a reply the caller
+  // authored, so it keeps working either way.
+  const retryDate = retryDateFromResponse(
+    response,
+    failureBody,
+    request.retryAfterFromJsonBody && !allowPrivate
+  );
   const redacted = redactWebhookUrl(url);
   // The status is still reported for a private destination — the reply BODY is
   // what would turn a POST at an internal service into a read of it.
@@ -821,29 +931,54 @@ export function webhookBaseEntitlements(reason: string): TaskEntitlements {
  * So the decision is an explicit input instead, and {@link postWebhookJson}
  * enforces it at execute time against the URL actually resolved. The
  * declaration is scoped to the `url` port when that port is the destination;
- * with a credential key the URL is unknown here, so the grant is unscoped and
- * says why.
+ * with a URL credential key the URL is unknown here, so the grant is unscoped
+ * and says why. A HEADER credential key does not unscope anything — it changes
+ * what the request carries, not where it goes.
  *
  * Only an explicit `false` opts out: a root task's run-input is applied after
  * entitlements are evaluated, so an unset flag is "not yet knowable" and fails
  * closed.
  */
+export interface WebhookPrivateEntitlementsOptions {
+  /** Static class-level declaration this refines. */
+  readonly base: TaskEntitlements;
+  /** The `url` port, when the instance carries one. */
+  readonly url: unknown;
+  /** The `url_credential_key` port: the credential IS the destination. */
+  readonly urlCredentialKey: unknown;
+  /**
+   * A credential key placed on a request HEADER (`credential_key`), for tasks
+   * that have one. It reaches the credential store like the URL key, but says
+   * nothing about where the request goes.
+   */
+  readonly headerCredentialKey: unknown;
+  /** The `allow_private_destination` port. */
+  readonly allowPrivate: unknown;
+}
+
 export function webhookPrivateEntitlements(
-  base: TaskEntitlements,
-  url: unknown,
-  credentialKey: unknown,
-  allowPrivate: unknown
+  options: WebhookPrivateEntitlementsOptions
 ): TaskEntitlements {
-  const credentialWins = typeof credentialKey === "string" && credentialKey.length > 0;
+  const { base, url, urlCredentialKey, headerCredentialKey, allowPrivate } = options;
+  const isSet = (key: unknown): boolean => typeof key === "string" && key.length > 0;
+  // The URL key HIDES THE DESTINATION; either key READS THE STORE. Two separate
+  // consequences, so two separate questions — collapsing them would either let a
+  // header credential unscope a perfectly knowable `url` (over-granting), or
+  // leave a header credential's store access declared merely optional, which
+  // `evaluatePolicy` skips outright (under-enforcing).
+  const urlFromCredential = isSet(urlCredentialKey);
+  const usesCredentialStore = urlFromCredential || isSet(headerCredentialKey);
   // A configured credential key is no longer a "may": this instance WILL read
   // the credential store. `mergeEntitlements` keeps the most restrictive
   // `optional`, so this upgrades the base declaration into an enforced one.
-  const withCredential = credentialWins
+  const withCredential = usesCredentialStore
     ? mergeEntitlements(base, {
         entitlements: [
           {
             id: Entitlements.CREDENTIAL,
-            reason: "Resolves the webhook URL — the secret itself — from the credential store",
+            reason: urlFromCredential
+              ? "Resolves the webhook URL — the secret itself — from the credential store"
+              : "Resolves an authentication secret placed on the request headers from the credential store",
           },
         ],
       })
@@ -851,7 +986,7 @@ export function webhookPrivateEntitlements(
   if (allowPrivate === false) {
     return withCredential;
   }
-  const scoped = !credentialWins && typeof url === "string" && url.length > 0;
+  const scoped = !urlFromCredential && typeof url === "string" && url.length > 0;
   return mergeEntitlements(withCredential, {
     entitlements: [
       {

@@ -19,6 +19,8 @@ import {
   webhookBaseEntitlements,
   webhookPrivateEntitlements,
 } from "../util/WebhookPost";
+import { applyCredentialToHeaders } from "./FetchUrlCredentials";
+import { createFetchUrlJobError, FetchUrlErrorCode } from "./FetchUrlJobError";
 
 const inputSchema = {
   type: "object",
@@ -40,7 +42,8 @@ const inputSchema = {
       type: "object",
       additionalProperties: { type: "string" },
       title: "Headers",
-      description: "Additional headers merged over the JSON content type",
+      description:
+        "Additional headers merged over the JSON content type. A value set here is stored verbatim in the graph JSON, so an authentication or signing secret belongs in 'credential_key' instead. A name that is not a bare header token, or a value carrying a NUL/CR/LF, is a permanent configuration error.",
     },
     timeout: {
       type: "integer",
@@ -64,6 +67,30 @@ const inputSchema = {
       title: "Credential Key",
       description:
         "Key to look up in the credential store. The resolved value is the entire webhook URL — the secret itself, not a bearer token — and takes precedence over the url input.",
+      "x-ui-hidden": true,
+    },
+    credential_key: {
+      type: "string",
+      format: "credential",
+      title: "Credential Key",
+      description:
+        "Key to look up in the credential store. The resolved secret is placed on the request according to credential_scheme.",
+      "x-ui-hidden": true,
+    },
+    credential_scheme: {
+      enum: ["bearer", "basic", "header", "none"],
+      title: "Credential Scheme",
+      description:
+        "How the resolved credential is sent. 'bearer' and 'basic' use the Authorization header ('basic' expects an already base64-encoded user:pass); 'header' uses credential_header; 'none' resolves but sends nothing.",
+      default: "bearer",
+      "x-ui-hidden": true,
+    },
+    credential_header: {
+      type: "string",
+      title: "Credential Header",
+      description:
+        "Header name used when credential_scheme is 'header'. Must be a bare header token (letters, digits, hyphens).",
+      default: "Authorization",
       "x-ui-hidden": true,
     },
   },
@@ -103,6 +130,16 @@ export type WebhookNotifyTaskOutput = FromSchema<typeof outputSchema>;
  *
  * The URL is handled as a secret: it is kept out of the output schema, and
  * failures report only the endpoint's origin.
+ *
+ * Two independent credential seams, because a generic webhook has two shapes of
+ * secret and `Task.toJSON` serializes `defaults` verbatim into the saved graph:
+ *
+ * - `url_credential_key` — the resolved value IS the whole endpoint, the
+ *   Slack/Discord shape where the token lives in the path;
+ * - `credential_key` (+ `credential_scheme` / `credential_header`) — a bearer
+ *   token, basic pair, or signing key placed on a REQUEST HEADER, which is what
+ *   an authenticated or HMAC-signed endpoint needs. Without it such a secret had
+ *   to be inlined in the `headers` port and would be written into the graph JSON.
  */
 export class WebhookNotifyTask<
   Input extends WebhookNotifyTaskInput = WebhookNotifyTaskInput,
@@ -121,12 +158,13 @@ export class WebhookNotifyTask<
   }
 
   public override entitlements(): TaskEntitlements {
-    return webhookPrivateEntitlements(
-      WebhookNotifyTask.entitlements(),
-      this.runInputData?.url,
-      this.runInputData?.url_credential_key,
-      this.runInputData?.allow_private_destination
-    );
+    return webhookPrivateEntitlements({
+      base: WebhookNotifyTask.entitlements(),
+      url: this.runInputData?.url,
+      urlCredentialKey: this.runInputData?.url_credential_key,
+      headerCredentialKey: this.runInputData?.credential_key,
+      allowPrivate: this.runInputData?.allow_private_destination,
+    });
   }
 
   public static override inputSchema() {
@@ -144,10 +182,40 @@ export class WebhookNotifyTask<
       Object.hasOwn(input, "url_credential_key"),
       "WebhookNotifyTask"
     );
+    // Placed FIRST, so the header the credential produces is validated by
+    // `postWebhookJson`'s own header guard like any caller-supplied one — a
+    // secret carrying a stray newline is a configuration error, not a request
+    // undici rejects with a `TypeError` that quotes the secret back.
+    //
+    // No credential-port stripping here, unlike `FetchUrlTask`: that task
+    // forwards `...rest` into a job input, so a resolved secret left on a port
+    // would be persisted. This post is assembled field by field below and the
+    // credential ports are simply never read again.
+    let headers: Record<string, string> | undefined;
+    try {
+      headers = applyCredentialToHeaders({
+        headers: input.headers,
+        credential: input.credential_key,
+        scheme: input.credential_scheme,
+        headerName: input.credential_header,
+      });
+    } catch (err) {
+      // `credentialHeaderName` throws a `TaskConfigurationError` whose message is
+      // hardcoded "FetchUrlTask: …" and which carries no `FETCH_*` code, so a
+      // queued consumer could not classify it. Re-raised under this task's own
+      // label as a permanent CONFIGURATION failure. Only the header NAME appears
+      // in that message; the credential value never does.
+      const detail = err instanceof Error ? err.message : String(err);
+      throw createFetchUrlJobError(
+        FetchUrlErrorCode.CONFIGURATION,
+        `WebhookNotifyTask: ${detail.replace(/^FetchUrlTask: /, "")}`
+      );
+    }
+
     const result = await postWebhookJson({
       url,
       payload: input.payload,
-      headers: input.headers,
+      headers,
       timeout: input.timeout,
       signal: context.signal,
       registry: context.registry,

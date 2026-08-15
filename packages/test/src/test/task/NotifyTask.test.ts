@@ -915,12 +915,41 @@ describe("Webhook notification tasks", () => {
       expect(granted!.resources).toBeUndefined();
     });
 
+    // The two credential ports have DIFFERENT consequences for scoping, which
+    // is the whole reason `webhookPrivateEntitlements` takes them separately.
+    // `url_credential_key` hides the destination, so the grant cannot name one.
+    // `credential_key` only decides what the request CARRIES — the `url` port is
+    // still the destination and is still perfectly knowable here — so unscoping
+    // on it would hand out a wildcard `network:private` grant for no reason.
+    test("a header credential key does not unscope a declared private destination", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = {
+        url: "http://127.0.0.1:9200/ingest",
+        payload: {},
+        credential_key: "deploy-token",
+        allow_private_destination: true,
+      } as any;
+      const granted = task.entitlements().entitlements.find((e) => e.id === "network:private");
+      expect(granted?.resources).toEqual(["http://127.0.0.1:9200/*"]);
+    });
+
     // `optional: true` entitlements are skipped outright by evaluatePolicy, so
     // a decorative declaration is no gate at all on the instance that really
     // reaches into the credential store.
     test("a configured credential key makes the credential entitlement enforced", () => {
       const task = new WebhookNotifyTask();
       task.runInputData = { payload: {}, url_credential_key: "hook" } as any;
+      const credential = task.entitlements().entitlements.find((e) => e.id === "credential");
+      expect(credential).toBeDefined();
+      expect(credential!.optional).not.toBe(true);
+    });
+
+    // The other half of the split: a header credential reads the store just as
+    // surely as a URL credential does, so it must enforce the `credential`
+    // entitlement even though it changes nothing about scoping.
+    test("a header credential key alone makes the credential entitlement enforced", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = { url: WEBHOOK_URL, payload: {}, credential_key: "deploy-token" } as any;
       const credential = task.entitlements().entitlements.find((e) => e.id === "credential");
       expect(credential).toBeDefined();
       expect(credential!.optional).not.toBe(true);
@@ -2148,6 +2177,242 @@ describe("Webhook notification tasks", () => {
       expect(error).toBeInstanceOf(PermanentJobError);
       expect(error).not.toBeInstanceOf(RetryableJobError);
       expect((error as PermanentJobError).code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+  });
+
+  /**
+   * A malformed request header is a caller mistake no retry can fix, but undici
+   * builds the `Headers` object INSIDE `fetch` and rejects with a bare
+   * `TypeError` — name `"TypeError"`, no `code`, not a `FetchUrlJobError`. It
+   * matched none of `toRedactedWebhookError`'s named branches and fell through
+   * to `NETWORK_ERROR`, so a queued consumer retried a typo forever.
+   *
+   * The second, sharper half is what the error MESSAGE carried. undici quotes
+   * the offending header VALUE back (`Headers.append: "…" is an invalid header
+   * value.`), which `detailWithCause` splices into a PERSISTED job-error
+   * string. With `credential_key` below placing a resolved secret on a header,
+   * that is a bearer token written to durable storage by the error that
+   * reported it. Every `not.toContain` here is guarding that boundary.
+   */
+  describe("request headers", () => {
+    const CONTROL_CHAR = String.fromCharCode(10);
+
+    test("an invalid header name is a permanent configuration error", async () => {
+      const error = (await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        headers: { "X-Bad Name": "v" },
+      }).catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error).not.toBeInstanceOf(RetryableJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      // The name is not a secret and is the only way to find the offender.
+      expect(error.message).toContain("X-Bad Name");
+      // Never reaches the transport: the point of the guard is that `fetch` is
+      // not the thing that gets to classify this.
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    // THE assertion guarding the secret echo. `Bearer abc123 ` is shaped like
+    // the credential a caller would put on an `Authorization` header, and
+    // undici's own message would quote it verbatim.
+    test("an invalid header value is reported without echoing the value", async () => {
+      const secretish = `Bearer abc123${CONTROL_CHAR}injected`;
+
+      const error = (await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        headers: { "X-Signature": secretish },
+      }).catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(error.message).toContain("X-Signature");
+      expect(error.message).not.toContain("abc123");
+      expect(error.message).not.toContain(secretish);
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    // The URL is the credential for these tasks, so the new guard's message is
+    // held to the same redaction rule as every other error here.
+    test("the header rejection reports only the origin of the webhook URL", async () => {
+      const error = (await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        headers: { "X:Y": "v" },
+      }).catch((e: unknown) => e)) as PermanentJobError & { url?: string };
+
+      expect(error.code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(error.message).not.toContain("SECRETTOKEN");
+      expect(error.url).not.toContain("SECRETTOKEN");
+    });
+
+    // The guard must not become a wall: an ordinary header still goes out.
+    test("a valid header still reaches the transport", async () => {
+      await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        headers: { "X-Custom": "yes" },
+      });
+
+      expect(requestHeaders()).toEqual({
+        "Content-Type": "application/json",
+        "X-Custom": "yes",
+      });
+    });
+
+    // `{ "Content-Type": …, ...headers }` left a caller's lowercase key in
+    // place as a SECOND object property, and `Headers` folds two spellings of
+    // one name into a single comma-joined field — so the request declared both
+    // content types at once.
+    test("a lowercase content-type override replaces rather than doubles up", async () => {
+      await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        headers: { "content-type": "application/vnd.custom+json" },
+      });
+
+      const sent = requestHeaders();
+      expect(sent).toEqual({ "content-type": "application/vnd.custom+json" });
+      expect(Object.keys(sent).filter((k) => k.toLowerCase() === "content-type")).toHaveLength(1);
+    });
+
+    // M4: the seam that exists so an authenticated endpoint does not force the
+    // secret into `headers` — and therefore into the saved graph JSON.
+    test("a credential_key places a bearer token on the request", async () => {
+      const store = getGlobalCredentialStore();
+      await store.put("deploy-token", "s3cr3t-value");
+      try {
+        await webhookNotify({
+          url: WEBHOOK_URL,
+          payload: {},
+          credential_key: "deploy-token",
+        });
+
+        expect(requestHeaders()["Authorization"]).toBe("Bearer s3cr3t-value");
+      } finally {
+        await store.delete("deploy-token");
+      }
+    });
+
+    // The reason the port exists at all: `Task.toJSON` serializes `defaults`
+    // verbatim, so a secret inlined in `headers` is written into the graph. A
+    // credential KEY is a reference; only the reference is persisted.
+    test("only the credential key, never the secret, reaches the graph JSON", async () => {
+      const store = getGlobalCredentialStore();
+      await store.put("deploy-token", "s3cr3t-value");
+      const task = new WebhookNotifyTask({
+        defaults: { url: WEBHOOK_URL, credential_key: "deploy-token" },
+      });
+      try {
+        await task.run({ payload: {} } as never);
+
+        expect(requestHeaders()["Authorization"]).toBe("Bearer s3cr3t-value");
+        const serialized = JSON.stringify(task.toJSON());
+        expect(serialized).toContain("deploy-token");
+        expect(serialized).not.toContain("s3cr3t-value");
+      } finally {
+        await store.delete("deploy-token");
+      }
+    });
+
+    test("credential_scheme 'header' writes the raw secret to credential_header", async () => {
+      const store = getGlobalCredentialStore();
+      await store.put("sig-key", "sha256=abcdef");
+      try {
+        await webhookNotify({
+          url: WEBHOOK_URL,
+          payload: {},
+          credential_key: "sig-key",
+          credential_scheme: "header",
+          credential_header: "X-Signature",
+        });
+
+        const sent = requestHeaders();
+        expect(sent["X-Signature"]).toBe("sha256=abcdef");
+        expect(sent["Authorization"]).toBeUndefined();
+      } finally {
+        await store.delete("sig-key");
+      }
+    });
+
+    // HTTP header names are case-insensitive, so a caller's lowercase
+    // `authorization` is the SAME header. Left in place it would survive as a
+    // distinct object property and be folded into one comma-joined field
+    // alongside the real credential, sending a stale token with every request.
+    test("a resolved credential replaces a caller header case-insensitively", async () => {
+      const store = getGlobalCredentialStore();
+      await store.put("deploy-token", "fresh");
+      try {
+        await webhookNotify({
+          url: WEBHOOK_URL,
+          payload: {},
+          headers: { authorization: "stale" },
+          credential_key: "deploy-token",
+        });
+
+        const sent = requestHeaders();
+        expect(sent["Authorization"]).toBe("Bearer fresh");
+        expect(sent["authorization"]).toBeUndefined();
+        expect(JSON.stringify(sent)).not.toContain("stale");
+      } finally {
+        await store.delete("deploy-token");
+      }
+    });
+
+    // `credentialHeaderName` throws a `TaskConfigurationError` whose message is
+    // hardcoded "FetchUrlTask: …" and which carries no `FETCH_*` code, so a
+    // queued consumer could not classify it at all. Re-raised under this task's
+    // own label as a permanent CONFIGURATION failure.
+    test("an invalid credential_header is a configuration error labelled for this task", async () => {
+      const store = getGlobalCredentialStore();
+      await store.put("sig-key", "abc");
+      const error = (await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        credential_key: "sig-key",
+        credential_scheme: "header",
+        credential_header: "X Bad",
+      })
+        .catch((e: unknown) => e)
+        .finally(() => store.delete("sig-key"))) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(error.message).toContain("WebhookNotifyTask");
+      expect(error.message).not.toContain("FetchUrlTask");
+      expect(error.message).toContain("X Bad");
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    // THE COMPOSITION TEST: M4 places a resolved secret on a header, and M1
+    // then validates it like any other. Without M1 this exact case is what
+    // writes the secret into a persisted job error — undici would reject the
+    // value and quote it back in the `TypeError` message. The two changes are
+    // stacked in one PR because of this ordering, not by convenience.
+    test("a credential value carrying a control character is rejected without echoing it", async () => {
+      const store = getGlobalCredentialStore();
+      const poisoned = `abc123${CONTROL_CHAR}X-Injected: 1`;
+      await store.put("bad-token", poisoned);
+      const error = (await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        credential_key: "bad-token",
+      })
+        .catch((e: unknown) => e)
+        .finally(() => store.delete("bad-token"))) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error).not.toBeInstanceOf(RetryableJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(error.message).toContain("Authorization");
+      expect(error.message).not.toContain("abc123");
+      expect(error.message).not.toContain(poisoned);
+      // The persisted diagnostic string is the real disclosure surface, so it
+      // gets its own assertion rather than trusting `.message` alone.
+      expect(formatErrorChainForDiagnostics(error)).not.toContain("abc123");
       expect(mockFetch.mock.calls.length).toBe(0);
     });
   });

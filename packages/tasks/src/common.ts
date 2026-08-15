@@ -93,8 +93,10 @@ export * from "./task/WebhookNotifyTask";
 export * from "./registerTaskOptions";
 export * from "./util/BoundedRegexRunner";
 export * from "./util/regexSafety";
+export * from "./util/RetryAfter";
 export * from "./util/SafeFetch";
 export * from "./util/UrlClassifier";
+export * from "./util/WebhookPost";
 export { applyFilter, hasFilterOp, registerFilterOp } from "@workglow/util/media";
 export type { FilterOpFn } from "@workglow/util/media";
 

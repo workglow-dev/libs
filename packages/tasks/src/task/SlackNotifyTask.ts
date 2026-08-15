@@ -358,12 +358,15 @@ export class SlackNotifyTask<
   }
 
   public override entitlements(): TaskEntitlements {
-    return webhookPrivateEntitlements(
-      SlackNotifyTask.entitlements(),
-      this.runInputData?.url,
-      this.runInputData?.url_credential_key,
-      this.runInputData?.allow_private_destination
-    );
+    return webhookPrivateEntitlements({
+      base: SlackNotifyTask.entitlements(),
+      url: this.runInputData?.url,
+      urlCredentialKey: this.runInputData?.url_credential_key,
+      // Slack's payload shape is fixed and carries no caller headers, so there
+      // is no header credential to declare.
+      headerCredentialKey: undefined,
+      allowPrivate: this.runInputData?.allow_private_destination,
+    });
   }
 
   public static override inputSchema() {

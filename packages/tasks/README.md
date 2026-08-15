@@ -150,10 +150,13 @@ output schema and error messages report only the endpoint's origin.
 
 - `url` (string, optional): Webhook endpoint to POST to. Kept out of errors and output, but a value set here is stored verbatim in the graph JSON — use `url_credential_key` to keep the secret out of the saved workflow.
 - `payload` (object, required): JSON body to send
-- `headers` (object, optional): Additional headers, merged over the JSON content type
+- `headers` (object, optional): Additional headers, merged over the JSON content type (case-insensitively, so a lowercase `content-type` replaces it rather than being sent alongside it). A value set here is stored verbatim in the graph JSON — an authentication or signing secret belongs in `credential_key` instead
 - `timeout` (integer, optional): Request timeout in milliseconds, a whole number from 1 to 2147483647 (~24.8 days). Default: `30000`
 - `allow_private_destination` (boolean, optional): Permit posting to a private/internal/loopback destination — including a public-looking hostname that resolves into private address space. Requires the `network:private` entitlement, re-checked at execute time against the URL actually resolved. A declared private destination's reply body and reason phrase are never surfaced. Default: `false`
 - `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`. A value that is not an absolute `http(s)` URL (e.g. a bearer token) is rejected with a configuration error.
+- `credential_key` (string, optional): Credential store key whose resolved secret is placed on a request HEADER according to `credential_scheme`. This is the bearer/basic/API-key/HMAC shape, as opposed to `url_credential_key`'s "the URL itself is the secret" shape; the two are independent and may be combined
+- `credential_scheme` (enum, optional): How the resolved credential is sent — `bearer` and `basic` use the `Authorization` header (`basic` expects an already base64-encoded `user:pass`), `header` uses `credential_header`, `none` resolves but sends nothing. Default: `bearer`
+- `credential_header` (string, optional): Header name used when `credential_scheme` is `header`. Must be a bare header token (letters, digits, hyphens). Default: `Authorization`
 
 **Output Schema:**
 
@@ -168,9 +171,18 @@ output schema and error messages report only the endpoint's origin.
 const result = await webhookNotify({
   url: "https://example.com/hooks/abc123",
   payload: { event: "deploy", version: "1.4.2" },
-  headers: { "X-Signature": "sha256=..." },
+  headers: { "X-Request-Id": "build-4471" },
 });
 console.log(result.status);
+
+// An authenticated endpoint: the secret is a credential-store KEY, so only the
+// key reaches the saved graph JSON. `credential_scheme: "header"` sends the
+// resolved value raw on `credential_header` instead of as a bearer token.
+await webhookNotify({
+  url: "https://example.com/hooks/abc123",
+  payload: { event: "deploy" },
+  credential_key: "deploy-webhook-token",
+});
 
 // Config vs. input: the constructor takes CONFIG, so a fixed endpoint belongs
 // under `defaults` — the per-run payload is still passed to `run()`.
@@ -195,7 +207,9 @@ const workflow = new Workflow()
 - 429/503 and 5xx raise `RetryableJobError`; retries require a `@workglow/job-queue` consumer, which these inline tasks do not have
 - Response bodies are read as a stream and abandoned past 1MB, so an endpoint answering with an unbounded body cannot exhaust runner memory — on the failure path too
 - Requests time out after 30s by default (`timeout`); a caller abort surfaces as an abort error rather than a retryable network failure
-- A configured `url_credential_key` upgrades the `credential` entitlement from optional to enforced
+- **A secret goes through `credential_key`, never `headers`** — `Task.toJSON` serializes `defaults` verbatim into the saved graph, so a bearer token or signing key inlined in `headers` is written into the workflow JSON. A credential KEY is only a reference; the resolved secret is placed on the outbound request and never persisted. `credential_scheme` chooses `Authorization: Bearer …`, `Authorization: Basic …`, a raw value on `credential_header`, or nothing at all
+- **An invalid request header is a permanent `CONFIGURATION` failure, not a retried network error** — `fetch` builds its `Headers` internally and rejects a malformed name or value with a bare `TypeError`, which was classified as a transient `NETWORK_ERROR` and retried forever. Names must be a bare header token (letters, digits, hyphens) and values must carry no NUL/CR/LF; both are checked before the request. The message names the offending header but **never echoes its value**, because `fetch`'s own message quotes it back and that text is spliced into a persisted job error — which for a `credential_key` header is the secret itself
+- A configured `url_credential_key` or `credential_key` upgrades the `credential` entitlement from optional to enforced. Only `url_credential_key` unscopes a declared `network:private` grant, since only it hides the destination; a header credential changes what the request carries, not where it goes
 - Never cached — the task is side-effecting (`cachePolicy: { kind: "none" }`)
 
 ### SlackNotifyTask
