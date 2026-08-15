@@ -8,9 +8,10 @@ import type { IRunConfig, TaskConfig } from "@workglow/task-graph";
 import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, TypedArray } from "@workglow/util/schema";
 import {
-  nextPowerOf2,
+  DEFAULT_SEED,
   normalizeNumberArray,
   TensorType,
+  turboPaddedLength,
   turboQuantizeToTypedArray,
   TypedArraySchema,
 } from "@workglow/util/schema";
@@ -62,7 +63,7 @@ const inputSchema = {
       enum: Object.values(QuantizationMethod),
       title: "Method",
       description:
-        "Quantization method: 'linear' for simple min-max scaling, 'turbo' for TurboQuant (randomized Hadamard rotation + uniform scalar quantization at the MSE-optimal Gaussian clipping range). Turbo requires a signed integer targetType (int8 or int16). It rotates in nextPowerOf2(d) dimensions, so a non-power-of-2 input needs turboPadToPowerOf2: true, which widens the output to nextPowerOf2(d); without it such an input is rejected rather than silently degraded. Padded turbo is substantially MORE accurate than linear at the common embedding sizes — measured int8 cosine RMSE over 40 seeded pairs, padded turbo vs linear: 0.00034 vs 0.00269 at d=768, 0.00024 vs 0.00331 at d=1536, 0.00021 vs 0.00263 at d=3072. Choose linear when the output must keep its input length.",
+        "Quantization method: 'linear' for simple min-max scaling, 'turbo' for TurboQuant (randomized Hadamard rotation + uniform scalar quantization at the MSE-optimal Gaussian clipping range). Turbo requires a signed integer targetType (int8 or int16). It rotates in turboPaddedLength(d) dimensions, so a non-power-of-2 input needs turboPadToPowerOf2: true, which widens the output to turboPaddedLength(d); without it such an input is rejected rather than silently degraded. Accuracy, as measured int8 cosine RMSE over 40 seeded pairs at d=768: padded turbo 0.00034, a max-abs int8 quantizer 0.00024, this task's own linear path 0.00269. That last figure reflects that path's scaling rather than turbo's advantage — it divides by the L2 norm first, so at d=768 it emits no code larger than 8 of 127 and discards three of its eight bits before any comparison. Turbo's real property is distribution-independence: with 2 dimensions at 20x (the outlier dimensions real embedding models exhibit) turbo measures 0.00039 against max-abs's 0.00174, while on well-conditioned inputs max-abs is the slightly more accurate of the two. Choose linear when the output must keep its input length.",
       default: QuantizationMethod.LINEAR,
     },
     turboSeed: {
@@ -70,13 +71,13 @@ const inputSchema = {
       title: "TurboQuant Seed",
       description:
         "Seed for the random rotation in TurboQuant. All vectors in the same collection must use the same seed for similarity search to work.",
-      default: 42,
+      default: DEFAULT_SEED,
     },
     turboPadToPowerOf2: {
       type: "boolean",
       title: "TurboQuant Pad To Power Of 2",
       description:
-        "Allow method 'turbo' on a non-power-of-2 dimensionality by widening the output to nextPowerOf2(d). Defaults to false because enabling it lengthens the output vector: a storage column sized to d will reject the result, so it has to be an explicit choice rather than a silent one. Ignored unless method is 'turbo'.",
+        "Allow method 'turbo' on a non-power-of-2 dimensionality by widening the output to turboPaddedLength(d). Defaults to false because enabling it lengthens the output vector: a storage column sized to d will reject the result, so it has to be an explicit choice rather than a silent one. Ignored unless method is 'turbo'.",
       default: false,
     },
   },
@@ -129,8 +130,14 @@ const outputSchema = {
       description:
         "Seed of the random rotation applied when method is 'turbo' (absent otherwise). Vectors quantized with different seeds, or mixed with vectors quantized using method 'linear', are NOT comparable: cosine similarity between them is meaningless and no error is raised.",
     },
+    originalDimensions: {
+      type: "integer",
+      title: "Original Dimensions",
+      description:
+        "The input dimensionality before quantization. Differs from the output vector's length only when turboPadToPowerOf2 widened it, and is recorded so a consumer can tell a widened vector from a model that genuinely emits that many dimensions — the two are indistinguishable from the output alone.",
+    },
   },
-  required: ["vector", "originalType", "targetType", "method"],
+  required: ["vector", "originalType", "targetType", "method", "originalDimensions"],
   additionalProperties: false,
 } as const satisfies DataPortSchema;
 
@@ -141,7 +148,7 @@ export type VectorQuantizeTaskInput = {
   readonly method?: QuantizationMethod | undefined;
   readonly turboSeed?: number | undefined;
   /**
-   * Opt into a `nextPowerOf2(d)`-length output for `method: "turbo"` at a non-power-of-2
+   * Opt into a `turboPaddedLength(d)`-length output for `method: "turbo"` at a non-power-of-2
    * dimensionality. Defaults to false: it lengthens the output vector.
    */
   readonly turboPadToPowerOf2?: boolean | undefined;
@@ -154,6 +161,13 @@ export type VectorQuantizeTaskOutput = {
   readonly method: QuantizationMethod;
   /** Rotation seed, present only for `method: "turbo"`. Different seeds are not comparable. */
   readonly turboSeed: number | undefined;
+  /**
+   * Input dimensionality before quantization. Differs from `vector`'s length only when
+   * `turboPadToPowerOf2` widened it; recorded so a consumer can tell a widened vector from
+   * a model that genuinely emits that many dimensions. For the array form this reports the
+   * FIRST vector's length.
+   */
+  readonly originalDimensions: number;
 };
 export type VectorQuantizeTaskConfig = TaskConfig<VectorQuantizeTaskInput>;
 
@@ -193,7 +207,7 @@ export class VectorQuantizeTask extends Task<
       targetType,
       normalize = true,
       method = QuantizationMethod.LINEAR,
-      turboSeed = 42,
+      turboSeed = DEFAULT_SEED,
       turboPadToPowerOf2 = false,
     } = input;
     const isArray = Array.isArray(vector);
@@ -213,21 +227,26 @@ export class VectorQuantizeTask extends Task<
       }
       // Checked here rather than left to turboQuantizeToTypedArray so the message names
       // the task's own input rather than the util's option object. Turbo rotates in
-      // nextPowerOf2(d) dimensions, so at a non-power-of-2 d it either widens the output
+      // turboPaddedLength(d) dimensions, so at a non-power-of-2 d it either widens the output
       // or discards coordinates; only the first is offered.
       const unpadded = turboPadToPowerOf2
         ? undefined
-        : vectors.find((v) => v.length !== nextPowerOf2(v.length));
+        : vectors.find((v) => v.length !== turboPaddedLength(v.length));
       if (unpadded !== undefined) {
-        const padded = nextPowerOf2(unpadded.length);
+        const padded = turboPaddedLength(unpadded.length);
         throw new Error(
           `VectorQuantizeTask: method "turbo" needs turboPadToPowerOf2: true at a non-power-of-2 ` +
             `vector dimensionality, got ${unpadded.length}. Setting it widens the output from ` +
-            `${unpadded.length} to ${padded} values, so size any fixed-width storage column to ` +
-            `${padded}. Padded turbo is the more accurate option at this size — measured int8 ` +
-            `cosine RMSE over 40 seeded pairs, padded turbo vs this task's linear path: 0.00034 ` +
-            `vs 0.00269 at d=768, 0.00024 vs 0.00331 at d=1536, 0.00021 vs 0.00263 at d=3072. ` +
-            `Use method: "linear" instead if the output must keep its ${unpadded.length} length.`
+            `${unpadded.length} to ${padded} values — the output is LONGER than the input, so ` +
+            `size any fixed-width storage column to ${padded}, not ${unpadded.length}. Turbo is ` +
+            `not automatically the more accurate option: against a max-abs int8 quantizer ` +
+            `(divide by max|v|, then scale to +/-127) padded turbo is slightly WORSE on ` +
+            `well-conditioned inputs (int8 cosine RMSE at d=768: 0.00034 vs 0.00024) and several ` +
+            `times BETTER when the input carries outlier dimensions (0.00039 vs 0.00174), which ` +
+            `is the trade padding actually buys. This task's own method: "linear" measures 0.00269 ` +
+            `at d=768, but that reflects its L2-then-x127 scaling (which emits no code larger ` +
+            `than 8 of 127 there) rather than any property of turbo. Use method: "linear" if the ` +
+            `output must keep its ${unpadded.length} length.`
         );
       }
       quantized = vectors.map((v) =>
@@ -246,6 +265,7 @@ export class VectorQuantizeTask extends Task<
       targetType,
       method,
       turboSeed: method === QuantizationMethod.TURBO ? turboSeed : undefined,
+      originalDimensions: vectors[0].length,
     };
   }
 

@@ -111,13 +111,16 @@ describe("TurboQuantize", () => {
         turboQuantize(new Float32Array([1, 2, -Infinity, 4, 5, 6, 7, 8]), { bits: 4, seed: 42 })
       ).toThrow("NaN or Infinity");
       expect(() =>
-        turboQuantizeToTypedArray(new Float32Array([1, 2, NaN, 4, 5, 6, 7, 8]), TensorType.INT8, 42)
+        turboQuantizeToTypedArray(new Float32Array([1, 2, NaN, 4, 5, 6, 7, 8]), TensorType.INT8, {
+          seed: 42,
+          padToPowerOf2: undefined,
+        })
       ).toThrow("NaN or Infinity");
       expect(() =>
         turboQuantizeToTypedArray(
           new Float32Array([1, 2, Infinity, 4, 5, 6, 7, 8]),
           TensorType.INT8,
-          42
+          { seed: 42, padToPowerOf2: undefined }
         )
       ).toThrow("NaN or Infinity");
     });
@@ -218,7 +221,10 @@ describe("TurboQuantize", () => {
       const v64 = new Float32Array(64);
       for (let i = 0; i < 64; i++) v64[i] = Math.sin(i * 0.7) * ((i % 5) + 1);
       const first16 = Array.from(
-        turboQuantizeToTypedArray(v64, TensorType.INT8, 42).slice(0, 16) as Int8Array
+        turboQuantizeToTypedArray(v64, TensorType.INT8, {
+          seed: 42,
+          padToPowerOf2: undefined,
+        }).slice(0, 16) as Int8Array
       );
       expect(first16).toEqual([
         16, -22, -15, -30, -17, -17, 35, 8, -34, -13, -31, -71, 8, 27, -10, -13,
@@ -283,8 +289,15 @@ describe("TurboQuantize", () => {
       expect(() => turboQuantize(vector, { bits: 4, seed: 1.5 })).toThrow(/seed/);
       expect(() => turboQuantize(vector, { bits: 4, seed: 2 ** 32 + 1 })).toThrow(/seed/);
       expect(() => turboQuantize(vector, { bits: 4, seed: NaN })).toThrow(/seed/);
-      expect(() => turboQuantizeToTypedArray(vector, TensorType.INT8, 1.5)).toThrow(/seed/);
-      expect(() => turboQuantizeToTypedArray(vector, TensorType.INT8, 2 ** 32 + 1)).toThrow(/seed/);
+      expect(() =>
+        turboQuantizeToTypedArray(vector, TensorType.INT8, { seed: 1.5, padToPowerOf2: undefined })
+      ).toThrow(/seed/);
+      expect(() =>
+        turboQuantizeToTypedArray(vector, TensorType.INT8, {
+          seed: 2 ** 32 + 1,
+          padToPowerOf2: undefined,
+        })
+      ).toThrow(/seed/);
 
       // The int32 window itself stays usable at both ends.
       expect(() => turboQuantize(vector, { bits: 4, seed: -(2 ** 31) })).not.toThrow();
@@ -372,7 +385,7 @@ describe("TurboQuantize", () => {
       }
     });
 
-    test("should reject a paddedDimensions that is not nextPowerOf2(dimensions)", () => {
+    test("should reject a paddedDimensions that is not turboPaddedLength(dimensions)", () => {
       // TurboQuantizeResult is a plain serializable record, so a persisted or
       // mismatched value can reach the decode path with a bogus padded length.
       // Without the guard the Walsh-Hadamard butterfly reads past the buffer and
@@ -1259,24 +1272,24 @@ describe("TurboQuantize", () => {
   describe("turboQuantizeToTypedArray", () => {
     test("should produce Int8Array for INT8 target", () => {
       const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
-      const result = turboQuantizeToTypedArray(vector, TensorType.INT8);
+      const result = turboQuantizeToTypedArray(vector, TensorType.INT8, undefined);
       expect(result).toBeInstanceOf(Int8Array);
       expect(result.length).toBe(vector.length);
     });
 
     test("should produce Int16Array for INT16 target", () => {
       const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
-      const result = turboQuantizeToTypedArray(vector, TensorType.INT16);
+      const result = turboQuantizeToTypedArray(vector, TensorType.INT16, undefined);
       expect(result).toBeInstanceOf(Int16Array);
       expect(result.length).toBe(vector.length);
     });
 
     test("should reject float target types", () => {
       const vector = new Float32Array([1, 2, 3, 4]);
-      expect(() => turboQuantizeToTypedArray(vector, TensorType.FLOAT32)).toThrow(
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.FLOAT32, undefined)).toThrow(
         "signed integer targets only"
       );
-      expect(() => turboQuantizeToTypedArray(vector, TensorType.FLOAT64)).toThrow(
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.FLOAT64, undefined)).toThrow(
         "signed integer targets only"
       );
     });
@@ -1285,10 +1298,10 @@ describe("TurboQuantize", () => {
       // An unsigned target needs an affine map with a DC offset, and cosine
       // similarity is not translation-invariant — see the DC-offset test below.
       const vector = new Float32Array([1, 2, 3, 4]);
-      expect(() => turboQuantizeToTypedArray(vector, TensorType.UINT8)).toThrow(
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.UINT8, undefined)).toThrow(
         "signed integer targets only"
       );
-      expect(() => turboQuantizeToTypedArray(vector, TensorType.UINT16)).toThrow(
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.UINT16, undefined)).toThrow(
         "signed integer targets only"
       );
     });
@@ -1298,7 +1311,7 @@ describe("TurboQuantize", () => {
       // keys, so a truthy-but-wrong "range" would slip past a `if (!range)` guard.
       const vector = new Float32Array([1, 2, 3, 4]);
       for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
-        expect(() => turboQuantizeToTypedArray(vector, name as TensorType)).toThrow(
+        expect(() => turboQuantizeToTypedArray(vector, name as TensorType, undefined)).toThrow(
           "signed integer targets only"
         );
       }
@@ -1313,7 +1326,10 @@ describe("TurboQuantize", () => {
       const vector = new Float32Array(d);
       for (let i = 0; i < d; i++) vector[i] = rnd() - 0.5;
 
-      const result = turboQuantizeToTypedArray(vector, TensorType.INT8, 42);
+      const result = turboQuantizeToTypedArray(vector, TensorType.INT8, {
+        seed: 42,
+        padToPowerOf2: undefined,
+      });
 
       let sum = 0;
       let negatives = 0;
@@ -1347,8 +1363,14 @@ describe("TurboQuantize", () => {
             b[i] = rnd() - 0.5;
           }
           const trueSim = cosineSimilarity(a, b);
-          const qa = turboQuantizeToTypedArray(a, TensorType.INT8, 42);
-          const qb = turboQuantizeToTypedArray(b, TensorType.INT8, 42);
+          const qa = turboQuantizeToTypedArray(a, TensorType.INT8, {
+            seed: 42,
+            padToPowerOf2: undefined,
+          });
+          const qb = turboQuantizeToTypedArray(b, TensorType.INT8, {
+            seed: 42,
+            padToPowerOf2: undefined,
+          });
           const error = Math.abs(cosineSimilarity(qa, qb) - trueSim);
           squaredError += error * error;
           if (error > maxError) maxError = error;
@@ -1359,13 +1381,14 @@ describe("TurboQuantize", () => {
     });
 
     test("should reject a non-power-of-2 dimensionality", () => {
-      // Keeping the first d of nextPowerOf2(d) rotated coordinates is a lossy random
-      // projection that measures WORSE than linear quantization at exactly the sizes
-      // real embedding models use, so it is refused rather than silently degraded.
+      // Keeping the first d of turboPaddedLength(d) rotated coordinates is a lossy random
+      // projection rather than an orthogonal rotation: it measures roughly 50x worse than
+      // padded turbo (0.0162 vs 0.00034 at d=768) and 70x worse than a max-abs int8
+      // quantizer, so it is refused rather than silently degraded.
       for (const d of [768, 1000, 1536, 3072]) {
-        expect(() => turboQuantizeToTypedArray(new Float32Array(d), TensorType.INT8)).toThrow(
-          /power of 2/
-        );
+        expect(() =>
+          turboQuantizeToTypedArray(new Float32Array(d), TensorType.INT8, undefined)
+        ).toThrow(/power of 2/);
       }
     });
 
@@ -1408,20 +1431,34 @@ describe("TurboQuantize", () => {
     });
 
     test("should reject empty vectors", () => {
-      expect(() => turboQuantizeToTypedArray(new Float32Array(0), TensorType.INT8)).toThrow();
+      expect(() =>
+        turboQuantizeToTypedArray(new Float32Array(0), TensorType.INT8, undefined)
+      ).toThrow();
     });
 
     test("should be deterministic with same seed", () => {
       const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
-      const r1 = turboQuantizeToTypedArray(vector, TensorType.INT8, 123);
-      const r2 = turboQuantizeToTypedArray(vector, TensorType.INT8, 123);
+      const r1 = turboQuantizeToTypedArray(vector, TensorType.INT8, {
+        seed: 123,
+        padToPowerOf2: undefined,
+      });
+      const r2 = turboQuantizeToTypedArray(vector, TensorType.INT8, {
+        seed: 123,
+        padToPowerOf2: undefined,
+      });
       expect(r1).toEqual(r2);
     });
 
     test("should produce different results with different seeds", () => {
       const vector = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
-      const r1 = turboQuantizeToTypedArray(vector, TensorType.INT8, 1);
-      const r2 = turboQuantizeToTypedArray(vector, TensorType.INT8, 2);
+      const r1 = turboQuantizeToTypedArray(vector, TensorType.INT8, {
+        seed: 1,
+        padToPowerOf2: undefined,
+      });
+      const r2 = turboQuantizeToTypedArray(vector, TensorType.INT8, {
+        seed: 2,
+        padToPowerOf2: undefined,
+      });
       expect(r1).not.toEqual(r2);
     });
 
@@ -1435,8 +1472,14 @@ describe("TurboQuantize", () => {
       }
 
       const trueSim = cosineSimilarity(a, b);
-      const qa = turboQuantizeToTypedArray(a, TensorType.INT8, 42);
-      const qb = turboQuantizeToTypedArray(b, TensorType.INT8, 42);
+      const qa = turboQuantizeToTypedArray(a, TensorType.INT8, {
+        seed: 42,
+        padToPowerOf2: undefined,
+      });
+      const qb = turboQuantizeToTypedArray(b, TensorType.INT8, {
+        seed: 42,
+        padToPowerOf2: undefined,
+      });
       const quantSim = cosineSimilarity(qa, qb);
 
       // Turbo Int8 should preserve similarity well
@@ -1453,8 +1496,14 @@ describe("TurboQuantize", () => {
       }
 
       const trueSim = cosineSimilarity(a, b);
-      const qa = turboQuantizeToTypedArray(a, TensorType.INT16, 42);
-      const qb = turboQuantizeToTypedArray(b, TensorType.INT16, 42);
+      const qa = turboQuantizeToTypedArray(a, TensorType.INT16, {
+        seed: 42,
+        padToPowerOf2: undefined,
+      });
+      const qb = turboQuantizeToTypedArray(b, TensorType.INT16, {
+        seed: 42,
+        padToPowerOf2: undefined,
+      });
       const quantSim = cosineSimilarity(qa, qb);
 
       // Int16 should be very close
@@ -1466,8 +1515,14 @@ describe("TurboQuantize", () => {
       const v = new Float32Array(d);
       for (let i = 0; i < d; i++) v[i] = Math.sin(i);
 
-      const qa = turboQuantizeToTypedArray(v, TensorType.INT8, 42);
-      const qb = turboQuantizeToTypedArray(v, TensorType.INT8, 42);
+      const qa = turboQuantizeToTypedArray(v, TensorType.INT8, {
+        seed: 42,
+        padToPowerOf2: undefined,
+      });
+      const qb = turboQuantizeToTypedArray(v, TensorType.INT8, {
+        seed: 42,
+        padToPowerOf2: undefined,
+      });
 
       // Identical input + same seed = identical output
       expect(cosineSimilarity(qa, qb)).toBeCloseTo(1, 10);
@@ -1477,14 +1532,14 @@ describe("TurboQuantize", () => {
       const vector = new Float32Array([0, 0, 0, 0]);
 
       for (const targetType of [TensorType.INT8, TensorType.INT16] as const) {
-        const result = turboQuantizeToTypedArray(vector, targetType);
+        const result = turboQuantizeToTypedArray(vector, targetType, undefined);
         expect(result.length).toBe(4);
         for (let i = 0; i < result.length; i++) {
           expect(result[i]).toBe(0);
         }
       }
 
-      expect(() => turboQuantizeToTypedArray(vector, TensorType.UINT8)).toThrow(
+      expect(() => turboQuantizeToTypedArray(vector, TensorType.UINT8, undefined)).toThrow(
         "signed integer targets only"
       );
     });
@@ -1495,7 +1550,7 @@ describe("TurboQuantize", () => {
       const vector = new Float32Array(d);
       for (let i = 0; i < d; i++) vector[i] = rnd() * 10 - 5;
 
-      const result = turboQuantizeToTypedArray(vector, TensorType.INT8);
+      const result = turboQuantizeToTypedArray(vector, TensorType.INT8, undefined);
       for (let i = 0; i < result.length; i++) {
         expect(result[i]).toBeGreaterThanOrEqual(-127);
         expect(result[i]).toBeLessThanOrEqual(127);
@@ -1508,7 +1563,7 @@ describe("TurboQuantize", () => {
       const vector = new Float32Array(d);
       for (let i = 0; i < d; i++) vector[i] = rnd() * 10 - 5;
 
-      const result = turboQuantizeToTypedArray(vector, TensorType.INT16);
+      const result = turboQuantizeToTypedArray(vector, TensorType.INT16, undefined);
       for (let i = 0; i < result.length; i++) {
         expect(result[i]).toBeGreaterThanOrEqual(-32767);
         expect(result[i]).toBeLessThanOrEqual(32767);

@@ -169,7 +169,12 @@ export interface TurboQuantizeResult {
   readonly norm: number;
 }
 
-const DEFAULT_SEED = 42;
+/**
+ * Rotation seed applied when a caller supplies none. Exported so a downstream default
+ * (a task schema's `default`, a destructuring fallback) cites this constant rather than
+ * repeating the literal, which would silently diverge if the default ever changed.
+ */
+export const DEFAULT_SEED = 42;
 
 /**
  * Current {@link TurboQuantizeResult.version}. Bump whenever the mapping between stored
@@ -180,7 +185,7 @@ const TURBO_QUANTIZE_VERSION = 1;
 /**
  * Upper bound on the dimensionality this module will accept.
  *
- * Every entry point pads the input to `nextPowerOf2(dimensions)` and allocates several
+ * Every entry point pads the input to `turboPaddedLength(dimensions)` and allocates several
  * `Float64Array`s of that length as working buffers, so peak cost is a multiple of the
  * padded length rather than the single buffer a naive estimate assumes: measured peak RSS
  * growth is 32 MB at d = 2^20, about 32 bytes per padded coordinate. 2^20 is already ~340x
@@ -378,7 +383,7 @@ function getSignTable(seed: number, paddedLen: number): readonly Uint8Array[] {
 function randomRotate(values: Float64Array, seed: number): Float64Array {
   const d = values.length;
   // Pad to next power of 2 for Hadamard transform
-  const paddedLen = nextPowerOf2(d);
+  const paddedLen = turboPaddedLength(d);
   const result = new Float64Array(paddedLen);
   result.set(values);
 
@@ -473,8 +478,13 @@ function fastWalshHadamard(data: Float64Array): void {
  * reimplementation without that guard accepts a non-integer, a zero, or a length past
  * {@link MAX_TURBO_DIMENSIONS} and hands it on, so the caller's own carefully worded
  * validation is bypassed and the failure surfaces later as a low-level message.
+ *
+ * Named for TurboQuant rather than for the arithmetic because that guard makes it
+ * TurboQuant-specific: it rejects anything above {@link MAX_TURBO_DIMENSIONS} (2^20) with
+ * a message naming this module, so it is not the general-purpose next-power-of-2 helper a
+ * neutral name would advertise.
  */
-export function nextPowerOf2(n: number): number {
+export function turboPaddedLength(n: number): number {
   assertDimensions(n);
   let p = 1;
   while (p < n) p *= 2;
@@ -546,9 +556,19 @@ const loadingFactorCache = new Map<number, number>();
  * Power-of-two level counts up to 256 come from {@link GAUSSIAN_LOADING_FACTORS}. Anything
  * else is solved numerically by minimizing {@link quantizerDistortion} — needed by
  * {@link turboQuantizeToTypedArray}, whose effective level count is `2 * max + 1`
- * (255 for int8, 65535 for int16) and so is never in the table. The numeric solution
- * reproduces the tabulated values to within 0.35% (0.00% at 64 levels), which is what
- * pins the two paths to the same curve.
+ * (255 for int8, 65535 for int16) and so is never in the table.
+ *
+ * The numeric solution converges onto the tabulated curve as the grid gets finer, and is
+ * loosest at the coarse end where the distortion minimum is shallowest:
+ *
+ * | levels | 2    | 4    | 8    | 16   | 32   | 64   | 128  | 256  |
+ * | ------ | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+ * | dev    | 4.03%| 1.64%| 0.86%| 0.35%| 0.14%| 0.00%| 0.13%| 0.12%|
+ *
+ * The 4% at 2 levels does not matter, because the solver is never consulted there. Its
+ * only callers are the int8 and int16 typed-array paths, at 255 and 65535 levels — past
+ * the fine end of the table, where the two methods have already agreed to ~0.1% for four
+ * consecutive doublings. The tabulated widths (1-8 bits) never reach the solver at all.
  */
 function optimalLoadingFactor(levels: number): number {
   if (!Number.isInteger(levels) || levels < 2) {
@@ -994,7 +1014,7 @@ export function turboQuantize(
   const { values, norm } = normalizeToUnit(vector);
 
   // Step 2: Random rotation — returns all paddedLen coordinates
-  const paddedLen = nextPowerOf2(d);
+  const paddedLen = turboPaddedLength(d);
   const rotated = randomRotate(values, seed);
 
   // Step 3: Scalar quantization per coordinate (all paddedLen)
@@ -1053,10 +1073,10 @@ function assertQuantizeResultShape(quantized: TurboQuantizeResult): void {
   if (!Number.isFinite(norm) || norm < 0) {
     throw new Error(`TurboQuant norm must be a finite, non-negative number, got ${norm}`);
   }
-  const expectedPadded = nextPowerOf2(dimensions);
+  const expectedPadded = turboPaddedLength(dimensions);
   if (paddedDimensions !== expectedPadded) {
     throw new Error(
-      `TurboQuant paddedDimensions must be nextPowerOf2(dimensions) = ${expectedPadded}, got ${paddedDimensions}`
+      `TurboQuant paddedDimensions must be turboPaddedLength(dimensions) = ${expectedPadded}, got ${paddedDimensions}`
     );
   }
 }
@@ -1448,10 +1468,10 @@ const SIGNED_TARGET_RANGES = {
  * Options for {@link turboQuantizeToTypedArray}.
  */
 export interface TurboQuantizeToTypedArrayOptions {
-  /** Seed for the random rotation. Defaults to the module default when undefined. */
+  /** Seed for the random rotation. Defaults to {@link DEFAULT_SEED} when undefined. */
   readonly seed: number | undefined;
   /**
-   * Accept a non-power-of-2 input length by returning `nextPowerOf2(length)` values
+   * Accept a non-power-of-2 input length by returning `turboPaddedLength(length)` values
    * instead of throwing. The result is LONGER than the input; a storage column sized to
    * the input dimensionality will not hold it.
    */
@@ -1488,26 +1508,53 @@ export interface TurboQuantizeToTypedArrayOptions {
  *
  * ## Power-of-2 dimensions required, or opt into padding
  *
- * The rotation operates on `nextPowerOf2(d)` coordinates, so a non-power-of-2 `d` has to
+ * The rotation operates on `turboPaddedLength(d)` coordinates, so a non-power-of-2 `d` has to
  * either widen the output or discard coordinates. This function does the first on request
  * and never the second.
  *
- * Pass `{ padToPowerOf2: true }` to receive a `nextPowerOf2(d)`-length result. Padding
- * keeps the transform orthogonal, and at that width TurboQuant is the more accurate
- * choice by a wide margin — cosine RMSE against the exact similarity (int8, seed 42, 40
- * seeded pairs), padded turbo vs linear quantization: 0.00034 vs 0.00269 at d=768
- * (MiniLM), 0.00024 vs 0.00331 at d=1536, 0.00021 vs 0.00263 at d=3072. The cost is
- * purely the width: the output is LONGER than the input, so a fixed-width storage column
- * must be declared at the padded width.
+ * Pass `{ padToPowerOf2: true }` to receive a `turboPaddedLength(d)`-length result. Padding
+ * keeps the transform orthogonal. The cost is purely the width: the output is LONGER than
+ * the input, so a fixed-width storage column must be declared at the padded width.
+ *
+ * ### What padding actually buys, measured
+ *
+ * Cosine RMSE against the exact similarity (int8, seed 42, 40 seeded pairs of i.i.d.
+ * uniform coordinates), against two different int8 baselines:
+ *
+ * | d    | padded turbo | L2-then-x127 | max-abs |
+ * | ---- | ------------ | ------------ | ------- |
+ * | 768  | 0.00034      | 0.00269      | 0.00024 |
+ * | 1536 | 0.00024      | 0.00331      | 0.00015 |
+ * | 3072 | 0.00021      | 0.00263      | 0.00012 |
+ *
+ * The middle column is NOT turbo's achievement, and must not be quoted as one. That path
+ * divides by the vector's L2 norm, which on a well-spread vector leaves every coordinate
+ * near `1/sqrt(d)`, so scaling by 127 emits no code larger than 8 at d=768, 6 at d=1536
+ * and 4 at d=3072 — it throws away three of its eight bits before any comparison happens.
+ * Beating it measures that defect, not the rotation.
+ *
+ * Against the honest baseline (divide by `max|v|`, which uses the full code range),
+ * padded turbo is 1.4x-1.8x **worse** on these well-conditioned inputs.
+ *
+ * What the rotation buys is INDEPENDENCE FROM THE INPUT DISTRIBUTION, not a lower error
+ * floor. Turbo's error stays in the 0.0001-0.0004 band whatever the input looks like,
+ * because the rotation makes every coordinate's marginal the same. Max-abs swings with
+ * the input's tail: on Gaussian vectors carrying 2 dimensions at 20x (the "massive
+ * activations" real embedding models exhibit), one outlier sets the divisor and crushes
+ * every other coordinate toward zero — turbo 0.00039 vs max-abs 0.00174 at d=768, turbo
+ * 0.00020 vs max-abs 0.00138 at d=3072.
+ *
+ * So: prefer padded turbo when the corpus may contain outlier dimensions, or when the
+ * embeddings are not under your control. Max-abs int8 is simpler, keeps the input length,
+ * and is slightly more accurate when the coordinates are well behaved.
  *
  * Without that option a non-power-of-2 `d` is rejected rather than silently degraded. The
  * rejected alternative is CROPPING — keeping the first `d` of the rotated coordinates —
- * which makes this a lossy random projection rather than an orthogonal rotation and
- * measures worse than plain linear quantization at exactly the sizes real embedding
- * models use: cropped turbo vs linear, 0.0164 vs 0.0027 at d=768, 0.0126 vs 0.0033 at
- * d=1536, 0.0094 vs 0.0026 at d=3072. Those cropped figures are recorded here only to
- * explain why the variant is not offered; this function no longer emits it, so do not
- * quote them as the cost of turbo at these dimensionalities — padding is.
+ * which makes this a lossy random projection rather than an orthogonal rotation: cropped
+ * turbo measures 0.0162 at d=768, roughly 50x padded turbo and 70x a max-abs int8
+ * quantizer, and 0.0126 at d=1536 / 0.0095 at d=3072. Those figures are recorded here
+ * only to explain why the variant is not offered; this function does not emit it, so do
+ * not quote them as the cost of turbo at these dimensionalities — padding is.
  *
  * {@link turboQuantize} is unaffected either way: it keeps all `paddedLen` coordinates
  * and stays fully invertible at any dimensionality.
@@ -1517,15 +1564,16 @@ export interface TurboQuantizeToTypedArrayOptions {
  *
  * @param vector - Input vector (any TypedArray). Must not contain NaN or Infinity.
  * @param targetType - Target signed integer type (INT8 or INT16)
- * @param seedOrOptions - Rotation seed (default: 42), or an options object. All vectors in
- *   the same collection must use the same seed for similarity search to work.
+ * @param options - Rotation seed and padding opt-in; omit for {@link DEFAULT_SEED} and no
+ *   padding. All vectors in the same collection must use the same seed for similarity
+ *   search to work.
  * @returns TypedArray of the target type, with `.length === vector.length` unless
- *   `padToPowerOf2` widened it to `nextPowerOf2(vector.length)`
+ *   `padToPowerOf2` widened it to `turboPaddedLength(vector.length)`
  */
 export function turboQuantizeToTypedArray(
   vector: TypedArray,
   targetType: TensorType,
-  seedOrOptions: number | TurboQuantizeToTypedArrayOptions = DEFAULT_SEED
+  options: TurboQuantizeToTypedArrayOptions | undefined
 ): TypedArray {
   // `Object.hasOwn` before indexing: a plain `[targetType]` lookup would resolve
   // inherited Object.prototype keys, so a name like "constructor" would yield a
@@ -1537,9 +1585,8 @@ export function turboQuantizeToTypedArray(
   }
   const { max } = SIGNED_TARGET_RANGES[targetType as keyof typeof SIGNED_TARGET_RANGES];
 
-  const seed =
-    typeof seedOrOptions === "number" ? seedOrOptions : (seedOrOptions.seed ?? DEFAULT_SEED);
-  const padToPowerOf2 = typeof seedOrOptions === "number" ? false : seedOrOptions.padToPowerOf2;
+  const seed = options?.seed ?? DEFAULT_SEED;
+  const padToPowerOf2 = options?.padToPowerOf2 ?? false;
 
   const d = vector.length;
   if (d === 0) {
@@ -1548,17 +1595,20 @@ export function turboQuantizeToTypedArray(
   assertDimensions(d);
   assertSeed(seed);
 
-  const paddedLen = nextPowerOf2(d);
+  const paddedLen = turboPaddedLength(d);
   if (paddedLen !== d && padToPowerOf2 !== true) {
     throw new Error(
       `turboQuantizeToTypedArray requires a power of 2 dimensionality, got ${d}. ` +
         `Pass { padToPowerOf2: true } to receive ${paddedLen} values instead — padding keeps the ` +
-        `rotation orthogonal and is the most accurate option at this size (int8 cosine RMSE at ` +
-        `d=768: padded turbo 0.00034 vs linear 0.00269), at the cost of an output LONGER than the ` +
-        `input, so size any fixed-width storage column to ${paddedLen}. Quantize linearly instead ` +
-        `if the output must keep its ${d} length. Returning only the first ${d} of ${paddedLen} ` +
-        `rotated coordinates is not offered: cropping is a lossy random projection that measures ` +
-        `worse than linear here (0.0164 vs 0.0027).`
+        `rotation orthogonal. The output is then LONGER than the input, so size any fixed-width ` +
+        `storage column to ${paddedLen}, not ${d}. Turbo is not automatically the more accurate ` +
+        `choice: against a max-abs int8 quantizer (divide by max|v|, then scale to +/-127) padded ` +
+        `turbo is slightly WORSE on well-conditioned inputs (int8 cosine RMSE at d=768: 0.00034 vs ` +
+        `0.00024) and several times BETTER when the input carries outlier dimensions (0.00039 vs ` +
+        `0.00174), which is the trade padding actually buys — distribution-independence, not a ` +
+        `lower error floor. Quantize with max-abs int8 instead if the output must keep its ${d} ` +
+        `length. Returning only the first ${d} of ${paddedLen} rotated coordinates is not offered: ` +
+        `cropping is a lossy random projection and measures 0.0162 here, ~50x padded turbo.`
     );
   }
 
@@ -1592,7 +1642,7 @@ export function turboQuantizeToTypedArray(
  *
  * Because the Walsh-Hadamard transform requires a power-of-2 length, the vector
  * is zero-padded to the next power of 2 before quantization. The codes buffer
- * therefore covers `nextPowerOf2(dimensions)` coordinates, not `dimensions`.
+ * therefore covers `turboPaddedLength(dimensions)` coordinates, not `dimensions`.
  *
  * @param dimensions - Vector dimensionality
  * @param bits - Bits per dimension (integer, 1-8)
@@ -1601,7 +1651,7 @@ export function turboQuantizeToTypedArray(
 export function turboQuantizeStorageBytes(dimensions: number, bits: number): number {
   assertDimensions(dimensions);
   assertBits(bits);
-  return Math.ceil((nextPowerOf2(dimensions) * bits) / 8);
+  return Math.ceil((turboPaddedLength(dimensions) * bits) / 8);
 }
 
 /**

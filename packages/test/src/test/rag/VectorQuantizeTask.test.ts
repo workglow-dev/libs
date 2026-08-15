@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { report, snap } from "../../binding/testTiming";
 
 /**
- * Deterministic PRNG (mulberry32). The accuracy comparison below asserts a ratio between
+ * Deterministic PRNG (mulberry32). The accuracy comparisons below assert a ratio between
  * two quantizers, so a `Math.random()` draw would make a real regression and an unlucky
  * sample indistinguishable.
  */
@@ -25,6 +25,50 @@ function makeRandom(seed: number): () => number {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+/** Exact cosine, used both for the ground truth and for scoring each quantizer's output. */
+function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  return dot / Math.sqrt(na * nb);
+}
+
+/**
+ * The int8 baseline the accuracy tests below score against: divide by the LARGEST
+ * ABSOLUTE COORDINATE, then scale to the full [-127, 127] range.
+ *
+ * Deliberately written here rather than obtained by calling the task's `method: "linear"`
+ * path. That path divides by the L2 norm instead and so emits a maximum code of 8 at
+ * d=768 — a baseline that has already thrown away three of its eight bits, which is a
+ * defect to be repaired separately, not a yardstick. Owning the reference in this file
+ * means repairing it cannot move the bounds asserted here.
+ */
+function maxAbsInt8(v: ArrayLike<number>): Int8Array {
+  let largest = 0;
+  for (let i = 0; i < v.length; i++) largest = Math.max(largest, Math.abs(v[i]));
+  const divisor = largest || 1;
+  const out = new Int8Array(v.length);
+  for (let i = 0; i < v.length; i++) out[i] = Math.round((v[i] / divisor) * 127);
+  return out;
+}
+
+/** Padded turbo int8 through the task, at the fixed seed both accuracy tests use. */
+async function turboOf(v: Float32Array): Promise<Int8Array> {
+  const result = await vectorQuantize({
+    vector: v,
+    targetType: TensorType.INT8,
+    method: "turbo",
+    turboSeed: 42,
+    turboPadToPowerOf2: true,
+  });
+  return result.vector as Int8Array;
 }
 
 let _snap = snap();
@@ -359,6 +403,15 @@ describe("VectorQuantizeTask", () => {
       // comparison that does not describe either option now on offer.
       expect(message).not.toContain("0.0164");
 
+      // The message must name the honest baseline, not just this task's own linear path.
+      // Comparing only against `method: "linear"` reads as an 8x win for turbo, but that
+      // path emits a maximum code of 8 of 127 at d=768 — so the gap measures its scaling
+      // defect, not the rotation. A reader deciding between the two needs the max-abs
+      // comparison, where turbo is the slightly WORSE option on well-conditioned input.
+      expect(message).toMatch(/max\|v\||max-abs/);
+      expect(message).toMatch(/WORSE/);
+      expect(message).toMatch(/outlier/);
+
       // The same vector is fine under linear quantization.
       const linear = await vectorQuantize({ vector, targetType: TensorType.INT8 });
       expect((linear.vector as Int8Array).length).toBe(768);
@@ -385,29 +438,33 @@ describe("VectorQuantizeTask", () => {
       expect(result.turboSeed).toBe(42);
     });
 
-    test("should beat the linear path on similarity error at d=768 when padded", async () => {
-      // The measurement behind the rejection message, asserted rather than quoted. The
-      // message previously cited cropped-turbo RMSE (0.0164 at d=768) and told users
-      // linear was more accurate; padded turbo is roughly 8x MORE accurate here, so the
-      // guidance was backwards for the option the task now offers.
+    test("should match a max-abs int8 baseline on similarity error at d=768 when padded", async () => {
+      // The measurement behind the rejection message and the schema description, asserted
+      // rather than quoted.
+      //
+      // The reference is a max-abs int8 quantizer written HERE, deliberately, and it is
+      // not `linearRmse / 4` and not this task's own linear path at any ratio. That path
+      // divides by the vector's L2 norm before scaling by 127, which on a well-spread
+      // d=768 vector leaves every coordinate near 1/sqrt(768) — so the largest code it
+      // ever emits is 8 of a possible 127, and three of its eight bits are gone before
+      // any comparison happens. Beating it by 8x measured that defect, not the rotation.
+      // Worse, it was a test pinned to the wrong thing: repairing `quantizeToInt8` to
+      // divide by max|v| would have turned this assertion red for exactly the right
+      // reason. Computing the reference in this file means the bound cannot move when
+      // that repair lands.
+      //
+      // On this generator turbo is legitimately the WORSE of the two, and the assertion
+      // says so. I.i.d. uniform coordinates are the best possible case for max-abs: no
+      // coordinate is an outlier, so the divisor is representative and the full code
+      // range is used. Measured 0.00034 (turbo) vs 0.00024 (max-abs) — a 1.4x deficit.
+      // The bound admits that and pins the magnitude, so a real regression in either
+      // direction still fails. The case where turbo wins is the next test.
       const d = 768;
       const pairs = 40;
       const rnd = makeRandom(d);
 
-      const cosine = (a: ArrayLike<number>, b: ArrayLike<number>): number => {
-        let dot = 0;
-        let na = 0;
-        let nb = 0;
-        for (let i = 0; i < a.length; i++) {
-          dot += a[i] * b[i];
-          na += a[i] * a[i];
-          nb += b[i] * b[i];
-        }
-        return dot / Math.sqrt(na * nb);
-      };
-
       let turboSquaredError = 0;
-      let linearSquaredError = 0;
+      let maxAbsSquaredError = 0;
       for (let p = 0; p < pairs; p++) {
         const a = new Float32Array(d);
         const b = new Float32Array(d);
@@ -417,33 +474,123 @@ describe("VectorQuantizeTask", () => {
         }
         const exact = cosine(a, b);
 
-        const turboOf = async (v: Float32Array): Promise<Int8Array> =>
-          (
-            await vectorQuantize({
-              vector: v,
-              targetType: TensorType.INT8,
-              method: "turbo",
-              turboSeed: 42,
-              turboPadToPowerOf2: true,
-            })
-          ).vector as Int8Array;
-        const linearOf = async (v: Float32Array): Promise<Int8Array> =>
-          (await vectorQuantize({ vector: v, targetType: TensorType.INT8 })).vector as Int8Array;
-
         const turboError = cosine(await turboOf(a), await turboOf(b)) - exact;
         turboSquaredError += turboError * turboError;
-        const linearError = cosine(await linearOf(a), await linearOf(b)) - exact;
-        linearSquaredError += linearError * linearError;
+        const maxAbsError = cosine(maxAbsInt8(a), maxAbsInt8(b)) - exact;
+        maxAbsSquaredError += maxAbsError * maxAbsError;
       }
 
       const turboRmse = Math.sqrt(turboSquaredError / pairs);
-      const linearRmse = Math.sqrt(linearSquaredError / pairs);
+      const maxAbsRmse = Math.sqrt(maxAbsSquaredError / pairs);
 
-      // Measured: padded turbo 0.00034, linear 0.00269 — a 7.8x gap. The assertion
-      // demands only 4x so an unrelated tweak does not fail it, but the direction is
-      // exactly what the old message got wrong and must not silently reverse.
-      expect(turboRmse).toBeLessThan(linearRmse / 4);
+      // Turbo stays in its distribution-invariant band whatever the input is.
       expect(turboRmse).toBeLessThan(0.001);
+      // ...and is within 2x of the baseline even where the baseline is at its strongest.
+      // Measured ratio is 1.4x; 2x leaves headroom for an unrelated tweak without
+      // admitting a real collapse.
+      expect(turboRmse).toBeLessThan(maxAbsRmse * 2);
+    });
+
+    test("should beat a max-abs int8 baseline when the input carries outlier dimensions", async () => {
+      // This is the claim the rejection message and the schema description now make, and
+      // the reason padded turbo is worth offering at all: its error is roughly invariant
+      // to the input distribution, because the rotation gives every coordinate the same
+      // marginal before the grid is applied.
+      //
+      // Max-abs has no such property. Its divisor is a single order statistic, so one
+      // outlier dimension sets it for the whole vector and crushes every ordinary
+      // coordinate toward zero — real embedding models exhibit exactly this ("massive
+      // activations"), which is why the benign case above is not the case that decides
+      // the recommendation. Gaussian coordinates with 2 dimensions at 20x: measured
+      // turbo 0.00039 vs max-abs 0.00174, a 4.5x advantage the other way.
+      //
+      // Together with the previous test this pins BOTH halves of the wording, so the
+      // corrected claims cannot silently rot: one test fails if turbo is ever presented
+      // as dramatically better in the benign case, the other if it stops being better in
+      // the heavy-tailed one.
+      const d = 768;
+      const pairs = 40;
+      const rnd = makeRandom(d);
+      // Box-Muller off the same seeded PRNG: heavy-tailed inputs must be as reproducible
+      // as the uniform ones, or an unlucky draw is indistinguishable from a regression.
+      const gaussian = (): number =>
+        Math.sqrt(-2 * Math.log(Math.max(rnd(), 1e-12))) * Math.cos(2 * Math.PI * rnd());
+
+      let turboSquaredError = 0;
+      let maxAbsSquaredError = 0;
+      for (let p = 0; p < pairs; p++) {
+        const a = new Float32Array(d);
+        const b = new Float32Array(d);
+        for (let i = 0; i < d; i++) {
+          a[i] = gaussian();
+          b[i] = gaussian();
+        }
+        // Two "massive activation" dimensions, the shape that defeats a max-abs divisor.
+        a[0] *= 20;
+        a[1] *= 20;
+        b[0] *= 20;
+        b[1] *= 20;
+        const exact = cosine(a, b);
+
+        const turboError = cosine(await turboOf(a), await turboOf(b)) - exact;
+        turboSquaredError += turboError * turboError;
+        const maxAbsError = cosine(maxAbsInt8(a), maxAbsInt8(b)) - exact;
+        maxAbsSquaredError += maxAbsError * maxAbsError;
+      }
+
+      const turboRmse = Math.sqrt(turboSquaredError / pairs);
+      const maxAbsRmse = Math.sqrt(maxAbsSquaredError / pairs);
+
+      // Measured 4.5x; asserting 3x leaves headroom without admitting a reversal.
+      expect(turboRmse).toBeLessThan(maxAbsRmse / 3);
+    });
+
+    test("records the shipped linear int8 path's largest emitted code at d=768", async () => {
+      // RECORDED DEFECT, NOT A DESIRED PROPERTY.
+      //
+      // `VectorQuantizeTask.quantizeToInt8` divides by the vector's L2 norm and then
+      // scales by 127. On a well-spread d=768 vector every coordinate is near 1/sqrt(768),
+      // so the largest code the path can emit is 8 — it uses 4 of the 255 available
+      // codes and discards three of its eight bits. That is a pre-existing defect
+      // unrelated to TurboQuant, and it is deliberately NOT fixed here: the divisor
+      // change rescales every stored coordinate ~16x at this width, which cosine survives
+      // (a positive scalar multiple) but `l2` and `ip` do not, and nothing marks a stored
+      // int8 vector with the scaling that produced it.
+      //
+      // This assertion exists so that repair is a deliberate, reviewed change rather than
+      // a surprise. When `quantizeToInt8` is repaired to divide by max|v|, this
+      // expectation changes to 127 and this comment goes away.
+      const d = 768;
+      const rnd = makeRandom(d);
+      const v = new Float32Array(d);
+      for (let i = 0; i < d; i++) v[i] = rnd() - 0.5;
+
+      const linear = (await vectorQuantize({ vector: v, targetType: TensorType.INT8 }))
+        .vector as Int8Array;
+
+      let largest = 0;
+      for (const code of linear) largest = Math.max(largest, Math.abs(code));
+      expect(largest).toBe(8);
+    });
+
+    test("should report originalDimensions alongside a widened turbo vector", async () => {
+      // The output length alone cannot distinguish a 768-dim model widened to 1024 from a
+      // model that genuinely emits 1024 dimensions; `originalDimensions` is what does.
+      const vector = new Float32Array(768);
+      for (let i = 0; i < 768; i++) vector[i] = Math.sin(i * 0.1);
+
+      const padded = await vectorQuantize({
+        vector,
+        targetType: TensorType.INT8,
+        method: "turbo",
+        turboPadToPowerOf2: true,
+      });
+      expect((padded.vector as Int8Array).length).toBe(1024);
+      expect(padded.originalDimensions).toBe(768);
+
+      // Unwidened paths report the input length, which equals the output length.
+      const linear = await vectorQuantize({ vector, targetType: TensorType.INT8 });
+      expect(linear.originalDimensions).toBe(768);
     });
 
     test("should report method and turboSeed on the output", async () => {
