@@ -66,37 +66,55 @@
  * the server-side-distance engines. Tracked in
  * https://github.com/workglow-dev/libs/issues/798.
  *
- * ## Similarity is biased LOW at low bit widths
+ * ## Similarity shrinkage is corrected at 1-4 bits, documented at 5-8
  *
- * Magnitude is unbiased; similarity is not. Clipping and rounding shrink the reconstructed
- * dot product relative to each side's `codeNorm`, so
+ * Magnitude is unbiased; the raw similarity is not. Clipping and rounding shrink the
+ * reconstructed dot product relative to each side's `codeNorm`, so an uncorrected
  * {@link turboQuantizedCosineSimilarity} — and {@link turboQuantizedInnerProduct}, which
- * is that times the two norms — systematically UNDER-report similar pairs. Mean signed
- * error against the exact cosine, 32 correlated pairs per cell, d=1024, seeded:
+ * is that times the two norms — would systematically UNDER-report similar pairs. Mean
+ * signed error against the exact cosine, 32 correlated pairs per cell, d=1024, seeded,
+ * BEFORE the correction and as shipped:
  *
- * | bits | true 0.50 | true 0.80 | true 0.95 |
- * | ---- | --------- | --------- | --------- |
- * | 1    |  +0.002   |  +0.001   |  -0.000   |
- * | 2    |  -0.056   |  -0.080   |  -0.075   |
- * | 3    |  -0.017   |  -0.027   |  -0.028   |
- * | 4    |  -0.005   |  -0.007   |  -0.009   |
- * | 5    |  -0.002   |  -0.003   |  -0.003   |
- * | 6    |  -0.000   |  -0.001   |  -0.001   |
- * | 7    |  -0.000   |  -0.000   |  -0.000   |
- * | 8    |  -0.000   |  -0.000   |  -0.000   |
+ * | bits | true 0.50       | true 0.80       | true 0.95       |
+ * | ---- | --------------- | --------------- | --------------- |
+ * | 1    | +0.002 → +0.002 | +0.001 → +0.001 | -0.000 → -0.000 |
+ * | 2    | -0.056 → -0.001 | -0.080 → -0.001 | -0.075 → +0.001 |
+ * | 3    | -0.017 → +0.001 | -0.027 → -0.001 | -0.028 → +0.001 |
+ * | 4    | -0.005 → +0.000 | -0.007 → +0.001 | -0.009 → -0.000 |
+ * | 5    | -0.002          | -0.003          | -0.003          |
+ * | 6    | -0.000          | -0.001          | -0.001          |
+ * | 7    | -0.000          | -0.000          | -0.000          |
+ * | 8    | -0.000          | -0.000          | -0.000          |
  *
- * The 1-bit row is zero because that case alone HAS a closed form and is corrected: a
- * 2-level grid is exactly ±scale, so the estimator degenerates to the sign-agreement
- * statistic `1 - 2*theta/pi`, which `quantizedCosine` inverts. At 2-8 bits there is no
- * closed form, and a fitted gain would be tuned at one dimensionality and wrong at the
- * next — so the bias is documented rather than papered over. That is why 2 bits, four
- * times finer than 1, is the worst row in the table.
+ * Every corrected cell collapses to the sampling floor of a 32-pair estimate, which is what
+ * the arrows show: the residual is no longer a bias, it is noise.
  *
- * RANKING SURVIVES this — the shrinkage is monotone in the true cosine, so ordering a
- * candidate set is unaffected. ABSOLUTE THRESHOLDS AND CALIBRATION DO NOT. At 2 bits a
- * `cos > 0.8` cut (an ordinary RAG threshold) drops pairs whose real cosine is 0.87. Use
- * 4 bits or more when a stored threshold has to mean what it says, or re-tune the
- * threshold against the table above.
+ * How: the ratio the estimator forms is `E[Q(x)Q(y)] / E[Q(x)^2]` for a standard bivariate
+ * normal pair at the true cosine — a map that `quantizedCosine` inverts. At 1 bit that map
+ * has a closed form, because a 2-level grid carries only sign and the ratio is
+ * Goemans-Williamson's `(2/pi)*asin(rho)`. At 2-4 bits it has none, so it is evaluated by
+ * quadrature and tabulated instead (see {@link invertShrinkage}); the two agree to four
+ * decimals at 1 bit, which is what pins the quadrature. The map is DIMENSION-FREE — the
+ * loading factor is divided by `sqrt(paddedLen)`, so the standardized grid is identical at
+ * every d, and one table serves d=128 and d=4096 alike.
+ *
+ * 5-8 bits are deliberately left uncorrected: the residual bias is already at or below the
+ * estimator's own noise there, and the table build cost scales as `levels^2`. See
+ * {@link MAX_CORRECTED_BITS}.
+ *
+ * THE COST IS VARIANCE NEAR ORTHOGONALITY. Inverting a map whose slope is below 1 amplifies
+ * the estimator's noise by `1/g'(0)`, where that slope is shallowest: 1.57x at 1 bit, 1.13x
+ * at 2, 1.04x at 3, 1.01x at 4. On i.i.d. uniform pairs at d=1024 — which concentrate at
+ * cosine 0, the worst case for this — 2-bit RMSE goes 0.0130 → 0.0142. That is what takes
+ * the 0.080 bias at rho = 0.8 down to 0.001, where RMSE falls 0.081 → 0.011. The noise is
+ * symmetric and averages out over a candidate set, and it is worst precisely where the
+ * answer is "unrelated" either way; the bias moved every absolute threshold in one
+ * direction.
+ *
+ * RANKING was never affected — the shrinkage is monotone in the true cosine, so ordering a
+ * candidate set was correct before and is correct now. ABSOLUTE THRESHOLDS AND CALIBRATION
+ * were, and are what this fixes: a 2-bit `cos > 0.8` cut (an ordinary RAG threshold) used
+ * to drop pairs whose real cosine was 0.87.
  *
  * Properties:
  * - Data-oblivious: no training or codebook construction needed
@@ -586,6 +604,211 @@ function getQuantizationParams(
 }
 
 /**
+ * Highest bit width whose cosine shrinkage is corrected by {@link invertShrinkage}.
+ *
+ * Four, for two independent reasons that happen to agree.
+ *
+ * Accuracy: at 5 bits the residual signed bias is 0.0030 (d=1024, rho=0.8), already below
+ * the estimator's OWN RMSE of 0.0034 in that same cell — the correction would be moving a
+ * number by less than the noise it carries, which buys nothing and still pays the
+ * near-orthogonal variance amplification.
+ *
+ * Cost: {@link shrinkageTable} is O(levels^2) — one conditional expectation per Simpson
+ * node costs a CDF per decision edge, and there are `levels` bins each holding nodes. The
+ * measured cold build is 16/21/22 ms at 2/3/4 bits, 56 ms at 5, 84 ms at 6 and 555 ms at
+ * 8. Paying half a second on the first 8-bit comparison to correct a bias of 0.0001 is not
+ * a trade worth offering.
+ */
+const MAX_CORRECTED_BITS = 4;
+
+/**
+ * Standard normal CDF; the only special function the shrinkage map needs.
+ *
+ * Zelen & Severo's rational approximation (Abramowitz & Stegun 26.2.17), whose absolute
+ * error is bounded by 7.5e-8. That is three orders of magnitude below the 1.2e-4 the
+ * table's own linear interpolation contributes, so a higher-precision `erf` would sharpen
+ * nothing measurable while costing a series evaluation per call — and this is called
+ * `levels` times per quadrature node.
+ */
+function standardNormalCdf(x: number): number {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const density = Math.exp(-(x * x) / 2) / Math.sqrt(2 * Math.PI);
+  const tail =
+    density *
+    t *
+    (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  return x >= 0 ? 1 - tail : tail;
+}
+
+/**
+ * Integration limit for the two unbounded outer quantization bins, in standard deviations.
+ * `phi(9)` is ~1e-18, so the truncated mass is far below double precision's reach on a
+ * quantity of order 1.
+ */
+const SHRINKAGE_QUADRATURE_TAIL = 9;
+
+/** Simpson nodes per unit of `x`, so a wide outer bin gets proportionally more of them. */
+const SHRINKAGE_NODES_PER_UNIT = 16;
+
+/**
+ * `E[Q(x)Q(y)] / E[Q(x)^2]` for the standardized grid at this bit width, where `(x, y)` is
+ * a standard bivariate normal pair with correlation `rho` and `Q` is this module's uniform
+ * quantizer expressed in units of the per-coordinate standard deviation.
+ *
+ * This IS the quantity the estimator returns. {@link quantizedCosine} divides the code dot
+ * product by both `codeNorm`s, which estimates exactly this ratio; and the map is
+ * DIMENSION-FREE, because {@link getQuantizationParams} divides the loading factor by
+ * `sqrt(paddedLen)` — the same factor by which a rotated coordinate's standard deviation
+ * shrinks. The standardized grid is therefore identical at every dimensionality, and one
+ * table serves d=128 and d=4096 alike. (Measured: across a 32x range of d the ratio moves
+ * by at most 1.2%, while within one d it moves 4.5% with `rho`.)
+ *
+ * Evaluated as `E_x[Q(x) * E[Q(y)|x]]`. The inner conditional expectation is a sum of
+ * normal CDFs — smooth in `x`, unlike `Q` itself — so the only discontinuities left are
+ * the bin edges, which the outer sum splits on. Simpson within each bin then resolves it:
+ * the integrand is smooth there and the result is converged to four decimals by
+ * {@link SHRINKAGE_NODES_PER_UNIT} = 8, half what is used.
+ *
+ * At 1 bit this reduces to the closed form the module already inverts. A 2-level grid puts
+ * its single decision edge at zero with reconstruction points at `±outer`, so
+ * `E[Q(x)Q(y)] = outer^2 * E[sign(x)sign(y)]` and `E[Q^2] = outer^2`, leaving
+ * `(2/pi)*asin(rho)` — Goemans-Williamson. That the quadrature reproduces it to four
+ * decimals is the one exact reference this machinery has.
+ */
+function shrinkageAt(bits: number, rho: number): number {
+  const levels = 1 << bits;
+  const outer = optimalLoadingFactor(levels);
+  const step = (2 * outer) / (levels - 1);
+  // `y | x ~ N(rho*x, 1 - rho^2)`. The floor keeps `rho = 1` from dividing by zero; at
+  // that width the CDF arguments saturate to 0/1 and the conditional collapses to `Q(x)`,
+  // which is the correct limit.
+  const conditionalSd = Math.sqrt(Math.max(1 - rho * rho, 1e-12));
+
+  // `E[Q(y)|x]` by summation by parts over the `levels - 1` decision edges: the levels are
+  // equally spaced, so every jump is the same `step` and the sum needs one CDF per edge
+  // rather than one per level pair.
+  const conditionalMean = (x: number): number => {
+    const mean = rho * x;
+    let acc = -outer;
+    for (let j = 0; j < levels - 1; j++) {
+      const edge = -outer + (j + 0.5) * step;
+      acc += step * (1 - standardNormalCdf((edge - mean) / conditionalSd));
+    }
+    return acc;
+  };
+
+  let cross = 0;
+  let square = 0;
+  for (let k = 0; k < levels; k++) {
+    const point = -outer + k * step;
+    const lo = k === 0 ? -SHRINKAGE_QUADRATURE_TAIL : -outer + (k - 0.5) * step;
+    const hi = k === levels - 1 ? SHRINKAGE_QUADRATURE_TAIL : -outer + (k + 0.5) * step;
+    if (hi <= lo) continue;
+
+    square += point * point * (standardNormalCdf(hi) - standardNormalCdf(lo));
+
+    let nodes = Math.max(4, Math.ceil((hi - lo) * SHRINKAGE_NODES_PER_UNIT));
+    if (nodes % 2 === 1) nodes++;
+    const h = (hi - lo) / nodes;
+    let sum = 0;
+    for (let i = 0; i <= nodes; i++) {
+      const x = lo + i * h;
+      const weight = i === 0 || i === nodes ? 1 : i % 2 === 1 ? 4 : 2;
+      sum += weight * conditionalMean(x) * gaussianPdf(x);
+    }
+    cross += point * ((sum * h) / 3);
+  }
+
+  return square === 0 ? 0 : cross / square;
+}
+
+/** Knot count of each shrinkage table. Odd so a knot lands exactly on `rho = 0.5`. */
+const SHRINKAGE_TABLE_POINTS = 65;
+
+/** Lazily built shrinkage tables, memoized per bit width. */
+const shrinkageTableCache = new Map<number, ShrinkageTable>();
+
+interface ShrinkageTable {
+  readonly rho: Float64Array;
+  readonly g: Float64Array;
+}
+
+/**
+ * The {@link shrinkageAt} map sampled at {@link SHRINKAGE_TABLE_POINTS} knots, built once
+ * per bit width on first use and memoized for the life of the process.
+ *
+ * Lazy because the build is not free — 16 ms at 2 bits, 21 at 3, 22 at 4 — and a caller
+ * that never compares at a corrected width should never pay for one. It is a pure function
+ * of `bits`, so the memo is safe to hold forever; the whole cache is three Float64Arrays of
+ * 65 doubles even if every corrected width is exercised.
+ *
+ * KNOTS ARE SPACED UNIFORMLY IN ANGLE (`rho_i = sin(pi*u/2)`), not in `rho`. The map is
+ * steep and sharply curved as `rho` approaches 1 — where the inverse has to be most
+ * precise, since that is the region an absolute threshold cuts on — and uniform-in-`rho`
+ * knots resolve it worst exactly there. Measured worst-case round-trip
+ * `|invert(g(rho)) - rho|` over `rho` in [0, 1]: 2.7e-3 with uniform knots, 8.0e-5 with
+ * these. Same knot count, same build cost, 30x tighter; and the 1-bit map is exactly linear
+ * in this parameterization, which is what lets the closed-form agreement check be sharp.
+ */
+function shrinkageTable(bits: number): ShrinkageTable {
+  const cached = shrinkageTableCache.get(bits);
+  if (cached !== undefined) return cached;
+
+  const rho = new Float64Array(SHRINKAGE_TABLE_POINTS);
+  const g = new Float64Array(SHRINKAGE_TABLE_POINTS);
+  for (let i = 0; i < SHRINKAGE_TABLE_POINTS; i++) {
+    const u = i / (SHRINKAGE_TABLE_POINTS - 1);
+    rho[i] = Math.sin((Math.PI * u) / 2);
+    g[i] = shrinkageAt(bits, rho[i]!);
+  }
+  const table: ShrinkageTable = { rho, g };
+  shrinkageTableCache.set(bits, table);
+  return table;
+}
+
+/**
+ * Inverse of the shrinkage map: takes the raw ratio {@link quantizedCosine} computes and
+ * returns the cosine that would produce it.
+ *
+ * Binary search over the tabulated `g` values plus linear interpolation. `g` is strictly
+ * increasing in `rho` (a monotone-likelihood-ratio consequence of the bivariate normal),
+ * so the search is well defined; and `g` is ODD in `rho`, because negating one side of the
+ * pair negates every `Q(y)`, so only the non-negative half is tabulated and the sign is
+ * reapplied.
+ *
+ * Exposed rather than kept private because the 1-bit case is the one point where this
+ * machinery has an exact independent reference — `invertShrinkage(1, r)` must reproduce
+ * `cos(pi*(1 - r)/2)`, the Goemans-Williamson inverse this module already ships — and that
+ * check is the strongest available evidence that the quadrature behind it is right.
+ *
+ * @param bits - Bit width whose grid produced the estimate
+ * @param estimate - Raw normalized code dot product, in [-1, 1]
+ * @returns The corrected cosine, in [-1, 1]
+ */
+export function invertShrinkage(bits: number, estimate: number): number {
+  assertBits(bits);
+  const sign = estimate < 0 ? -1 : 1;
+  const target = Math.min(1, Math.abs(estimate));
+  const { rho, g } = shrinkageTable(bits);
+  const last = g.length - 1;
+  // A ratio at or past the endpoints has no bracket to interpolate inside. `g(0) = 0` and
+  // `g(1) = 1`, so these are the exact answers rather than a clamp that loses information.
+  if (target <= g[0]!) return 0;
+  if (target >= g[last]!) return sign;
+
+  let lo = 0;
+  let hi = last;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (g[mid]! <= target) lo = mid;
+    else hi = mid;
+  }
+  const span = g[hi]! - g[lo]!;
+  const fraction = span === 0 ? 0 : (target - g[lo]!) / span;
+  return sign * (rho[lo]! + fraction * (rho[hi]! - rho[lo]!));
+}
+
+/**
  * Normalizes a vector to unit length, returning both the unit-length coordinates
  * and the original L2 norm.
  *
@@ -928,10 +1151,24 @@ export function turboDequantize(quantized: TurboQuantizeResult): Float32Array {
 }
 
 /**
- * Estimates the inner product between two TurboQuant-quantized vectors
- * without full dequantization. This is faster than dequantizing both vectors
- * and computing the dot product, though for maximum accuracy, full
- * dequantization is preferred.
+ * Estimates the inner product between two TurboQuant-quantized vectors without full
+ * dequantization: it skips the inverse rotation and the crop, working in the rotated
+ * domain where the codes already live. For maximum accuracy, dequantize both sides and
+ * take a real dot product.
+ *
+ * IT DOES NOT SKIP THE DECODE, and the docstring that stood here implied otherwise. Both
+ * sides are unpacked and reconstructed on EVERY call — four fresh arrays per comparison —
+ * so scoring one query against a candidate set re-decodes that query once per candidate.
+ * At d=1024 and 20,000 candidates that is 80,000 arrays and ~352 MB of churn, roughly
+ * half of it re-deriving coordinates that never changed.
+ *
+ * A SEARCH LOOP SHOULD USE {@link turboPrepareQuery} instead — decode the query once, then
+ * {@link turboPreparedCosineSimilarity} per candidate. Measured on that sweep: 230 ms ->
+ * 105 ms at 8 bits (2.1x) and 180 ms -> 110 ms at 4 bits (1.6x). The corrected widths gain
+ * less because {@link finishCosine}'s table inversion is a per-CANDIDATE cost that neither
+ * path can hoist; what the prepared form removes is the per-candidate query decode, and
+ * nothing else. This helper stays the right shape for a one-off comparison, where preparing
+ * a query would be the same work spelled longer.
  *
  * @param a - First quantized vector
  * @param b - Second quantized vector
@@ -981,18 +1218,37 @@ function assertComparablePair(a: TurboQuantizeResult, b: TurboQuantizeResult): v
  * bytes, and needs no version bump: `theta = pi*(1 - ratio)/2`, so `cos(theta)` recovers
  * the cosine.
  *
- * The inversion is NOT extended to 2-8 bits, where the shrinkage is ordinary quantization
- * error (clipping and rounding shrink the reconstructed dot product relative to each
- * side's `codeNorm`) with no closed form to invert. A fitted per-bit gain would be a
- * constant tuned at one dimensionality, and the shrinkage varies with d — so it would
- * correct one corpus and skew the next. That residual bias is documented in the module
- * header instead, with the measured per-bit table.
+ * At 2-4 BITS the same correction applies, by the same argument, and the last line applies
+ * it through {@link invertShrinkage}. The shrinkage there is ordinary quantization error —
+ * clipping and rounding shrink the reconstructed dot product relative to each side's
+ * `codeNorm` — but "no closed form" is not "no correction": the ratio the estimator
+ * returns is `E[Q(x)Q(y)] / E[Q(x)^2]` for a standard bivariate normal pair, which
+ * {@link shrinkageAt} evaluates by quadrature and {@link invertShrinkage} inverts.
  *
- * The trade at 1 bit is real: the derivative of `cos(pi*(1 - r)/2)` peaks at ~pi/2 ≈ 1.57
- * near theta = pi/2, so whatever noise the sign statistic carries is amplified by up to
- * ~1.57x for near-orthogonal pairs. Measured on i.i.d. uniform inputs at d=1024, RMSE
- * against the exact cosine rises from 0.027 to 0.036 — paid to remove a bias of up to
- * 0.21, and paid in the regime where the answer is "these are unrelated" either way.
+ * The rationale that stood here before — that a correction would be "a constant tuned at
+ * one dimensionality, and the shrinkage varies with d" — was FALSE ON BOTH HALVES. It is
+ * not a constant, because the shrinkage varies with the cosine itself (4.5% between
+ * rho = 0.5 and rho = 0.95 at 2 bits), which is exactly why a per-bit scalar gain would
+ * not do and a map is needed. And it does not vary with d: {@link getQuantizationParams}
+ * divides the loading factor by `sqrt(paddedLen)`, so the standardized grid is IDENTICAL
+ * at every dimensionality. Measured across a 32x range of d (128 to 4096) the ratio moves
+ * by at most 1.2%, an order of magnitude less than it moves with rho at fixed d.
+ *
+ * The trades are real and are of the same shape at every corrected width: inverting a map
+ * whose slope is below 1 amplifies whatever noise the estimator carries, by `1/g'(0)` near
+ * orthogonality where the slope is shallowest. At 1 bit that factor is exactly `pi/2` ≈
+ * 1.57 — measured on i.i.d. uniform inputs at d=1024, RMSE against the exact cosine rises
+ * from 0.027 to 0.036, paid to remove a bias of up to 0.21. At 2 bits it is 1.13 (1.04 at
+ * 3, 1.01 at 4): far milder, and it buys an 8x RMSE cut on correlated pairs, from 0.081 to
+ * 0.010 at rho = 0.8. Both are paid in the near-orthogonal regime where the answer is
+ * "these are unrelated" either way, and both remove a bias that moved every absolute
+ * threshold in one direction.
+ *
+ * 5-8 bits are left alone; see {@link MAX_CORRECTED_BITS}.
+ *
+ * The correction itself lives in {@link finishCosine}, shared with the prepared-query
+ * path — the two entry points must return the same number for the same pair, and the only
+ * way to guarantee that is for there to be one copy of this decision.
  */
 function quantizedCosine(a: TurboQuantizeResult, b: TurboQuantizeResult): number {
   const { values: valuesA, codeNorm: codeNormA } = reconstructRotatedCodes(a);
@@ -1003,15 +1259,39 @@ function quantizedCosine(a: TurboQuantizeResult, b: TurboQuantizeResult): number
   for (let i = 0; i < valuesA.length; i++) {
     dot += valuesA[i] * valuesB[i];
   }
-  const cosine = Math.max(-1, Math.min(1, dot / (codeNormA * codeNormB)));
+  return finishCosine(a.bits, dot / (codeNormA * codeNormB));
+}
+
+/**
+ * Turns a raw normalized code dot product into the reported cosine: clamp, then undo the
+ * shrinkage at the widths where it is corrected.
+ *
+ * Extracted so {@link quantizedCosine} and {@link turboPreparedCosineSimilarity} cannot
+ * drift. They compute the same ratio by different routes — one decodes both sides, the
+ * other decodes only the candidate against a pre-normalized query — and a caller who
+ * switches to the prepared form for speed must get bit-for-bit the same score, or the
+ * optimisation silently changes results. That is exactly the trap the decode-once
+ * workaround falls into (see the test that pins it), and it is not a trap worth
+ * reproducing inside this module.
+ *
+ * @param bits - Bit width both records were encoded at
+ * @param ratio - Code dot product divided by both code norms
+ */
+function finishCosine(bits: number, ratio: number): number {
+  const cosine = Math.max(-1, Math.min(1, ratio));
   // After the clamp, so the argument is a valid angle even when rounding pushed the
   // ratio a hair past ±1.
-  if (a.bits === 1) return Math.cos((Math.PI * (1 - cosine)) / 2);
+  if (bits === 1) return Math.cos((Math.PI * (1 - cosine)) / 2);
+  if (bits <= MAX_CORRECTED_BITS) return invertShrinkage(bits, cosine);
   return cosine;
 }
 
 /**
  * Computes the approximate cosine similarity between two TurboQuant-quantized vectors.
+ *
+ * Decodes BOTH sides on every call. Scoring one query against a candidate set should use
+ * {@link turboPrepareQuery} + {@link turboPreparedCosineSimilarity} instead, which decodes
+ * the query once; see {@link turboQuantizedInnerProduct} for the measurement.
  *
  * @param a - First quantized vector
  * @param b - Second quantized vector
@@ -1024,6 +1304,134 @@ export function turboQuantizedCosineSimilarity(
   assertComparablePair(a, b);
   if (a.norm === 0 || b.norm === 0) return 0;
   return quantizedCosine(a, b);
+}
+
+/**
+ * A query decoded once, ready to be scored against many candidates.
+ *
+ * The three scalars are not metadata: they are the compatibility key
+ * {@link turboPreparedCosineSimilarity} re-checks on every candidate, exactly as
+ * {@link assertComparablePair} does for the pairwise helpers. Preparing a query throws away
+ * the record it came from, so without them a candidate encoded at a different bit width or
+ * under a different rotation seed would score against these coordinates and return a
+ * plausible number computed from two unrelated bases.
+ */
+export interface TurboPreparedQuery {
+  /** Bit width the query was encoded at; a candidate must match. */
+  readonly bits: number;
+  /** Rotation seed the query was encoded under; a candidate must match. */
+  readonly seed: number;
+  /** Original dimensionality of the query; a candidate must match. */
+  readonly dimensions: number;
+  /**
+   * The query's rotated-domain reconstruction. Length is the PADDED dimensionality,
+   * matching what {@link reconstructRotatedCodes} returns, so the inner loop needs no
+   * bounds reconciliation.
+   *
+   * NOT pre-divided by {@link codeNorm}, and that is deliberate. Folding the query's norm
+   * into its coordinates once looks like the obvious optimisation — it removes one
+   * multiply per candidate — but it changes `dot / (normA * normB)` into
+   * `sum((a_i/normA) * b_i) / normB`, which is a DIFFERENT floating-point expression:
+   * measured over 2,000 random pairs at d=1024, the two disagree in the last bits on 96%
+   * of them (relative 3e-12). Numerically that is nothing; as an API contract it is the
+   * whole point, because it would mean switching a search loop to the prepared form
+   * silently changes its scores, and a caller comparing against a stored threshold or a
+   * recorded result would see it. Keeping the norm separate makes
+   * {@link turboPreparedCosineSimilarity} evaluate the identical expression, so the two
+   * paths agree bit for bit by construction rather than by luck. It costs one multiply
+   * per candidate against 1024 multiply-adds: measured at 93 ms for the exact form and
+   * 96 ms for the pre-divided one over 20,000 candidates, i.e. nothing.
+   */
+  readonly values: Float64Array;
+  /**
+   * L2 norm of {@link values}. Zero exactly when the query is degenerate (a zero vector,
+   * or codes that reconstruct to zero), the case {@link turboPreparedCosineSimilarity}
+   * reports as 0 — mirroring the pairwise helpers.
+   */
+  readonly codeNorm: number;
+}
+
+/**
+ * Decodes a query once so it can be scored against many candidates.
+ *
+ * The pairwise helpers re-decode both sides on every call, which for a search loop means
+ * unpacking and reconstructing the QUERY once per candidate. Measured at d=1024 over
+ * 20,000 candidates, against {@link turboQuantizedCosineSimilarity}: 230 ms -> 105 ms at
+ * 8 bits (2.1x), 180 ms -> 110 ms at 4 bits (1.6x), and 80,000 fewer array allocations
+ * (~352 MB less churn) at either width. The corrected widths gain less because they also
+ * pay {@link finishCosine}'s table inversion per candidate, which is not query work and
+ * cannot be hoisted.
+ *
+ * The obvious alternative — {@link turboDequantize} the query once, then plain
+ * `cosineSimilarity` — is WRONG, and quietly so: it drops the shrinkage correction at 1-4
+ * bits, where the raw estimator reads a true 0.80 as 0.59 at 1 bit. This path keeps it, by
+ * routing through the same {@link finishCosine} the pairwise helpers use.
+ *
+ * @param query - The quantized query vector
+ * @returns A reusable prepared query
+ */
+export function turboPrepareQuery(query: TurboQuantizeResult): TurboPreparedQuery {
+  assertQuantizeResultShape(query);
+
+  const { bits, seed, dimensions, paddedDimensions, norm } = query;
+  // A zero query scores 0 against everything, so it never reaches the dot product and
+  // needs no decode — but it still carries a correctly sized `values`, so a caller
+  // inspecting the prepared object sees the same shape either way.
+  if (norm === 0) {
+    return { bits, seed, dimensions, values: new Float64Array(paddedDimensions), codeNorm: 0 };
+  }
+
+  const { values, codeNorm } = reconstructRotatedCodes(query);
+  return { bits, seed, dimensions, values, codeNorm };
+}
+
+/**
+ * Cosine similarity between a prepared query and a candidate, decoding only the candidate.
+ *
+ * Returns bit-for-bit what {@link turboQuantizedCosineSimilarity} returns for the same
+ * pair, at every bit width — the shrinkage correction is applied through the shared
+ * {@link finishCosine}, and the arithmetic is the same expression with one division
+ * hoisted out of the loop. Substituting this for the pairwise helper is a pure speedup
+ * with no change in results, which is the only form in which such a substitution is safe.
+ *
+ * Compatibility is re-checked per candidate rather than trusted: a prepared query is a
+ * plain object a caller can hold across a heterogeneous index, and the arithmetic below
+ * would happily consume a candidate from a different bit width or rotation basis and
+ * return a number.
+ *
+ * @param query - A query prepared by {@link turboPrepareQuery}
+ * @param candidate - The quantized candidate to score
+ * @returns Estimated cosine similarity in [-1, 1]
+ */
+export function turboPreparedCosineSimilarity(
+  query: TurboPreparedQuery,
+  candidate: TurboQuantizeResult
+): number {
+  // Same three checks as `assertComparablePair`, in the same order and with the same
+  // messages, so a mismatch reads identically whichever entry point hit it.
+  if (query.dimensions !== candidate.dimensions) {
+    throw new Error("Vectors must have the same dimensions");
+  }
+  if (query.bits !== candidate.bits) {
+    throw new Error("Vectors must use the same bit width");
+  }
+  if (query.seed !== candidate.seed) {
+    throw new Error("Vectors must use the same rotation seed");
+  }
+  assertQuantizeResultShape(candidate);
+
+  if (query.codeNorm === 0 || candidate.norm === 0) return 0;
+  const { values, codeNorm } = reconstructRotatedCodes(candidate);
+  if (codeNorm === 0) return 0;
+
+  const queryValues = query.values;
+  let dot = 0;
+  for (let i = 0; i < values.length; i++) {
+    dot += queryValues[i]! * values[i]!;
+  }
+  // Deliberately `dot / (a * b)`, matching `quantizedCosine` term for term — see
+  // {@link TurboPreparedQuery.values} for why the division is not hoisted.
+  return finishCosine(query.bits, dot / (query.codeNorm * codeNorm));
 }
 
 /**
