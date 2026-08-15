@@ -960,11 +960,17 @@ describe("Webhook notification tasks", () => {
       expect(lastCall().options.body as string).not.toContain("allowed_mentions");
     });
 
+    // In `text` the default is now total entity escaping, which subsumes the
+    // `<!` broadcast escape — the closing `>` is escaped too, so the assertion
+    // reads `&lt;!channel&gt;` rather than `&lt;!channel>`. The broadcast is
+    // just as dead; a broader remedy replaced a narrower one on this field. The
+    // narrow form is still what `blocks` and `allow_markup` produce, and is
+    // asserted as such in the cases below.
     test("Slack neutralizes channel-wide broadcasts by default", async () => {
       await slackNotify({ url: SLACK_URL, text: "<!channel> deploy done" });
 
       const body = lastCall().options.body as string;
-      expect(body).toContain("&lt;!channel>");
+      expect(body).toContain("&lt;!channel&gt;");
       expect(body).not.toContain("<!channel>");
       expect(body).toContain('"link_names":false');
     });
@@ -981,12 +987,33 @@ describe("Webhook notification tasks", () => {
       }
     });
 
-    // The narrow `<!` escape must not break the sequences that make Slack
-    // messages useful: links and single-user mentions.
-    test("Slack leaves links and single-user mentions intact", async () => {
+    /**
+     * REPLACES "Slack leaves links and single-user mentions intact", which
+     * pinned "a caller-supplied `<url|label>` reaches Slack verbatim" as a
+     * guarantee. Under this task's own threat model — content piped in from a
+     * fetch or a model — that guarantee IS the vulnerability: the label is
+     * attacker-chosen and Slack renders it in place of the URL, so
+     * `<https://evil.example|Deploy succeeded>` is a phishing link that reads
+     * as a status update.
+     *
+     * Both halves of the old assertion survive, moved behind `allow_markup`.
+     */
+    test("Slack escapes markup in text by default", async () => {
       await slackNotify({
         url: SLACK_URL,
         text: "<https://x/|y> pinged <@U1>",
+      });
+
+      expect(JSON.parse(lastCall().options.body as string).text).toBe(
+        "&lt;https://x/|y&gt; pinged &lt;@U1&gt;"
+      );
+    });
+
+    test("allow_markup keeps links and single-user mentions intact", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "<https://x/|y> pinged <@U1>",
+        allow_markup: true,
       });
 
       const body = lastCall().options.body as string;
@@ -997,11 +1024,17 @@ describe("Webhook notification tasks", () => {
     // `<!` is Slack's CONTROL-SEQUENCE sigil, not a broadcast sigil, and
     // `<!date^…>` is the one documented member of that family that can notify
     // nobody. Escaping it is pure collateral: Slack un-escapes the entity for
-    // display, so the message shows the raw token, and the only opt-out
-    // (`allow_mentions`) re-enables live channel-wide pings in the same field.
+    // display, so the message shows the raw token.
+    //
+    // These four cases and the one below all set `allow_markup` for a single
+    // shared reason: a date token is markup, and `text` is entity-escaped by
+    // default, so the exemption they exercise only has anything to exempt on
+    // the markup rung. Nothing about the exemption itself changed — the
+    // date-token-in-`blocks` case further down needs no flag and is the one
+    // that still pins `(?!!)` on the default path.
     test("a Slack date token survives the broadcast escape", async () => {
       const text = "Deploy at <!date^1700000000^{date_short}|Nov 14>";
-      await slackNotify({ url: SLACK_URL, text });
+      await slackNotify({ url: SLACK_URL, text, allow_markup: true });
 
       expect(JSON.parse(lastCall().options.body as string).text).toBe(text);
     });
@@ -1013,6 +1046,7 @@ describe("Webhook notification tasks", () => {
       await slackNotify({
         url: SLACK_URL,
         text: "<!date^1700000000^{date_short}|<!channel>>",
+        allow_markup: true,
       });
 
       const posted = JSON.parse(lastCall().options.body as string).text as string;
@@ -1023,15 +1057,22 @@ describe("Webhook notification tasks", () => {
     // Whether Slack accepts an upper-case token is unverified, so the exemption
     // fails closed rather than opening a path nobody has checked.
     test("a case-variant date token is still escaped", async () => {
-      await slackNotify({ url: SLACK_URL, text: "<!DATE^1700000000^{date_short}|x>" });
+      await slackNotify({
+        url: SLACK_URL,
+        text: "<!DATE^1700000000^{date_short}|x>",
+        allow_markup: true,
+      });
 
       expect(JSON.parse(lastCall().options.body as string).text).toContain("&lt;!DATE");
     });
 
+    // The rung matters: `allow_markup` re-enables LINKS, not pings. A broadcast
+    // is still neutralized alongside the date token it sits next to.
     test("channel broadcasts are still neutralized alongside a date token", async () => {
       await slackNotify({
         url: SLACK_URL,
         text: "<!channel> ships <!date^1700000000^{date_short}|Nov 14>",
+        allow_markup: true,
       });
 
       const posted = JSON.parse(lastCall().options.body as string).text as string;
@@ -1040,6 +1081,12 @@ describe("Webhook notification tasks", () => {
       expect(posted).toContain("<!date^1700000000^{date_short}|Nov 14>");
     });
 
+    // THE load-bearing assertion for `MASKED_LINK`'s `(?!!)` exemption, and the
+    // only date-token case that needs no `allow_markup`: `blocks` is delabeled
+    // by default rather than entity-escaped, so the delabeler is live here and
+    // `<!date^…|Nov 14>` is a `<…|…>` shape it would otherwise gut. The
+    // `|Nov 14` assertion is explicit so the exemption cannot regress silently
+    // behind the `toBe` on the whole leaf.
     test("a date token inside blocks survives the deep walk", async () => {
       const token = "<!date^1700000000^{date_short}|Nov 14>";
       await slackNotify({
@@ -1050,6 +1097,7 @@ describe("Webhook notification tasks", () => {
 
       const posted = JSON.parse(lastCall().options.body as string);
       expect(posted.blocks[0].text.text).toBe(`ships ${token}`);
+      expect(posted.blocks[0].text.text).toContain("|Nov 14");
     });
 
     // `blocks` is as reachable from a pipe or a model as `text` is, so leaving
@@ -1084,11 +1132,32 @@ describe("Webhook notification tasks", () => {
       expect(body).toContain("&lt;!subteam^S1>");
     });
 
-    test("Slack leaves links and single-user mentions inside blocks intact", async () => {
+    /**
+     * The `blocks` twin of the pinned `text` case above, and it gets the WEAKER
+     * remedy: a blocks leaf cannot be entity-escaped, because the very same
+     * shape-agnostic walk that reaches this `text` leaf also reaches `url`,
+     * `image_url`, `value` and `action_id` leaves — and escaping `&` in a URL
+     * corrupts every query string it touches. So the masking LABEL is dropped
+     * and the bare URL is left, which is enough to show a reader where a link
+     * really goes. `<@U1>` survives; that is the stated residual.
+     */
+    test("Slack strips masked link labels inside blocks by default", async () => {
       await slackNotify({
         url: SLACK_URL,
         text: "ok",
         blocks: [{ type: "section", text: { type: "mrkdwn", text: "<https://x/|y> <@U1>" } }],
+      });
+
+      const posted = JSON.parse(lastCall().options.body as string);
+      expect(posted.blocks[0].text.text).toBe("<https://x/> <@U1>");
+    });
+
+    test("allow_markup keeps masked links inside blocks intact", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "<https://x/|y> <@U1>" } }],
+        allow_markup: true,
       });
 
       const body = lastCall().options.body as string;
@@ -1107,6 +1176,141 @@ describe("Webhook notification tasks", () => {
       const body = lastCall().options.body as string;
       expect(body).toContain("<!channel>");
       expect(body).not.toContain("&lt;!");
+    });
+
+    /**
+     * Link/label injection: the sequence the old pinned tests declared safe.
+     *
+     * `BROADCAST_SIGIL` escapes only `<!`, so `<https://evil.example|Deploy
+     * succeeded>` passed both the lexical escape and the deep walk untouched,
+     * and `link_names: false` governs bare `@name` text rather than control
+     * sequences. Slack renders the LABEL in place of the URL, so a notification
+     * assembled from a fetch result or a model summary could display a phishing
+     * destination as a status line.
+     */
+    test("an injected masked link is escaped in text by default", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "<https://evil.example|Deploy succeeded>",
+      });
+
+      const posted = JSON.parse(lastCall().options.body as string).text as string;
+      expect(posted).toBe("&lt;https://evil.example|Deploy succeeded&gt;");
+      // Nothing Slack will render as a link: no live angle bracket survives.
+      expect(posted).not.toContain("<");
+      expect(posted).not.toContain(">");
+    });
+
+    test("an injected masked link is delabeled inside a blocks leaf", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "<https://evil.example|Deploy succeeded>" },
+          },
+        ],
+      });
+
+      const posted = JSON.parse(lastCall().options.body as string);
+      // The destination is still clickable — that is the weaker remedy — but it
+      // can no longer masquerade as anything else.
+      expect(posted.blocks[0].text.text).toBe("<https://evil.example>");
+      expect(posted.blocks[0].text.text).not.toContain("Deploy succeeded");
+    });
+
+    // Order inside `escapeSlackText`: `&` must go FIRST. Escaping `<`/`>` first
+    // would introduce ampersands that the `&` pass then re-escapes, so `<c>`
+    // would arrive as `&amp;lt;c&amp;gt;` and render as the literal `&lt;c&gt;`.
+    test("escapeSlackText escapes the ampersand before the angle brackets", async () => {
+      await slackNotify({ url: SLACK_URL, text: "a & b <c>" });
+
+      const posted = JSON.parse(lastCall().options.body as string).text as string;
+      expect(posted).toBe("a &amp; b &lt;c&gt;");
+      expect(posted).not.toContain("&amp;amp;");
+      expect(posted).not.toContain("&amp;lt;");
+    });
+
+    /**
+     * THE regression the whole text/blocks split exists to avoid.
+     *
+     * `neutralizeSlackBroadcastsDeep` is shape-agnostic on purpose — it cannot
+     * tell a `text` leaf from a `url` leaf — so applying `escapeSlackText`
+     * inside the walk would turn every `?a=1&b=2` into `?a=1&amp;b=2` and break
+     * the link. `<!` is safe to escape everywhere precisely because it has no
+     * legitimate occurrence in a URL; `&` has.
+     */
+    test("a query string in a blocks url leaf is left untouched", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "section",
+            accessory: {
+              type: "button",
+              text: { type: "plain_text", text: "Open" },
+              url: "https://ci.example/build?a=1&b=2",
+              action_id: "open_build",
+            },
+          },
+        ],
+      });
+
+      const posted = JSON.parse(lastCall().options.body as string);
+      expect(posted.blocks[0].accessory.url).toBe("https://ci.example/build?a=1&b=2");
+      expect(posted.blocks[0].accessory.action_id).toBe("open_build");
+    });
+
+    // The ladder has no dead rung: `allow_mentions` is the strictly wider
+    // permission and implies `allow_markup`, so a caller who opted into live
+    // pings never has to discover a second flag to get live links back.
+    test("allow_mentions implies allow_markup for text", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "<https://x/|y> pinged <@U1>",
+        allow_mentions: true,
+      });
+
+      expect(JSON.parse(lastCall().options.body as string).text).toBe(
+        "<https://x/|y> pinged <@U1>"
+      );
+    });
+
+    // `allow_markup` re-enables markup only. Broadcasts are `allow_mentions`'
+    // business and stay neutralized, in `text` and in `blocks` alike.
+    test("allow_markup does not re-enable channel-wide broadcasts", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "<!channel> down",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "<!here> too" } }],
+        allow_markup: true,
+      });
+
+      const body = lastCall().options.body as string;
+      expect(body).toContain("&lt;!channel>");
+      expect(body).toContain("&lt;!here>");
+      expect(body).not.toContain("<!channel>");
+      expect(body).not.toContain("<!here>");
+      expect(body).toContain('"link_names":false');
+    });
+
+    // Order within a leaf: the broadcast escape runs before the delabeler.
+    // Reversed, `MASKED_LINK` cannot match across the inner `<`, so nothing is
+    // stripped and the masked link survives with a merely-escaped label.
+    test("a masked link whose label hides a broadcast is still delabeled", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: "<https://evil.example|<!channel>>" } },
+        ],
+      });
+
+      const leaf = JSON.parse(lastCall().options.body as string).blocks[0].text.text as string;
+      expect(leaf).toContain("<https://evil.example>");
+      expect(leaf).not.toContain("<!channel>");
     });
 
     // A cycle is infinitely deep, so the depth cap terminates it. The failure

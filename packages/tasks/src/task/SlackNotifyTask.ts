@@ -36,14 +36,15 @@ const inputSchema = {
     text: {
       type: "string",
       title: "Text",
-      description: "Message text, also used as the notification fallback for block messages",
+      description:
+        "Message text, also used as the notification fallback for block messages. Slack markup is escaped by default, so links, mentions and the <!date^...> token render as literal text; set 'allow_markup' to send them live.",
     },
     blocks: {
       type: "array",
       items: { type: "object", additionalProperties: true },
       title: "Blocks",
       description:
-        "Slack Block Kit blocks. Channel-wide broadcasts are neutralized in every string inside the structure, the same as 'text', and rich_text broadcast/usergroup elements — which carry no escapable text — are rewritten to plain text, unless 'allow_mentions' is set. Slack's <!date^...> formatting token notifies nobody and survives by default.",
+        "Slack Block Kit blocks. Channel-wide broadcasts are neutralized in every string inside the structure, the same as 'text', and rich_text broadcast/usergroup elements — which carry no escapable text — are rewritten to plain text, unless 'allow_mentions' is set. Masked links (<url|label>) are reduced to their bare URL unless 'allow_markup' is set — a blocks leaf cannot be entity-escaped the way 'text' is, because the same walk visits url fields. Slack's <!date^...> formatting token notifies nobody and survives by default.",
     },
     username: {
       type: "string",
@@ -60,7 +61,14 @@ const inputSchema = {
       default: false,
       title: "Allow Mentions",
       description:
-        "Send 'text' and 'blocks' unmodified. By default channel-wide broadcasts are neutralized in both — the text forms (<!channel>, <!here>, <!everyone>, <!subteam^ID>) by escaping, and the rich_text broadcast/usergroup element shapes by rewriting — so piped or model-generated content cannot notify a whole workspace. Slack's <!date^...> formatting token notifies nobody and is left live either way, so a date does not need this setting.",
+        "Send 'text' and 'blocks' unmodified, and implies 'allow_markup'. By default channel-wide broadcasts are neutralized in both — the text forms (<!channel>, <!here>, <!everyone>, <!subteam^ID>) by escaping, and the rich_text broadcast/usergroup element shapes by rewriting — so piped or model-generated content cannot notify a whole workspace. Also governs 'username' and 'icon_emoji', which get the broadcast escape only.",
+    },
+    allow_markup: {
+      type: "boolean",
+      default: false,
+      title: "Allow Markup",
+      description:
+        "Send Slack markup live: <url|label> links, single-user <@U123> mentions and the <!date^...> token. By default 'text' is HTML-entity escaped and masked links inside 'blocks' are reduced to their bare URL, so piped or model-generated content cannot render an attacker-chosen label over an attacker-chosen URL. Channel-wide broadcasts are still neutralized — that needs 'allow_mentions', which implies this setting.",
     },
     timeout: {
       type: "integer",
@@ -127,14 +135,77 @@ export type SlackNotifyTaskOutput = FromSchema<typeof outputSchema>;
  * and a case variant (`<!DATE^`) is escaped too — whether Slack accepts one is
  * unverified, so this fails closed.
  *
- * With the exemption in place, everything the escape still removes
- * (`<!channel>`, `<!here>`, `<!everyone>`, `<!subteam^…>`) IS a mention, so the
- * single `allow_mentions` control governs a single concern: the lexical escape,
- * the structural broadcast/usergroup rewrite and `link_names: false` all belong
- * to it. That is why no separate port is introduced — splitting them would add
- * a control with no behavior behind it.
+ * With the exemption in place, everything this escape still removes
+ * (`<!channel>`, `<!here>`, `<!everyone>`, `<!subteam^…>`) IS a mention, so
+ * `allow_mentions` governs a single concern: this lexical escape, the structural
+ * broadcast/usergroup rewrite and `link_names: false` all belong to it.
+ *
+ * MARKUP is a second, genuinely different concern, and it does have behavior
+ * behind it — {@link escapeSlackText} and {@link stripSlackLinkLabels}, under
+ * the separate `allow_markup` port. Wanting a build link in a notification is
+ * orthogonal to wanting `@channel` to ping four hundred people, so one control
+ * cannot serve both. `allow_mentions` implies `allow_markup`: live mentions
+ * without live markup is not a state anyone asks for.
  */
 const BROADCAST_SIGIL = /<!(?!date\^)/g;
+
+/**
+ * A `<url|label>` sequence, excluding the `<!…>` control family.
+ *
+ * `(?!!)` is what exempts `<!date^1700000000^{date_short}|Nov 14>`: the `|`
+ * part of a date token is a FALLBACK for clients that cannot render the date,
+ * not a label masking a destination, and the same exemption covers any other
+ * `<!…>` control sequence the broadcast escape has already dealt with.
+ *
+ * `[^<>|]` on the URL half keeps a match inside ONE sequence — without it a
+ * greedy run would span from one `<` past an intervening `>` to a later `|`,
+ * swallowing whatever sat between two independent links.
+ */
+const MASKED_LINK = /<(?!!)([^<>|]*)\|[^<>]*>/g;
+
+/**
+ * HTML-entity escapes Slack's three active characters.
+ *
+ * `&` MUST be replaced first: doing it after `<`/`>` would re-escape the
+ * ampersands those two just introduced, so `<c>` would arrive as
+ * `&amp;lt;c&amp;gt;` and render as the literal text `&lt;c&gt;`.
+ *
+ * This is Slack's own documented escaping rule, and it is total — every link,
+ * mention and control sequence in the escaped text renders as literal
+ * characters. That is the point: an attacker-chosen label over an
+ * attacker-chosen URL is a phishing primitive, and a notification body assembled
+ * from a fetch result or a model summary is exactly where one arrives. The
+ * message stays perfectly readable; only clickability is lost.
+ */
+export function escapeSlackText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Reduces `<url|label>` to `<url>`, so a link renders as its real destination.
+ *
+ * The weaker of the two markup controls, and the one `blocks` gets: full
+ * entity escaping CANNOT be applied there. {@link neutralizeSlackBroadcastsDeep}
+ * is shape-agnostic by design — it visits `url`, `image_url`, `value` and
+ * `action_id` leaves as readily as `text` ones — and escaping `&` in a `url`
+ * leaf corrupts every query string it touches (`?a=1&b=2` becomes `?a=1&amp;b=2`).
+ * `<!` is safe to escape everywhere precisely because it has no legitimate
+ * occurrence in those fields; `&` does. So `text` and `blocks` need different
+ * policies, and this is the blocks half.
+ *
+ * What survives: the label is dropped, so the reader sees where the link
+ * actually goes. What does not: a bare `<https://evil.example>` is still a live
+ * link, and `<@U123>` still resolves. Stated in the README as the residual.
+ */
+export function stripSlackLinkLabels(text: string): string {
+  return text.replace(MASKED_LINK, "<$1>");
+}
+
+/** How {@link neutralizeSlackBroadcastsDeep} treats markup it finds in a leaf. */
+export interface SlackDeepEscapePolicy {
+  /** Reduce `<url|label>` to `<url>` in every string leaf. */
+  readonly stripLabels: boolean;
+}
 
 /**
  * Defuses Slack's channel-wide broadcast sequences in caller-supplied text.
@@ -199,13 +270,31 @@ const STRUCTURAL_BROADCAST_TYPES: ReadonlySet<string> = new Set(["broadcast", "u
  * lexical half, this one cannot be shape-agnostic — a structural broadcast is
  * identified by nothing but its type name.
  *
+ * 3. MARKUP — {@link stripSlackLinkLabels}, under `policy.stripLabels`. This one
+ *    is a POLICY rather than an unconditional rule because it is the weaker
+ *    remedy chosen for this walk specifically: `text` gets full entity escaping
+ *    and `blocks` cannot, since the same traversal that reaches a `text` leaf
+ *    also reaches a `url` leaf, where escaping `&` would corrupt a query string.
+ *    The policy is required at every call site rather than defaulted — which of
+ *    the two markup regimes a payload is under is exactly the thing a reader
+ *    needs to see at the call.
+ *
+ * Order within a leaf: the broadcast escape runs FIRST. Reversed, a masked link
+ * whose label contains a broadcast (`<https://x/|<!channel>>`) survives —
+ * `MASKED_LINK` cannot match across the inner `<`, so nothing is stripped, and
+ * the label is then merely escaped and left in place as a live link.
+ *
  * New structures are returned; the input may be edge-owned and is never
  * mutated. Depth is capped rather than cycle-tracked: a cycle is infinitely
  * deep, so the cap terminates it, and the permanent configuration error that
  * results is exactly what a cyclic payload already produces a moment later when
  * the request body is serialized.
  */
-export function neutralizeSlackBroadcastsDeep(value: unknown, depth: number = 0): unknown {
+export function neutralizeSlackBroadcastsDeep(
+  value: unknown,
+  policy: SlackDeepEscapePolicy,
+  depth: number = 0
+): unknown {
   if (depth > SECURITY_LIMITS.slackBlocksMaxDepth) {
     throw createFetchUrlJobError(
       FetchUrlErrorCode.CONFIGURATION,
@@ -213,10 +302,11 @@ export function neutralizeSlackBroadcastsDeep(value: unknown, depth: number = 0)
     );
   }
   if (typeof value === "string") {
-    return neutralizeSlackBroadcasts(value);
+    const escaped = neutralizeSlackBroadcasts(value);
+    return policy.stripLabels ? stripSlackLinkLabels(escaped) : escaped;
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => neutralizeSlackBroadcastsDeep(entry, depth + 1));
+    return value.map((entry) => neutralizeSlackBroadcastsDeep(entry, policy, depth + 1));
   }
   if (typeof value === "object" && value !== null) {
     const elementType = (value as { readonly type?: unknown }).type;
@@ -236,7 +326,7 @@ export function neutralizeSlackBroadcastsDeep(value: unknown, depth: number = 0)
     }
     const escaped: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value)) {
-      escaped[key] = neutralizeSlackBroadcastsDeep(entry, depth + 1);
+      escaped[key] = neutralizeSlackBroadcastsDeep(entry, policy, depth + 1);
     }
     return escaped;
   }
@@ -292,11 +382,31 @@ export class SlackNotifyTask<
       "SlackNotifyTask"
     );
     const allowMentions = input.allow_mentions === true;
+    // A three-rung ladder, and `allow_mentions` sits on the top rung of both:
+    // live mentions with dead links is not a state anyone asks for, and a rung
+    // nothing can reach is a rung that never gets tested.
+    const allowMarkup = allowMentions || input.allow_markup === true;
     const result = await postWebhookJson({
       url,
       payload: compactPayload({
-        text: allowMentions ? input.text : (neutralizeSlackBroadcastsDeep(input.text) as string),
-        blocks: allowMentions ? input.blocks : neutralizeSlackBroadcastsDeep(input.blocks),
+        // `text` gets the STRONG remedy — total entity escaping — because it is
+        // a single message body with no url/action_id leaves hiding in it. The
+        // weaker delabeling is what `blocks` has to settle for.
+        text: allowMentions
+          ? input.text
+          : allowMarkup
+            ? neutralizeSlackBroadcasts(input.text)
+            : escapeSlackText(input.text),
+        blocks: allowMentions
+          ? input.blocks
+          : neutralizeSlackBroadcastsDeep(input.blocks, { stripLabels: !allowMarkup }),
+        // These two stay on the BROADCAST escape only, deliberately. Whether
+        // Slack un-escapes entities in a display name is unverified, so
+        // escaping here risks a literal `&amp;` in a bot name for no attested
+        // gain — and neither field renders a link, so masked-link injection has
+        // nowhere to land. Same footing as the note below: defence in depth,
+        // NOT a closed bypass.
+        //
         // Defence in depth, NOT a closed bypass: whether Slack parses
         // broadcast syntax inside a display name or an emoji code is
         // unconfirmed, so this is not evidence of a leak that was open. The
@@ -304,10 +414,12 @@ export class SlackNotifyTask<
         // enough not to leave the question standing.
         username: allowMentions
           ? input.username
-          : (neutralizeSlackBroadcastsDeep(input.username) as string | undefined),
+          : (neutralizeSlackBroadcastsDeep(input.username, { stripLabels: false }) as
+              string | undefined),
         icon_emoji: allowMentions
           ? input.icon_emoji
-          : (neutralizeSlackBroadcastsDeep(input.icon_emoji) as string | undefined),
+          : (neutralizeSlackBroadcastsDeep(input.icon_emoji, { stripLabels: false }) as
+              string | undefined),
         link_names: allowMentions ? undefined : false,
       }),
       headers: undefined,
