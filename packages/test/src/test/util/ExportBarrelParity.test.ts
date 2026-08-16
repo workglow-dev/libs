@@ -10,9 +10,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * A provider whose `src/ai/index.ts` and `src/ai/index.browser.ts` are two
- * hand-maintained barrels over ONE set of modules must export the same surface
- * from both, except where the difference is deliberate and stated here.
+ * Any `<stem>.browser.ts` under `providers/<vendor>/src/` and the `<stem>.ts`
+ * beside it are two hand-maintained views of ONE set of modules, and must
+ * export the same surface, except where the difference is deliberate and
+ * stated here.
  *
  * `ExportTypesPairing.test.ts` proves the manifest routes a browser consumer to
  * the browser declarations. That is what turns a barrel omission from invisible
@@ -23,8 +24,14 @@ import { describe, expect, it } from "vitest";
  * compiled into the browser bundle through the runtime entry, missing only its
  * `export *` line.
  *
- * This guard is deliberately source-only: it reads the two barrels as text, so
- * it runs under `use-source` and needs no `dist`.
+ * The scan is recursive but stays scoped to `providers/`, deliberately. Adding
+ * `packages/` pulls in `packages/tasks/src/task/image/imageTextRender.browser.ts`,
+ * a genuine implementation split whose browser file exports one factory against
+ * the node module's fifteen names — an exemption of fifteen entries buying
+ * nothing, since the provider tree is where the two-barrel convention lives.
+ *
+ * This guard is deliberately source-only: it reads the files as text, so it
+ * runs under `use-source` and needs no `dist`.
  */
 
 /** The exported names of one top-level statement, as a stable comparable key. */
@@ -107,6 +114,24 @@ function memberNames(clause: string): string[] {
 }
 
 /**
+ * A specifier, with a trailing `.browser` removed.
+ *
+ * The browser half of a pair names the browser half of every module it
+ * re-exports, so without this every runtime pair reports as pure drift
+ * (`* from "./common/Ollama_Client"` against
+ * `* from "./common/Ollama_Client.browser"`) and the guard says nothing.
+ *
+ * The cost is that a star-export comparison across a `.browser` sibling becomes
+ * NOMINAL — it asserts the two barrels name the same module NAME, not the same
+ * names. The recursive scan is what closes that: `Ollama_Client.browser.ts` and
+ * `Ollama_Client.ts` are themselves a compared pair now, so the surface behind
+ * the specifier is checked one level down.
+ */
+function normalizeSpecifier(specifier: string): string {
+  return specifier.replace(/\.browser$/, "");
+}
+
+/**
  * The surface one barrel exports, as one entry per importable name.
  *
  * A `export * from "x"` cannot be expanded without resolving `x`, so it is kept
@@ -120,12 +145,12 @@ function parseBarrel(text: string): ParsedBarrel {
   for (const statement of topLevelExportStatements(text)) {
     const star = /^export\s+(?:type\s+)?\*\s+from\s+"([^"]+)"/.exec(statement);
     if (star !== null) {
-      surface.add(`* from "${star[1]}"`);
+      surface.add(`* from "${normalizeSpecifier(star[1] as string)}"`);
       continue;
     }
     const named = /^export\s+(?:type\s+)?\{([\s\S]*?)\}\s*(?:from\s+"([^"]+)")?/.exec(statement);
     if (named !== null) {
-      const from = named[2] === undefined ? "" : ` from "${named[2]}"`;
+      const from = named[2] === undefined ? "" : ` from "${normalizeSpecifier(named[2])}"`;
       for (const name of memberNames(named[1] as string)) surface.add(`${name}${from}`);
       continue;
     }
@@ -155,13 +180,17 @@ function parseBarrel(text: string): ParsedBarrel {
  * Anything else appearing here is a real asymmetry: the modules behind these
  * barrels carry no `node:` imports, and each omitted module was already in the
  * browser bundle via the runtime entry — only its `export *` was missing.
+ *
+ * Keyed by the BROWSER file path, not the package: a package contributes as
+ * many pairs as it has `.browser.ts` siblings, and an exemption belongs to the
+ * one file that earns it.
  */
 const INTENTIONAL_NODE_ONLY: ReadonlyMap<string, readonly string[]> = new Map([
-  ["providers/deepseek", ["_testOnly"]],
-  ["providers/ollama", ["_testOnly"]],
-  ["providers/openai", ["_testOnly"]],
-  ["providers/openrouter", ["_testOnly"]],
-  ["providers/xai", ["_testOnly"]],
+  ["providers/deepseek/src/ai/index.browser.ts", ["_testOnly"]],
+  ["providers/ollama/src/ai/index.browser.ts", ["_testOnly"]],
+  ["providers/openai/src/ai/index.browser.ts", ["_testOnly"]],
+  ["providers/openrouter/src/ai/index.browser.ts", ["_testOnly"]],
+  ["providers/xai/src/ai/index.browser.ts", ["_testOnly"]],
 ]);
 
 interface BarrelPair {
@@ -185,22 +214,55 @@ function repoRoot(): string {
   throw new Error("could not locate the workspace root from " + import.meta.url);
 }
 
+/** Every `<stem>.browser.ts?` under `dir`, recursively, as paths relative to `root`. */
+function browserFilesUnder(root: string, dir: string, out: string[]): void {
+  for (const entry of readdirSync(join(root, dir), { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === "dist") continue;
+    if (entry.isDirectory()) {
+      browserFilesUnder(root, `${dir}/${entry.name}`, out);
+      continue;
+    }
+    if (/\.browser\.tsx?$/.test(entry.name)) out.push(`${dir}/${entry.name}`);
+  }
+}
+
+/**
+ * Whether the browser file is nothing but a re-export of its node sibling.
+ *
+ * That shape is in parity by construction — it IS the node surface — and it is
+ * the shape this convention wants where a package has no platform-specific
+ * source (`providers/llamacpp-server`, `providers/stable-diffusion-server`).
+ * Comparing it would report the node file's every other statement as drift.
+ */
+function isSiblingReExport(browser: ParsedBarrel, nodeStem: string): boolean {
+  return browser.surface.size === 1 && browser.surface.has(`* from "./${nodeStem}"`);
+}
+
 function barrelPairs(root: string): BarrelPair[] {
   const pairs: BarrelPair[] = [];
   const providersDir = join(root, "providers");
   for (const entry of readdirSync(providersDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const packageDir = `providers/${entry.name}`;
-    const nodePath = `${packageDir}/src/ai/index.ts`;
-    const browserPath = `${packageDir}/src/ai/index.browser.ts`;
-    if (!existsSync(join(root, nodePath)) || !existsSync(join(root, browserPath))) continue;
-    pairs.push({
-      packageDir,
-      nodePath,
-      browserPath,
-      node: parseBarrel(readFileSync(join(root, nodePath), "utf8")),
-      browser: parseBarrel(readFileSync(join(root, browserPath), "utf8")),
-    });
+    if (!existsSync(join(root, packageDir, "src"))) continue;
+    const browserFiles: string[] = [];
+    browserFilesUnder(root, `${packageDir}/src`, browserFiles);
+    for (const browserPath of browserFiles) {
+      const stem = /^(.+)\.browser\.(tsx?)$/.exec(browserPath);
+      if (stem === null) continue;
+      const nodePath = `${stem[1]}.${stem[2]}`;
+      if (!existsSync(join(root, nodePath))) continue;
+      const browser = parseBarrel(readFileSync(join(root, browserPath), "utf8"));
+      const nodeStem = (nodePath.split("/").pop() as string).replace(/\.tsx?$/, "");
+      if (isSiblingReExport(browser, nodeStem)) continue;
+      pairs.push({
+        packageDir,
+        nodePath,
+        browserPath,
+        node: parseBarrel(readFileSync(join(root, nodePath), "utf8")),
+        browser,
+      });
+    }
   }
   return pairs;
 }
@@ -215,9 +277,12 @@ describe("provider ai barrels", () => {
   const pairs = barrelPairs(root);
 
   it("finds the barrel pairs to check", () => {
-    // Vacuous-pass guard: the scan keying on a path that no longer exists would
-    // otherwise turn this whole file into a no-op.
-    expect(pairs.map((pair) => pair.packageDir).sort()).toEqual([...INTENTIONAL_NODE_ONLY.keys()]);
+    // Vacuous-pass guard, in two parts: the scan reached the provider tree, and
+    // it recursed into it. Deliberately NOT an equality against the pinned
+    // keys — a pin is an exemption, so requiring one per pair would mean a
+    // correct new provider fails until somebody registers it as needing none.
+    expect(pairs.length).toBeGreaterThan(40);
+    expect(pairs.some((pair) => pair.browserPath.includes("/src/ai/"))).toBe(true);
   });
 
   it("parses every top-level export in both barrels", () => {
@@ -231,14 +296,11 @@ describe("provider ai barrels", () => {
   it("exports the same surface from both barrels apart from the pinned node-only names", () => {
     const drift: string[] = [];
     for (const pair of pairs) {
-      const expected = [...(INTENTIONAL_NODE_ONLY.get(pair.packageDir) ?? [])].sort();
+      const expected = [...(INTENTIONAL_NODE_ONLY.get(pair.browserPath) ?? [])].sort();
       const actual = nodeOnly(pair);
       const extra = actual.filter((name) => !expected.includes(name));
       if (extra.length === 0) continue;
-      drift.push(
-        `${pair.packageDir}: ${pair.nodePath} exports ${extra.join(", ")} but ` +
-          `${pair.browserPath} does not`
-      );
+      drift.push(`${pair.nodePath} exports ${extra.join(", ")} but ${pair.browserPath} does not`);
     }
     expect(drift).toEqual([]);
   });
@@ -249,14 +311,14 @@ describe("provider ai barrels", () => {
     // asked for, and hides the next omission behind an entry that reads as
     // deliberate.
     const stale: string[] = [];
-    for (const [packageDir, names] of INTENTIONAL_NODE_ONLY) {
-      const pair = pairs.find((candidate) => candidate.packageDir === packageDir);
-      expect(pair, `${packageDir} is pinned but has no barrel pair`).toBeDefined();
+    for (const [browserPath, names] of INTENTIONAL_NODE_ONLY) {
+      const pair = pairs.find((candidate) => candidate.browserPath === browserPath);
+      expect(pair, `${browserPath} is pinned but has no barrel pair`).toBeDefined();
       if (pair === undefined) continue;
       const actual = nodeOnly(pair);
       for (const name of names) {
         if (actual.includes(name)) continue;
-        stale.push(`${packageDir}: "${name}" is pinned node-only but both barrels export it`);
+        stale.push(`${browserPath}: "${name}" is pinned node-only but both barrels export it`);
       }
     }
     expect(stale).toEqual([]);
@@ -312,5 +374,42 @@ describe("barrel parsing", () => {
       ['// export * from "./common/Gone";', 'export * from "./common/Here";'].join("\n")
     );
     expect([...surface]).toEqual(['* from "./common/Here"']);
+  });
+
+  it("keys a `.browser` sibling under the same specifier as its node peer", () => {
+    // Without this the two halves of every runtime pair agree on nothing and
+    // the guard reports each one as total drift.
+    const node = parseBarrel('export * from "./common/Ollama_Client";\n');
+    const browser = parseBarrel('export * from "./common/Ollama_Client.browser";\n');
+    expect([...browser.surface]).toEqual([...node.surface]);
+  });
+
+  it("normalizes a `.browser` specifier on a named re-export too", () => {
+    const { surface } = parseBarrel('export { createClient } from "./common/Client.browser";\n');
+    expect([...surface]).toEqual(['createClient from "./common/Client"']);
+  });
+
+  it("does not strip `.browser` from the middle of a specifier", () => {
+    const { surface } = parseBarrel('export * from "./common/Client.browser.impl";\n');
+    expect([...surface]).toEqual(['* from "./common/Client.browser.impl"']);
+  });
+});
+
+describe("sibling re-export detection", () => {
+  it("recognizes a browser file that is only a re-export of its node peer", () => {
+    expect(isSiblingReExport(parseBarrel('export * from "./ai-runtime";\n'), "ai-runtime")).toBe(
+      true
+    );
+  });
+
+  it("does not treat a barrel that also re-exports other modules as one", () => {
+    const browser = parseBarrel(
+      ['export * from "./ai";', 'export * from "./common/Extra";'].join("\n")
+    );
+    expect(isSiblingReExport(browser, "ai")).toBe(false);
+  });
+
+  it("does not treat a re-export of a different module as one", () => {
+    expect(isSiblingReExport(parseBarrel('export * from "./ai/index";\n'), "ai")).toBe(false);
   });
 });

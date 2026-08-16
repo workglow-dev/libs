@@ -369,7 +369,8 @@ function browserSplitViolations(
 }
 
 /**
- * One `src/<stem>.browser.ts` and the `src/<stem>.ts` beside it, as text.
+ * One `<stem>.browser.ts` and the `<stem>.ts` beside it, as text — anywhere
+ * under `src`, not only at the entry layer.
  *
  * Injected rather than read inside the rule so the fixtures below can state
  * both halves, the same way {@link browserSplitViolations} takes its probe.
@@ -402,11 +403,16 @@ function specifiersIn(text: string): string[] {
 }
 
 /**
- * Browser entries that are a copy of the node entry beside them AND name only
+ * Browser modules that are a copy of the node module beside them AND name only
  * relative specifiers.
  *
- * **The relative/bare distinction is the entire rule.** Two identical entry
- * files mean opposite things depending on what they import:
+ * The rule reads every `<stem>.browser.ts` under `src`, not just the entry
+ * layer the manifests name: a nominal split is the same defect one directory
+ * down (`providers/openrouter/src/ai/runtime.browser.ts` was a byte copy of
+ * `runtime.ts`), and the entry-only scan could not see it.
+ *
+ * **The relative/bare distinction is the entire rule.** Two identical files
+ * mean opposite things depending on what they import:
  *
  * - A **relative** specifier (`"./ai/index"`) is resolved once, by the file's
  *   own path, and nothing in this toolchain substitutes `X.browser.ts` for
@@ -806,32 +812,47 @@ describe("workspace exports maps", () => {
     }
   });
 
-  it("re-exports rather than duplicates a browser entry that has no split", () => {
-    // Collected from `src/*.browser.ts` — the ENTRY layer, which is what the
-    // manifests above name. A `.browser.ts` with no `.ts` beside it (e.g.
-    // `packages/tasks/src/codec.browser.ts`) is not an entry pair and has
-    // nothing to be a duplicate of.
+  it("re-exports rather than duplicates a browser module that has no split", () => {
+    // Collected recursively from `src`, not just the entry layer the manifests
+    // name: a nominal split reads the same one directory down, and the flat
+    // scan could not see it. A `.browser.ts` with no `.ts` beside it (e.g.
+    // `packages/tasks/src/codec.browser.ts`) is not a pair and has nothing to
+    // be a duplicate of.
     const pairs: EntryPair[] = [];
-    for (const manifest of manifests) {
-      const srcDir = join(root.dir, dirname(manifest.relative), "src");
-      if (!existsSync(srcDir)) continue;
-      for (const file of readdirSync(srcDir)) {
-        const stem = /^(.+)\.browser\.(tsx?)$/.exec(file);
+    const collect = (packageDir: string, relative: string): void => {
+      for (const entry of readdirSync(join(root.dir, packageDir, relative), {
+        withFileTypes: true,
+      })) {
+        if (entry.name === "node_modules" || entry.name === "dist") continue;
+        if (entry.isDirectory()) {
+          collect(packageDir, `${relative}/${entry.name}`);
+          continue;
+        }
+        const stem = /^(.+)\.browser\.(tsx?)$/.exec(entry.name);
         if (stem === null) continue;
         const nodeFile = `${stem[1]}.${stem[2]}`;
-        if (!existsSync(join(srcDir, nodeFile))) continue;
+        const dir = join(root.dir, packageDir, relative);
+        if (!existsSync(join(dir, nodeFile))) continue;
         pairs.push({
-          browserPath: `${dirname(manifest.relative)}/src/${file}`,
-          nodePath: `${dirname(manifest.relative)}/src/${nodeFile}`,
-          browserText: readFileSync(join(srcDir, file), "utf8"),
-          nodeText: readFileSync(join(srcDir, nodeFile), "utf8"),
+          browserPath: `${packageDir}/${relative}/${entry.name}`,
+          nodePath: `${packageDir}/${relative}/${nodeFile}`,
+          browserText: readFileSync(join(dir, entry.name), "utf8"),
+          nodeText: readFileSync(join(dir, nodeFile), "utf8"),
         });
       }
+    };
+    for (const manifest of manifests) {
+      const packageDir = dirname(manifest.relative);
+      if (!existsSync(join(root.dir, packageDir, "src"))) continue;
+      collect(packageDir, "src");
     }
     // The nine `packages/workglow` shims are pairs, and correctly identical —
     // they are the negative case the rule has to keep passing, so a scan that
     // found nothing would prove nothing.
     expect(pairs.length).toBeGreaterThan(9);
+    // And the scan recursed: a regression to the flat `src` listing loses every
+    // pair below the entry layer, silently.
+    expect(pairs.some((pair) => pair.browserPath.includes("/src/ai/"))).toBe(true);
     expect(duplicateBrowserEntryViolations(pairs)).toEqual([]);
   });
 
