@@ -111,15 +111,34 @@
  * answer is "unrelated" either way; the bias moved every absolute threshold in one
  * direction.
  *
- * RANKING was never affected — the shrinkage is monotone in the true cosine, so ordering a
- * candidate set was correct before and is correct now. ABSOLUTE THRESHOLDS AND CALIBRATION
- * were, and are what this fixes: a 2-bit `cos > 0.8` cut (an ordinary RAG threshold) used
- * to drop pairs whose real cosine was 0.87.
+ * RANKING IS UNCHANGED BY THE CORRECTION — the shrinkage is monotone in the true cosine and
+ * so is its inverse, so applying it moves every score and moves none past another; turning
+ * it on or off cannot reorder a candidate set. That is a statement about the CORRECTION,
+ * not about how well the estimator's ordering matches the exact cosine's, which is a
+ * separate, measured question — see the ordering bullet under Properties. ABSOLUTE
+ * THRESHOLDS AND CALIBRATION are what this fixes: a 2-bit `cos > 0.8` cut (an ordinary RAG
+ * threshold) used to drop pairs whose real cosine was 0.87.
  *
  * Properties:
  * - Data-oblivious: no training or codebook construction needed
  * - Per-vector: each vector quantized independently (streaming-friendly)
- * - Preserves the RANKING induced by inner products and cosine similarity
+ * - The shrinkage correction is strictly monotone, so it never reorders a candidate set.
+ *   Ordering fidelity against the EXACT cosine is a property of the quantizer, and is not
+ *   perfect at the low widths. Measured over 500 documents at d=1024 (480 background, 10
+ *   planted at true cosine 0.70-0.88, 10 near-misses at 0.30-0.48), seeded:
+ *
+ *   | bits | recall@10 | top-10 order identical | Kendall tau over the top 20 |
+ *   | ---- | --------- | ---------------------- | --------------------------- |
+ *   | 1    | 1.00      | no                     | 0.9368                      |
+ *   | 2    | 1.00      | yes                    | 0.9789                      |
+ *   | 4    | 1.00      | yes                    | 1.0000                      |
+ *   | 8    | 1.00      | yes                    | 1.0000                      |
+ *
+ *   So retrieval of a shortlist is unaffected at every width — the planted set comes back
+ *   whole even at 1 bit — while the ORDER within it is not: 1 bit transposes documents
+ *   inside the top 10, and 2 bits reproduces the top 10 exactly but still transposes a
+ *   pair further down. Rerank with exact vectors if the presented order matters at 1-2
+ *   bits.
  */
 
 import { TensorType } from "./Tensor";
