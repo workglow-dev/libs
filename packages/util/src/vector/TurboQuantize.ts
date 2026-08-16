@@ -850,10 +850,20 @@ export function invertShrinkage(bits: number, estimate: number): number {
  *
  * A zero vector is not an error — it yields an all-zero `values` buffer and a
  * norm of 0.
+ *
+ * `norm` can still be `Infinity` for a FINITE input: max-scaling keeps the accumulator in
+ * range, but the reconstruction `maxAbs * rootS` overflows once the true L2 norm exceeds
+ * `Number.MAX_VALUE`. `values` is exact in that case, so the direction is intact and the
+ * norm-free encoder is unaffected; only a caller that keeps `norm` has a problem, and it
+ * is that caller's entry point ({@link turboQuantize}) that rejects it.
+ *
+ * `maxAbs` is returned so such a caller can report the coordinate magnitude that produced
+ * the overflow rather than only the `Infinity` it became.
  */
 function normalizeToUnit(vector: TypedArray): {
   readonly values: Float64Array;
   readonly norm: number;
+  readonly maxAbs: number;
 } {
   const d = vector.length;
   let maxAbs = 0;
@@ -868,7 +878,7 @@ function normalizeToUnit(vector: TypedArray): {
 
   const values = new Float64Array(d);
   if (maxAbs === 0) {
-    return { values, norm: 0 };
+    return { values, norm: 0, maxAbs };
   }
 
   let sumSquares = 0;
@@ -880,7 +890,7 @@ function normalizeToUnit(vector: TypedArray): {
   for (let i = 0; i < d; i++) {
     values[i] = vector[i] / maxAbs / rootS;
   }
-  return { values, norm: maxAbs * rootS };
+  return { values, norm: maxAbs * rootS, maxAbs };
 }
 
 /**
@@ -1011,7 +1021,22 @@ export function turboQuantize(
   assertDimensions(d);
 
   // Step 1: Compute norm and normalize
-  const { values, norm } = normalizeToUnit(vector);
+  const { values, norm, maxAbs } = normalizeToUnit(vector);
+  // A finite input can still have a norm no double holds: `normalizeToUnit` keeps the
+  // accumulator in range, but the reconstruction `maxAbs * rootS` overflows above
+  // Number.MAX_VALUE. Rejected here rather than returned, because every read path
+  // (`turboDequantize`, both similarity helpers) checks `norm` and throws on the record
+  // this would otherwise produce — a write that can never be read back.
+  if (!Number.isFinite(norm)) {
+    throw new Error(
+      `TurboQuant cannot encode this vector: its true L2 norm is not representable as a double ` +
+        `(largest absolute coordinate ${maxAbs}, norm overflows to ${norm}), and the record's ` +
+        `\`norm\` field is what every read path rescales by. Prescale the input — cosine ` +
+        `similarity is scale-free, so dividing every coordinate by a constant changes no ` +
+        `similarity — or use turboQuantizeToTypedArray, which records no norm and handles this ` +
+        `input unchanged.`
+    );
+  }
 
   // Step 2: Random rotation — returns all paddedLen coordinates
   const paddedLen = turboPaddedLength(d);
@@ -1027,7 +1052,7 @@ export function turboQuantize(
   // Step 4: Pack into compact representation
   const packed = packCodes(codes, bits);
 
-  return {
+  const result: TurboQuantizeResult = {
     version: TURBO_QUANTIZE_VERSION,
     codes: packed,
     bits,
@@ -1036,6 +1061,12 @@ export function turboQuantize(
     seed,
     norm,
   };
+  // The structural half of the same guarantee: every record this module hands out passes
+  // the check every reader applies. Today that holds only by coincidence — the encoder and
+  // `assertQuantizeResultShape` are two independent statements of the same invariant — and
+  // the check is O(1) on already-computed scalars, so asserting it costs nothing.
+  assertQuantizeResultShape(result);
+  return result;
 }
 
 /**

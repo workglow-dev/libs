@@ -148,6 +148,68 @@ describe("TurboQuantize", () => {
       expect(() => turboDequantize(quantized)).not.toThrow(/NaN or Infinity/);
     });
 
+    /**
+     * The residual of the max-scaling fix above, and the one case it cannot rescue.
+     *
+     * Max-scaling keeps the ACCUMULATOR in range for any finite input, but the norm is
+     * reconstructed as `maxAbs * rootS`, and that product still overflows once the true
+     * L2 norm passes Number.MAX_VALUE. The record that came back carried
+     * `norm: Infinity`, which is not merely odd: every read path — `turboDequantize`,
+     * `turboQuantizedCosineSimilarity`, `turboQuantizedInnerProduct` — validates `norm`
+     * and throws on it. The encoder was therefore returning a record nothing could read,
+     * and reporting it three function calls later as if the READER were malformed.
+     *
+     * So the throw does not remove a working case; it moves an existing one earlier, to
+     * the point where the caller still holds the input and can act on the message.
+     */
+    test("should reject a vector whose L2 norm overflows a double", () => {
+      const overflowing = new Float64Array(4).fill(1e308);
+
+      expect(() => turboQuantize(overflowing, { bits: 8, seed: 42 })).toThrow(
+        /not representable as a double/
+      );
+      // The message is the whole value of failing here rather than on the read path, so
+      // its actionable halves are asserted, not just the throw: the offending magnitude,
+      // and both ways out.
+      const message = (() => {
+        try {
+          turboQuantize(overflowing, { bits: 8, seed: 42 });
+        } catch (error) {
+          return (error as Error).message;
+        }
+        throw new Error("expected a norm-overflowing vector to be rejected");
+      })();
+      expect(message).toMatch(/1e\+308/);
+      expect(message).toMatch(/Prescale/);
+      expect(message).toMatch(/turboQuantizeToTypedArray/);
+
+      // And that second remedy has to actually work, or the message is advice to nowhere.
+      // `turboQuantizeToTypedArray` discards the norm entirely, so the same input encodes
+      // unchanged — which is also why the guard lives in `turboQuantize` and not in the
+      // shared `normalizeToUnit`.
+      const codes = turboQuantizeToTypedArray(overflowing, TensorType.INT8, {
+        seed: 42,
+        padToPowerOf2: undefined,
+      });
+      expect(codes.length).toBe(4);
+      expect(
+        Array.from(codes as Int8Array),
+        "a norm-free encode of a 1e308 vector must match its unit-scaled twin"
+      ).toEqual(
+        Array.from(
+          turboQuantizeToTypedArray(new Float64Array(4).fill(1), TensorType.INT8, {
+            seed: 42,
+            padToPowerOf2: undefined,
+          }) as Int8Array
+        )
+      );
+
+      // 1e200 (the case above) is still fine: this rejects only what a double cannot hold.
+      expect(() =>
+        turboQuantize(new Float64Array([1e200, 2e200, 3e200, 4e200]), { bits: 8, seed: 42 })
+      ).not.toThrow();
+    });
+
     test("should quantize a vector whose squared norm underflows a double", () => {
       // The mirror failure: below ~1e-162 every `v * v` flushed to zero, so `norm` came
       // back 0 — indistinguishable from a genuine zero vector. The record then decoded to
