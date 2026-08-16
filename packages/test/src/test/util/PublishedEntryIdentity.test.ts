@@ -48,6 +48,39 @@ const WORKSPACE_GROUPS: readonly string[] = (
 const NEEDS_NATIVE_RUNTIME: Readonly<Record<string, string>> = {};
 
 /**
+ * Candidates whose `ai-runtime` entry exports no `register*Inline` at all, each
+ * with the reason.
+ *
+ * Such a candidate contributes NO assertion to this file: the sweep records it
+ * and moves on. That is correct — there is nothing to construct, so there is no
+ * class identity to check — but it has to be DECLARED, because the alternative
+ * is a sweep that shrinks in silence. Nothing stood behind it: the skip was
+ * surfaced only inside a message that prints on failure, and the numeric bound
+ * guarding it was `> 4` against sixteen candidates, so eleven providers could
+ * drop their registrar and leave this file green. Measured, not assumed —
+ * renaming `registerAnthropicInline` and rebuilding the provider left every
+ * assertion here passing.
+ *
+ * Today the sole member is `@workglow/mlx`, which exports `registerMlx` with no
+ * `Inline` suffix: `MlxProvider.isAvailable` reports `false` until an mlx-lm
+ * runtime is bundled, so there is nothing to register inline yet.
+ */
+const NO_INLINE_REGISTRAR: Readonly<Record<string, string>> = {
+  "@workglow/mlx":
+    "exports registerMlx rather than register*Inline — MlxProvider stays unavailable until an mlx-lm runtime is bundled, so it registers nothing",
+};
+
+/**
+ * The floor the enumeration has to clear for anything below to mean something.
+ *
+ * Deliberately below today's sixteen — a provider may legitimately be removed —
+ * but far enough above zero that a typo in the walk (wrong group key, wrong
+ * subpath name) fails instead of yielding a short list every assertion passes
+ * over.
+ */
+const MINIMUM_RUNTIME_CANDIDATES = 12;
+
+/**
  * The base classes a provider is allowed to have been built from — the ones
  * `@workglow/ai` itself PUBLISHES.
  *
@@ -124,10 +157,8 @@ interface Registration {
 const registrations: Registration[] = [];
 /**
  * Packages whose `ai-runtime` exports no `register*Inline` at all — skipped
- * rather than failed, and reported in the anti-vacuity message below so a
- * silently shrinking sweep is visible. Today that is `@workglow/mlx`, whose
- * `registerMlx` deliberately returns without touching the registry until an
- * mlx-lm runtime is bundled.
+ * rather than failed, and compared below against {@link NO_INLINE_REGISTRAR}
+ * so a skip nobody declared fails instead of shrinking the sweep.
  */
 const withoutInlineRegistrar: string[] = [];
 
@@ -189,38 +220,88 @@ describe("published entry identity", () => {
     // Anti-vacuity. A typo in the walk (wrong group key, wrong subpath name)
     // yields a SHORT list rather than an error, and every assertion below
     // passes over a short list — including over an empty one.
-    expect(candidates.length).toBeGreaterThan(4);
-    expect(checkable.length).toBeGreaterThan(4);
+    expect(candidates.length).toBeGreaterThanOrEqual(MINIMUM_RUNTIME_CANDIDATES);
+    // An EQUALITY, not a second floor: the checked set is the candidate set
+    // minus exactly the declared native-runtime exemptions, so a candidate that
+    // falls out of the sweep for any undeclared reason fails here.
+    expect(checkable.length).toBe(candidates.length - Object.keys(NEEDS_NATIVE_RUNTIME).length);
   });
 
   it("keeps every exemption pinned to a package that still exists", () => {
     // An exemption that outlives its package silently exempts nothing while
-    // reading as if a real hole were still open.
+    // reading as if a real hole were still open. Both maps, since either one
+    // removes a candidate from the checks below.
     const known = new Set(candidates.map((c) => c.packageName));
-    expect(Object.keys(NEEDS_NATIVE_RUNTIME).filter((name) => !known.has(name))).toEqual([]);
-    for (const reason of Object.values(NEEDS_NATIVE_RUNTIME)) {
-      expect(reason.length).toBeGreaterThan(20);
+    const maps = [
+      ["NEEDS_NATIVE_RUNTIME", NEEDS_NATIVE_RUNTIME],
+      ["NO_INLINE_REGISTRAR", NO_INLINE_REGISTRAR],
+    ] as const;
+    for (const [label, map] of maps) {
+      expect(
+        Object.keys(map).filter((name) => !known.has(name)),
+        label
+      ).toEqual([]);
+      for (const [name, reason] of Object.entries(map)) {
+        // A one-word reason is an exemption nobody can review.
+        expect(reason.length, `${label}["${name}"]`).toBeGreaterThan(20);
+      }
     }
   });
 
-  it("registers a provider from more than a handful of runtime entries", () => {
-    // The anti-vacuity guard that matters: the per-provider assertions below
-    // iterate what registration actually produced, so a run in which every
-    // registration silently no-opped would satisfy all of them.
-    const providers = getAiProviderRegistry().getProviders();
+  it("declares every candidate whose runtime entry exports no register*Inline", () => {
+    // The skip that was invisible: such a candidate is pushed onto this list
+    // and `continue`d, contributing NO assertion, and the only place it
+    // surfaced was a message that prints on failure. Comparing against the
+    // declared map means a provider that drops its registrar in a refactor
+    // fails here instead of quietly leaving the sweep.
     expect(
-      providers.size,
-      `only ${providers.size} provider(s) registered from ${checkable.length} runtime entries. ` +
-        `Entries exporting no register*Inline: ${withoutInlineRegistrar.join(", ") || "(none)"}`
-    ).toBeGreaterThan(4);
+      [...withoutInlineRegistrar].sort(),
+      "a runtime entry exporting no register*Inline is checked by nothing — declare it in " +
+        "NO_INLINE_REGISTRAR with the reason, or restore its registrar"
+    ).toEqual(Object.keys(NO_INLINE_REGISTRAR).sort());
   });
 
-  it("publishes no more base classes than @workglow/ai has entry points", () => {
-    // Guards the allowance above from growing quietly. One class under the
-    // `source` target (both specifiers are one file), two under `dist` (`.` and
-    // `./worker` are separate bundles). A third would mean a new split nobody
-    // decided on.
-    expect(new Set(PUBLISHED_BASE_CLASSES).size).toBeLessThanOrEqual(2);
+  it("registers at least one provider from every runtime entry that has a registrar", () => {
+    // Replaces a `> 4` bound that fifteen registering entries cleared with
+    // eleven to spare. Two statements instead of a magic number: exactly the
+    // expected packages ran a registrar, and each one actually put something in
+    // the registry — the per-provider assertions below iterate what
+    // registration produced, so a run in which every call silently no-opped
+    // would satisfy all of them.
+    const expected = checkable
+      .map((candidate) => candidate.packageName)
+      .filter((name) => !(name in NO_INLINE_REGISTRAR))
+      .sort();
+    expect(registrations.map((registration) => registration.packageName).sort()).toEqual(expected);
+
+    const registeredNothing = registrations
+      .filter((registration) => registration.providerNames.length < 1)
+      .map((registration) => `${registration.packageName} (via ${registration.registrarName})`);
+    // Collected rather than asserted in the loop, so one no-opping registrar
+    // reports itself instead of being averaged away by the fourteen that worked.
+    expect(
+      registeredNothing,
+      `these register*Inline calls added no provider to the registry, so every per-provider ` +
+        `assertion below iterates nothing for them`
+    ).toEqual([]);
+  });
+
+  it("loads one AiProvider class per @workglow/ai entry point the target actually has", () => {
+    // TWO-SIDED, and this is the in-process proof that the modules under test
+    // are BUNDLES rather than src. `@workglow/ai` builds `.` and `./worker` as
+    // separate `bun build` invocations, so under `dist` there really are two
+    // distinct classes; under `source` both specifiers resolve through one
+    // underlying module and there is exactly one. The old `<= 2` was satisfied
+    // by either, so it could not tell a real dist run from a source run
+    // mislabelled as one — nor from a stubbed `dist` re-exporting src.
+    //
+    // The variable read here is the one `resolveTestTarget` already validated
+    // in vitest.config.ts and handed to the workers, so `=== "dist"` cannot
+    // silently mean "source" for a typo the way an unvalidated read would.
+    const target = process.env.WORKGLOW_TEST_TARGET ?? "source";
+    expect(new Set(PUBLISHED_BASE_CLASSES).size, `WORKGLOW_TEST_TARGET=${target}`).toBe(
+      target === "dist" ? 2 : 1
+    );
   });
 
   it("constructs every provider from an AiProvider class @workglow/ai publishes", () => {
