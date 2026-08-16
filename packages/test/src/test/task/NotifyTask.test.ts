@@ -2153,6 +2153,57 @@ describe("Webhook notification tasks", () => {
       expect((error as PermanentJobError).code).toBe(FetchUrlErrorCode.CONFIGURATION);
       expect(mockFetch.mock.calls.length).toBe(0);
     });
+
+    // The header credential's twin of the URL case above, and it failed OPEN:
+    // `applyCredentialToHeaders` returns the caller's headers unchanged when
+    // the resolved credential is `undefined`, so a locked store or a mistyped
+    // key posted the notification UNAUTHENTICATED and reported success.
+    test("a configured credential_key the store cannot answer fails closed", async () => {
+      const error = (await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        credential_key: "absent-header-key",
+      }).catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(error.message).toContain("credential_key");
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    // "Resolve but do not send" is a debug affordance, not a reason to swallow
+    // a locked store: the operator configured a key either way, so a store
+    // that cannot answer is a misconfiguration under every scheme.
+    test("a store miss under credential_scheme 'none' also fails closed", async () => {
+      const error = (await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        credential_key: "absent-header-key",
+        credential_scheme: "none",
+      }).catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.CONFIGURATION);
+      expect(error.message).toContain("credential_key");
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    // The regression twin of the URL case: the discriminator is "the port is
+    // present", so a task that never configured a header credential at all
+    // must keep working.
+    test("an unconfigured credential_key leaves plain headers working", async () => {
+      const result = await webhookNotify({
+        url: WEBHOOK_URL,
+        payload: {},
+        headers: { "X-Custom": "yes" },
+      });
+
+      expect(result.success).toBe(true);
+      expect(requestHeaders()).toEqual({
+        "Content-Type": "application/json",
+        "X-Custom": "yes",
+      });
+    });
   });
 
   // Following a redirect re-issues the SAME request — method, serialized

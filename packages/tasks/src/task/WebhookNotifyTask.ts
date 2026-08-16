@@ -15,6 +15,7 @@ import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import {
   MAX_REQUEST_TIMEOUT_MS,
   postWebhookJson,
+  resolveWebhookCredential,
   resolveWebhookUrl,
   webhookBaseEntitlements,
   webhookPrivateEntitlements,
@@ -191,11 +192,24 @@ export class WebhookNotifyTask<
     // forwards `...rest` into a job input, so a resolved secret left on a port
     // would be persisted. This post is assembled field by field below and the
     // credential ports are simply never read again.
+    //
+    // Checked BEFORE the credential is applied: `applyCredentialToHeaders`
+    // fails OPEN on a missing value — it returns the caller's headers
+    // unchanged — so without this guard a locked store or a mistyped key posts
+    // the notification unauthenticated and reports success. `Object.hasOwn` is
+    // the discriminator because the input resolver writes `undefined` over a
+    // missed key, leaving the port present.
+    const credential = resolveWebhookCredential(
+      input.credential_key,
+      Object.hasOwn(input, "credential_key"),
+      "credential_key",
+      "WebhookNotifyTask"
+    );
     let headers: Record<string, string> | undefined;
     try {
       headers = applyCredentialToHeaders({
         headers: input.headers,
-        credential: input.credential_key,
+        credential,
         scheme: input.credential_scheme,
         headerName: input.credential_header,
       });

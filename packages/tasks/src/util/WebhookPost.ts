@@ -270,6 +270,45 @@ export function resolveWebhookUrl(
   return resolved;
 }
 
+/**
+ * Fails a post whose configured credential the store could not answer, the
+ * header-credential mirror of {@link resolveWebhookUrl}'s identical URL guard.
+ *
+ * `applyCredentialToHeaders` is pure, has no `configured` signal, and is shared
+ * with {@link FetchUrlTask}, so it returns the caller's headers unchanged when
+ * the resolved credential is `undefined` — which means a locked store or a
+ * mistyped key silently sent the notification UNAUTHENTICATED (or unsigned) and
+ * reported success. The `configured` bit lives here instead, at the task
+ * boundary that knows an operator asked for a credential at all.
+ *
+ * `credentialConfigured` is what separates "no credential wanted" from
+ * "credential wanted but the store could not answer": the input resolver
+ * overwrites the port in place, so a store miss leaves the port PRESENT with
+ * value `undefined`, whereas an unconfigured port is absent entirely.
+ *
+ * The scheme is deliberately not a parameter. Under `credential_scheme: "none"`
+ * the value is resolved and not sent — a debug affordance, not a reason to
+ * swallow a locked store, since the operator configured a key either way.
+ *
+ * Never echoes the value: it is a secret whatever it turns out to be.
+ */
+export function resolveWebhookCredential(
+  credential: string | undefined,
+  credentialConfigured: boolean,
+  portName: string,
+  label: string
+): string | undefined {
+  if (credentialConfigured && (credential === undefined || credential.length === 0)) {
+    throw createFetchUrlJobError(
+      FetchUrlErrorCode.CONFIGURATION,
+      `${label}: '${portName}' is set but the credential store returned no value for it. ` +
+        `Unlock the store or correct the key; the request is never sent without the ` +
+        `credential that was configured for it.`
+    );
+  }
+  return credential;
+}
+
 export interface WebhookPostRequest {
   /** Full webhook URL. Treated as a secret throughout. */
   readonly url: string;
