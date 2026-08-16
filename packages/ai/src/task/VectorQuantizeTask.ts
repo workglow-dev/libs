@@ -212,6 +212,9 @@ export class VectorQuantizeTask extends Task<
     } = input;
     const isArray = Array.isArray(vector);
     const vectors = isArray ? vector : [vector];
+    if (method === QuantizationMethod.TURBO) {
+      this.assertHomogeneousTurboBatch(vectors, turboPadToPowerOf2);
+    }
     const originalType = this.getVectorType(vectors[0]);
 
     let quantized: TypedArray[];
@@ -267,6 +270,50 @@ export class VectorQuantizeTask extends Task<
       turboSeed: method === QuantizationMethod.TURBO ? turboSeed : undefined,
       originalDimensions: vectors[0].length,
     };
+  }
+
+  /**
+   * Rejects a batch whose vectors do not all share one dimensionality, under
+   * `method: "turbo"`.
+   *
+   * The existing power-of-2 check asks a PER-VECTOR question about a BATCH-level
+   * invariant, so `[Float32Array(512), Float32Array(1024)]` passes it: both lengths are
+   * powers of two. Each vector is then rotated in its own `turboPaddedLength(d)` under
+   * `getSignTable(seed, paddedLen)` — a different basis per length — so the two outputs
+   * are not comparable at all, while `originalDimensions` reports only `vectors[0]`'s
+   * length. Turning padding on does not help: 700 and 1100 pass the per-vector check and
+   * land in 1024 and 2048.
+   *
+   * Turbo output is comparable only against output with the same seed and, implicitly, the
+   * same padded length.
+   */
+  private assertHomogeneousTurboBatch(vectors: TypedArray[], turboPadToPowerOf2: boolean): void {
+    if (vectors.length === 0) {
+      // Reached `getVectorType(undefined)` before this guard and threw "Unknown vector
+      // type: undefined", which names neither the input nor the shape of the mistake.
+      throw new Error(
+        `VectorQuantizeTask: input "vector" is an empty array — there is nothing to quantize, ` +
+          `and the output's originalType and originalDimensions describe vectors[0], which does ` +
+          `not exist. Pass at least one vector, or skip the call.`
+      );
+    }
+    const expected = vectors[0]!.length;
+    const index = vectors.findIndex((v) => v.length !== expected);
+    if (index === -1) return;
+
+    const found = vectors[index]!.length;
+    const expectedPadded = turboPaddedLength(expected);
+    const foundPadded = turboPaddedLength(found);
+    throw new Error(
+      `VectorQuantizeTask: every vector in a batch must have the same dimensionality, but ` +
+        `vectors[0] has ${expected} and vectors[${index}] has ${found}. Under method "turbo" each ` +
+        `vector is rotated in its own turboPaddedLength(d) — ${expectedPadded} and ${foundPadded} ` +
+        `here — and the rotation basis is keyed by that padded length, so the two outputs live in ` +
+        `DIFFERENT bases and are not comparable even after padding` +
+        (turboPadToPowerOf2 ? "" : " (nor would turboPadToPowerOf2: true make them so)") +
+        `. The output's originalDimensions would also report only vectors[0]'s ${expected}. ` +
+        `Quantize each dimensionality in a separate call.`
+    );
   }
 
   private getVectorType(vector: TypedArray): TensorType {

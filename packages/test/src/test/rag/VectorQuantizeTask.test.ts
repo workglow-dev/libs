@@ -41,6 +41,20 @@ function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
 }
 
 /**
+ * Runs a call expected to be rejected and returns its message, failing loudly if it
+ * resolves instead. `rejects.toThrow(/…/)` cannot assert several independent facts about
+ * one message without re-running the call once per fact.
+ */
+async function rejectionMessage(call: () => Promise<unknown>): Promise<string> {
+  try {
+    await call();
+  } catch (error) {
+    return (error as Error).message;
+  }
+  throw new Error("expected the call to be rejected, but it resolved");
+}
+
+/**
  * The int8 baseline the accuracy tests below score against: divide by the LARGEST
  * ABSOLUTE COORDINATE, then scale to the full [-127, 127] range.
  *
@@ -608,6 +622,98 @@ describe("VectorQuantizeTask", () => {
       const linear = await vectorQuantize({ vector, targetType: TensorType.INT8 });
       expect(linear.method).toBe("linear");
       expect(linear.turboSeed).toBeUndefined();
+    });
+
+    /**
+     * The power-of-2 check asks a PER-VECTOR question about a BATCH-level invariant, so a
+     * batch of two different power-of-2 lengths passed it and resolved: each vector was
+     * rotated in its own padded length, under `getSignTable(seed, paddedLen)` — a
+     * different basis per length — while `originalDimensions` reported only 512.
+     */
+    test("should reject a heterogeneous batch under turbo", async () => {
+      const vectors = [new Float32Array(512), new Float32Array(1024)];
+      for (let i = 0; i < 512; i++) vectors[0]![i] = Math.sin(i * 0.1);
+      for (let i = 0; i < 1024; i++) vectors[1]![i] = Math.cos(i * 0.1);
+
+      const message = await rejectionMessage(() =>
+        vectorQuantize({
+          vector: vectors,
+          targetType: TensorType.INT8,
+          method: "turbo",
+          turboSeed: 42,
+        })
+      );
+
+      expect(message).toMatch(/512/);
+      expect(message).toMatch(/1024/);
+      // The index is what makes a 500-vector batch actionable.
+      expect(message).toMatch(/vectors\[1\]/);
+      expect(message).toMatch(/separate call/);
+    });
+
+    /**
+     * The leg that proves the guard is not the existing power-of-2 check under another
+     * name: with padding on, 700 and 1100 both pass that check and are simply rotated in
+     * 1024 and 2048. Before this guard the call resolved with `originalDimensions: 700`.
+     */
+    test("should reject a heterogeneous batch under turbo even with padding enabled", async () => {
+      const vectors = [new Float32Array(700), new Float32Array(1100)];
+      for (let i = 0; i < 700; i++) vectors[0]![i] = Math.sin(i * 0.1);
+      for (let i = 0; i < 1100; i++) vectors[1]![i] = Math.cos(i * 0.1);
+
+      const message = await rejectionMessage(() =>
+        vectorQuantize({
+          vector: vectors,
+          targetType: TensorType.INT8,
+          method: "turbo",
+          turboSeed: 42,
+          turboPadToPowerOf2: true,
+        })
+      );
+
+      expect(message).toMatch(/700/);
+      expect(message).toMatch(/1100/);
+      // The padded widths are the point: they are what differ in the basis, and they are
+      // not visible from the input lengths.
+      expect(message).toMatch(/1024/);
+      expect(message).toMatch(/2048/);
+    });
+
+    test("should reject an empty batch by naming the input", async () => {
+      // Previously reached `getVectorType(undefined)` and threw "Unknown vector type:
+      // undefined", which names neither the input nor the shape of the mistake.
+      const message = await rejectionMessage(() =>
+        vectorQuantize({
+          vector: [],
+          targetType: TensorType.INT8,
+          method: "turbo",
+          turboSeed: 42,
+        })
+      );
+
+      expect(message).toMatch(/empty array/);
+      expect(message).not.toMatch(/Unknown vector type/);
+    });
+
+    /**
+     * The regression guard for the two commits above: a HOMOGENEOUS batch is the shape the
+     * guard must leave untouched, so the existing case is re-asserted here explicitly
+     * rather than assumed to still hold.
+     */
+    test("should still accept a homogeneous turbo batch", async () => {
+      const vectors = [new Float32Array([1, 2, 3, 4]), new Float32Array([5, 6, 7, 8])];
+
+      const result = await vectorQuantize({
+        vector: vectors,
+        targetType: TensorType.INT8,
+        method: "turbo",
+        turboSeed: 42,
+      });
+
+      const out = result.vector as Int8Array[];
+      expect(out.length).toBe(2);
+      out.forEach((v) => expect(v.length).toBe(4));
+      expect(result.originalDimensions).toBe(4);
     });
   });
 });
