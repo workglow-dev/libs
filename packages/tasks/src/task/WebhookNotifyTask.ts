@@ -230,6 +230,12 @@ export class WebhookNotifyTask<
       url,
       payload: input.payload,
       headers,
+      // The port holds the RESOLVED secret by execute time, so this is the
+      // value an echoing endpoint would hand back into `response`. Redacted
+      // unconditionally, including under `credential_scheme: "none"`: a value
+      // that is never sent cannot be echoed, so redacting it costs nothing and
+      // keeps a scheme-dependent branch out of a security path.
+      secrets: input.credential_key === undefined ? [] : [input.credential_key],
       timeout: input.timeout,
       signal: context.signal,
       registry: context.registry,

@@ -175,6 +175,9 @@ export class DiscordNotifyTask<
         allowed_mentions: input.allow_mentions === true ? undefined : { parse: [] },
       }),
       headers: undefined,
+      // This task's payload shape carries no caller headers, so the URL is the
+      // only secret in the post.
+      secrets: undefined,
       timeout: input.timeout,
       signal: context.signal,
       registry: context.registry,

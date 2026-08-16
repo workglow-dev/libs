@@ -510,6 +510,9 @@ export class SlackNotifyTask<
         link_names: allowMentions ? undefined : false,
       }),
       headers: undefined,
+      // This task's payload shape carries no caller headers, so the URL is the
+      // only secret in the post.
+      secrets: undefined,
       timeout: input.timeout,
       signal: context.signal,
       registry: context.registry,

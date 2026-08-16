@@ -2206,6 +2206,114 @@ describe("Webhook notification tasks", () => {
     });
   });
 
+  /**
+   * The URL secret has had a redaction pass since this module was written; the
+   * HEADER secret had none. `WebhookNotifyTask` sets `readSuccessBody: true`,
+   * so an echoing endpoint (webhook.site, RequestBin, a chatty 200) hands up
+   * to 1 KB of its own reply straight into the `response` output port — task
+   * output, pipeable and persisted with the run — and the only redaction on
+   * that path knew the URL and nothing else.
+   */
+  describe("header credential redaction", () => {
+    const HEADER_SECRET = "sk-live-9f3a2b7c1d4e";
+
+    async function withStoredSecret<T>(fn: () => Promise<T>): Promise<T> {
+      const store = getGlobalCredentialStore();
+      await store.put("echo-token", HEADER_SECRET);
+      try {
+        return await fn();
+      } finally {
+        await store.delete("echo-token");
+      }
+    }
+
+    test("an echoing endpoint cannot return the header credential in the response port", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(new Response(`received Authorization: Bearer ${HEADER_SECRET}`))
+      );
+
+      const result = await withStoredSecret(() =>
+        webhookNotify({ url: WEBHOOK_URL, payload: {}, credential_key: "echo-token" })
+      );
+
+      expect(result.response).not.toContain(HEADER_SECRET);
+      expect(result.response).toContain("<redacted>");
+    });
+
+    // `includeBodyInError: false` already closes the failure-BODY path for this
+    // task, so the reason phrase is the error surface actually open to it.
+    test("a reason phrase quoting the credential is redacted", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(new Response("", { status: 400, statusText: `bad token ${HEADER_SECRET}` }))
+      );
+
+      const error = (await withStoredSecret(() =>
+        webhookNotify({ url: WEBHOOK_URL, payload: {}, credential_key: "echo-token" }).catch(
+          (e: unknown) => e
+        )
+      )) as PermanentJobError;
+
+      expect(error.message).not.toContain(HEADER_SECRET);
+      expect(formatErrorChainForDiagnostics(error)).not.toContain(HEADER_SECRET);
+    });
+
+    // undici puts the text that says WHY on `.cause`, and this module lifts
+    // that message into its own. A stack is persisted by
+    // `formatErrorChainForDiagnostics`, so it gets its own assertion.
+    test("a transport error quoting the credential is redacted in message and stack", async () => {
+      mockFetch.mockImplementation(() => {
+        const err = new TypeError("fetch failed");
+        (err as { cause?: unknown }).cause = new Error(`upstream rejected Bearer ${HEADER_SECRET}`);
+        return Promise.reject(err);
+      });
+
+      const error = (await withStoredSecret(() =>
+        webhookNotify({ url: WEBHOOK_URL, payload: {}, credential_key: "echo-token" }).catch(
+          (e: unknown) => e
+        )
+      )) as Error;
+
+      expect(error.message).not.toContain(HEADER_SECRET);
+      expect(error.stack ?? "").not.toContain(HEADER_SECRET);
+      expect(formatErrorChainForDiagnostics(error)).not.toContain(HEADER_SECRET);
+    });
+
+    // Regression guard against reordering: exact secrets are replaced FIRST,
+    // then the URL pass runs. Reversed, the URL pass can chop a substring out
+    // of a secret and leave the remainder unmatched.
+    test("url redaction still applies alongside a header secret", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(new Response(`POST ${WEBHOOK_URL} auth=${HEADER_SECRET}`))
+      );
+
+      const result = await withStoredSecret(() =>
+        webhookNotify({ url: WEBHOOK_URL, payload: {}, credential_key: "echo-token" })
+      );
+
+      expect(result.response).not.toContain(HEADER_SECRET);
+      expect(result.response).not.toContain("SECRETTOKEN");
+    });
+
+    // Redact BEFORE truncate. The success body is cut at 1024 chars, so a
+    // secret straddling that boundary is sliced in half — after which it
+    // matches no candidate and its first 14 characters sit in task output.
+    test("a secret spanning the truncation boundary leaves no usable prefix", async () => {
+      mockFetch.mockImplementation(() =>
+        Promise.resolve(
+          new Response(`${"x".repeat(1010)}${HEADER_SECRET}${"y".repeat(3000)}`.slice(0, 4096))
+        )
+      );
+
+      const result = await withStoredSecret(() =>
+        webhookNotify({ url: WEBHOOK_URL, payload: {}, credential_key: "echo-token" })
+      );
+
+      expect(result.response).not.toContain(HEADER_SECRET);
+      // The half that would survive truncation must not be a usable prefix.
+      expect(result.response).not.toContain(HEADER_SECRET.slice(0, 12));
+    });
+  });
+
   // Following a redirect re-issues the SAME request — method, serialized
   // payload and caller headers — at whatever origin the `Location` names. For a
   // notification whose URL (or `Authorization` header) is the credential, one
