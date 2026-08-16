@@ -7,6 +7,7 @@
 import { setLogger } from "@workglow/util";
 import type { TurboQuantizeResult } from "@workglow/util/schema";
 import {
+  TURBO_MAX_CORRECTED_BITS,
   TensorType,
   clearSignTableCache,
   cosineSimilarity,
@@ -910,6 +911,48 @@ describe("TurboQuantize", () => {
             cosineSimilarity(turboDequantize(wa), turboDequantize(wb))
         )
       ).toBeLessThan(0.01);
+    });
+
+    /**
+     * Exporting a constant creates a new way for the docs and the behavior to diverge:
+     * `TURBO_MAX_CORRECTED_BITS` now tells a caller where decode-then-compare stops being
+     * safe, and nothing else forces it to be the width where that is actually true.
+     *
+     * So this sweeps all eight widths and requires the gap to appear at exactly the widths
+     * the constant claims. It fails if the constant is retuned without the correction
+     * being extended, and equally if the correction is extended without the constant
+     * moving.
+     *
+     * The 0.002 threshold is well above float noise between the two routes (measured at
+     * ~1e-7 at the uncorrected widths) and well below the smallest real gap (the 4-bit
+     * one, the shallowest corrected case).
+     */
+    test("TURBO_MAX_CORRECTED_BITS marks exactly the widths where decode-then-compare differs", () => {
+      const d = 1024;
+      const rnd = makeRandom(31337);
+      const a = new Float32Array(d);
+      const noise = new Float32Array(d);
+      for (let i = 0; i < d; i++) {
+        a[i] = rnd() - 0.5;
+        noise[i] = rnd() - 0.5;
+      }
+      const t = 0.8;
+      const k = Math.sqrt(1 - t * t);
+      const b = new Float32Array(d);
+      for (let i = 0; i < d; i++) b[i] = t * a[i]! + k * noise[i]!;
+
+      expect(TURBO_MAX_CORRECTED_BITS).toBe(4);
+
+      for (let bits = 1; bits <= 8; bits++) {
+        const qa = turboQuantize(a, { bits, seed: 42 });
+        const qb = turboQuantize(b, { bits, seed: 42 });
+        const gap =
+          turboQuantizedCosineSimilarity(qa, qb) -
+          cosineSimilarity(turboDequantize(qa), turboDequantize(qb));
+        expect(gap > 0.002, `bits=${bits} gap=${gap.toFixed(5)}`).toBe(
+          bits <= TURBO_MAX_CORRECTED_BITS
+        );
+      }
     });
 
     test("should have a per-bit-width, per-correlation signed bias within measured bands", () => {

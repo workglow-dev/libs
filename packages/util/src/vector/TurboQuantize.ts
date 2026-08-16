@@ -100,7 +100,7 @@
  *
  * 5-8 bits are deliberately left uncorrected: the residual bias is already at or below the
  * estimator's own noise there, and the table build cost scales as `levels^2`. See
- * {@link MAX_CORRECTED_BITS}.
+ * {@link TURBO_MAX_CORRECTED_BITS}.
  *
  * THE COST IS VARIANCE NEAR ORTHOGONALITY. Inverting a map whose slope is below 1 amplifies
  * the estimator's noise by `1/g'(0)`, where that slope is shallowest: 1.57x at 1 bit, 1.13x
@@ -657,8 +657,17 @@ function getQuantizationParams(
  * measured cold build is 16/21/22 ms at 2/3/4 bits, 56 ms at 5, 84 ms at 6 and 555 ms at
  * 8. Paying half a second on the first 8-bit comparison to correct a bias of 0.0001 is not
  * a trade worth offering.
+ *
+ * EXPORTED because it is a boundary a caller has to act on, not just read about: at or
+ * below it, {@link turboDequantize} plus a plain `cosineSimilarity` returns the
+ * UNCORRECTED estimator and disagrees with {@link turboQuantizedCosineSimilarity}; above
+ * it the two routes are interchangeable. A caller integrating with a scorer that takes
+ * raw vectors needs to branch on that, and reading a docstring and hoping is not a branch.
  */
-const MAX_CORRECTED_BITS = 4;
+export const TURBO_MAX_CORRECTED_BITS = 4;
+
+/** Internal alias for {@link TURBO_MAX_CORRECTED_BITS}; one literal, two names. */
+const MAX_CORRECTED_BITS = TURBO_MAX_CORRECTED_BITS;
 
 /**
  * Standard normal CDF; the only special function the shrinkage map needs.
@@ -1178,6 +1187,32 @@ function reconstructRotatedCodes(quantized: TurboQuantizeResult): {
  * affected: cosine similarity is scale-free, so such a record stays fully comparable through
  * {@link turboQuantizedCosineSimilarity}.
  *
+ * ## THE OUTPUT IS NOT SHRINKAGE-CORRECTED AT 1-4 BITS
+ *
+ * These are decoded coordinates, and comparing two of them with a plain `cosineSimilarity`
+ * gives the RAW estimator — the one the correction exists to undo. At 1 bit that reads a
+ * true 0.80 as 0.59; at 2-4 bits it is low by less, but low in the same direction and for
+ * the same reason. The corrected number comes from {@link turboQuantizedCosineSimilarity},
+ * or from {@link turboPrepareQuery} + {@link turboPreparedCosineSimilarity} in a search
+ * loop. At 5-8 bits the shrinkage is left uncorrected by design, so there the two routes
+ * ARE interchangeable; that boundary is {@link TURBO_MAX_CORRECTED_BITS}. Pinned by the
+ * test "turboDequantize + plain cosineSimilarity is NOT shrinkage-corrected at 1-4 bits".
+ *
+ * The warning lives here, and not only on {@link turboPrepareQuery}, because this is the
+ * function on the natural integration path: a `Float32Array` is the only output shape an
+ * `IVectorStorage` backend accepts, so a caller wiring turbo into storage reaches this
+ * one — and reaches the prepared-query docs only if they already understood the problem.
+ *
+ * THERE IS DELIBERATELY NO "corrected-compare" HELPER, because it would be a rename. The
+ * correction inverts a map defined on the CODE-DOMAIN ratio `dot / (codeNormA *
+ * codeNormB)`, and this function has already renormalized its output to the recorded
+ * `norm`, destroying that ratio. So any helper taking two {@link TurboQuantizeResult}s and
+ * returning a corrected number IS {@link turboQuantizedCosineSimilarity}. The case that
+ * genuinely needs one — an `IVectorStorage` backend scoring decoded vectors server-side,
+ * with no hook to substitute a scorer — is not fixable in this module at all, and is
+ * tracked in https://github.com/workglow-dev/libs/issues/798 (see the module doc). No
+ * workaround exists for it today.
+ *
  * @param quantized - The TurboQuant quantization result
  * @returns Reconstructed vector as Float32Array
  */
@@ -1314,7 +1349,7 @@ function assertComparablePair(a: TurboQuantizeResult, b: TurboQuantizeResult): v
  * "these are unrelated" either way, and both remove a bias that moved every absolute
  * threshold in one direction.
  *
- * 5-8 bits are left alone; see {@link MAX_CORRECTED_BITS}.
+ * 5-8 bits are left alone; see {@link TURBO_MAX_CORRECTED_BITS}.
  *
  * The correction itself lives in {@link finishCosine}, shared with the prepared-query
  * path — the two entry points must return the same number for the same pair, and the only
