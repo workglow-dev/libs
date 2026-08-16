@@ -212,9 +212,7 @@ export class VectorQuantizeTask extends Task<
     } = input;
     const isArray = Array.isArray(vector);
     const vectors = isArray ? vector : [vector];
-    if (method === QuantizationMethod.TURBO) {
-      this.assertHomogeneousTurboBatch(vectors, turboPadToPowerOf2);
-    }
+    this.assertHomogeneousBatch(vectors, method, turboPadToPowerOf2);
     const originalType = this.getVectorType(vectors[0]);
 
     let quantized: TypedArray[];
@@ -273,21 +271,30 @@ export class VectorQuantizeTask extends Task<
   }
 
   /**
-   * Rejects a batch whose vectors do not all share one dimensionality, under
-   * `method: "turbo"`.
+   * Rejects a batch whose vectors do not all share one dimensionality and one element
+   * type, under every method.
    *
-   * The existing power-of-2 check asks a PER-VECTOR question about a BATCH-level
-   * invariant, so `[Float32Array(512), Float32Array(1024)]` passes it: both lengths are
-   * powers of two. Each vector is then rotated in its own `turboPaddedLength(d)` under
-   * `getSignTable(seed, paddedLen)` — a different basis per length — so the two outputs
-   * are not comparable at all, while `originalDimensions` reports only `vectors[0]`'s
-   * length. Turning padding on does not help: 700 and 1100 pass the per-vector check and
-   * land in 1024 and 2048.
+   * `originalDimensions` and `originalType` describe `vectors[0]` alone, so a mixed batch
+   * returns metadata that is a claim about one vector presented as a claim about all of
+   * them. What follows differs by method, and the message says which:
    *
-   * Turbo output is comparable only against output with the same seed and, implicitly, the
-   * same padded length.
+   * - `turbo`: each vector is rotated in its own `turboPaddedLength(d)` under
+   *   `getSignTable(seed, paddedLen)` — a different basis per length — so the outputs are
+   *   not comparable at all, and padding does not reconcile them (700 and 1100 land in
+   *   1024 and 2048). The per-vector power-of-2 check passes such a batch: it asks a
+   *   per-vector question about a batch-level invariant.
+   * - `linear`: the outputs keep their input lengths, so `cosineSimilarity` throws
+   *   downstream — but `originalDimensions` has already misreported before that, and a
+   *   fixed-width storage column accepts one output and rejects the other.
+   *
+   * The mixed ELEMENT-TYPE case is the same defect on the other metadata field, and is
+   * rejected for the same reason rather than left to misreport `originalType`.
    */
-  private assertHomogeneousTurboBatch(vectors: TypedArray[], turboPadToPowerOf2: boolean): void {
+  private assertHomogeneousBatch(
+    vectors: TypedArray[],
+    method: QuantizationMethod,
+    turboPadToPowerOf2: boolean
+  ): void {
     if (vectors.length === 0) {
       // Reached `getVectorType(undefined)` before this guard and threw "Unknown vector
       // type: undefined", which names neither the input nor the shape of the mistake.
@@ -297,23 +304,41 @@ export class VectorQuantizeTask extends Task<
           `not exist. Pass at least one vector, or skip the call.`
       );
     }
+
     const expected = vectors[0]!.length;
     const index = vectors.findIndex((v) => v.length !== expected);
-    if (index === -1) return;
+    if (index !== -1) {
+      const found = vectors[index]!.length;
+      const consequence =
+        method === QuantizationMethod.TURBO
+          ? `Under method "turbo" each vector is rotated in its own turboPaddedLength(d) — ` +
+            `${turboPaddedLength(expected)} and ${turboPaddedLength(found)} here — and the ` +
+            `rotation basis is keyed by that padded length, so the two outputs live in DIFFERENT ` +
+            `bases and are not comparable even after padding` +
+            (turboPadToPowerOf2 ? "" : " (nor would turboPadToPowerOf2: true make them so)") +
+            `.`
+          : `Under method "${method}" each output keeps its input length, so cosineSimilarity ` +
+            `throws on any pair of them downstream — and a fixed-width storage column accepts ` +
+            `one and rejects the other.`;
+      throw new Error(
+        `VectorQuantizeTask: every vector in a batch must have the same dimensionality, but ` +
+          `vectors[0] has ${expected} and vectors[${index}] has ${found}. ${consequence} The ` +
+          `output's originalDimensions would also report only vectors[0]'s ${expected}. ` +
+          `Quantize each dimensionality in a separate call.`
+      );
+    }
 
-    const found = vectors[index]!.length;
-    const expectedPadded = turboPaddedLength(expected);
-    const foundPadded = turboPaddedLength(found);
-    throw new Error(
-      `VectorQuantizeTask: every vector in a batch must have the same dimensionality, but ` +
-        `vectors[0] has ${expected} and vectors[${index}] has ${found}. Under method "turbo" each ` +
-        `vector is rotated in its own turboPaddedLength(d) — ${expectedPadded} and ${foundPadded} ` +
-        `here — and the rotation basis is keyed by that padded length, so the two outputs live in ` +
-        `DIFFERENT bases and are not comparable even after padding` +
-        (turboPadToPowerOf2 ? "" : " (nor would turboPadToPowerOf2: true make them so)") +
-        `. The output's originalDimensions would also report only vectors[0]'s ${expected}. ` +
-        `Quantize each dimensionality in a separate call.`
-    );
+    const expectedType = this.getVectorType(vectors[0]!);
+    const typeIndex = vectors.findIndex((v) => this.getVectorType(v) !== expectedType);
+    if (typeIndex !== -1) {
+      throw new Error(
+        `VectorQuantizeTask: every vector in a batch must have the same element type, but ` +
+          `vectors[0] is ${expectedType} and vectors[${typeIndex}] is ` +
+          `${this.getVectorType(vectors[typeIndex]!)}. The output's originalType would report ` +
+          `only vectors[0]'s ${expectedType}, which is the one field a consumer has to reverse ` +
+          `the quantization. Quantize each element type in a separate call.`
+      );
+    }
   }
 
   private getVectorType(vector: TypedArray): TensorType {

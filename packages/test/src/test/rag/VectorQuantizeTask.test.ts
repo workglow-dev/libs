@@ -239,6 +239,44 @@ describe("VectorQuantizeTask", () => {
     });
   });
 
+  /**
+   * The array input predates the turbo work, so this is the one place the branch changes
+   * RELEASED behavior — deliberately, and from "silently wrong" to "loud". Such a caller
+   * already receives a result whose `originalDimensions` and `originalType` describe only
+   * `vectors[0]`, and whose outputs cannot share a storage column, so there is no correct
+   * use of the input shape being rejected.
+   */
+  test("should reject a heterogeneous batch under linear", async () => {
+    const vectors = [new Float32Array([0.5, -0.5, 0.8]), new Float32Array([0.1, 0.2, 0.3, 0.4])];
+
+    const message = await rejectionMessage(() =>
+      vectorQuantize({ vector: vectors, targetType: TensorType.INT8, normalize: false })
+    );
+
+    expect(message).toMatch(/same dimensionality/);
+    expect(message).toMatch(/vectors\[1\]/);
+    // Method-aware consequence: under linear the outputs keep their lengths, so the break
+    // surfaces downstream in cosineSimilarity and in a fixed-width storage column — a
+    // different failure from turbo's incomparable bases, and the message says which.
+    expect(message).toMatch(/cosineSimilarity/);
+    expect(message).toMatch(/storage column/);
+  });
+
+  test("should reject a batch of mixed element types", async () => {
+    // Same defect on the other metadata field: `originalType` would describe vectors[0]
+    // alone, and that is the field a consumer needs to reverse the quantization.
+    const vectors = [new Float32Array([1, 2, 3, 4]), new Int8Array([1, 2, 3, 4])];
+
+    const message = await rejectionMessage(() =>
+      vectorQuantize({ vector: vectors, targetType: TensorType.INT8, normalize: false })
+    );
+
+    expect(message).toMatch(/same element type/);
+    expect(message).toMatch(/originalType/);
+    expect(message).toMatch(/float32/);
+    expect(message).toMatch(/int8/);
+  });
+
   test("should preserve dimensions when quantizing", async () => {
     const largeVector = new Float32Array(384).map(() => Math.random() * 2 - 1);
 
