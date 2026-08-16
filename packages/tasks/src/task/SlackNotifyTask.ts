@@ -44,7 +44,7 @@ const inputSchema = {
       items: { type: "object", additionalProperties: true },
       title: "Blocks",
       description:
-        "Slack Block Kit blocks. Channel-wide broadcasts are neutralized in every string inside the structure, the same as 'text', and rich_text broadcast/usergroup elements — which carry no escapable text — are rewritten to plain text, unless 'allow_mentions' is set. Masked links (<url|label>) are reduced to their bare URL unless 'allow_markup' is set — a blocks leaf cannot be entity-escaped the way 'text' is, because the same walk visits url fields. Slack's <!date^...> formatting token notifies nobody and survives by default.",
+        "Slack Block Kit blocks. Channel-wide broadcasts are neutralized in every string inside the structure, the same as 'text', and rich_text broadcast/usergroup elements — which carry no escapable text — are rewritten to plain text, unless 'allow_mentions' is set. Masked links are reduced to their bare URL unless 'allow_markup' is set, in BOTH forms Block Kit offers: the <url|label> text form, and the structural form where an object carries a 'url' beside a label (button, rich_text link, overflow option) — the label is overwritten with the destination. A blocks leaf cannot be entity-escaped the way 'text' is, because the same walk visits url fields. Slack's two-field <!date^ts^format|fallback> token notifies nobody and survives by default; the four-field form carries a link and label of its own and is escaped.",
     },
     username: {
       type: "string",
@@ -121,19 +121,46 @@ export type SlackNotifyTaskInput = FromSchema<typeof inputSchema>;
 export type SlackNotifyTaskOutput = FromSchema<typeof outputSchema>;
 
 /**
- * A `<!` that opens a broadcast — every occurrence except the date token.
+ * The one `<!…>` control sequence that is safe to leave live, matched by its
+ * whole ARITY rather than by a prefix.
  *
- * `<!` is Slack's CONTROL-SEQUENCE sigil, not a broadcast sigil, and
- * `<!date^1700000000^{date_short}|Nov 14>` is the one documented member of
- * that family that can notify nobody: it renders a localized date. Escaping it
- * is pure collateral damage — Slack un-escapes the entity for display, so the
- * message shows the raw token, and the only opt-out (`allow_mentions`)
- * re-enables live channel-wide pings in the same field.
+ * Slack's date token is `<!date^ts^token_string^optional_link|fallback>`. In
+ * the TWO-field form — `<!date^1700000000^{date_short}|Nov 14>` — the `|` part
+ * is a fallback for clients that cannot render a date, and there is no
+ * destination anywhere in it, so it can notify nobody and can phish nobody.
+ * The FOUR-field form is a different animal: `token_string` is the rendered
+ * label and `optional_link` is a URL, which is precisely the attacker-chosen
+ * label over an attacker-chosen destination that {@link escapeSlackText} and
+ * {@link stripSlackLinkLabels} exist to remove. A two-character `<!date^`
+ * prefix cannot tell them apart, so the exemption is spelled out to the closing
+ * `>`: `[^<>^|]*` on the third field admits no further `^`, so a token carrying
+ * an `optional_link` fails to match and is escaped like any other broadcast.
  *
- * The exemption is an exact lowercase prefix matched at the `<!` itself: a
- * `<!channel>` written inside a date token's fallback text is still escaped,
- * and a case variant (`<!DATE^`) is escaped too — whether Slack accepts one is
- * unverified, so this fails closed.
+ * Everything about it fails closed. A case variant (`<!DATE^`), a non-numeric
+ * timestamp, and a fallback containing a `<` all fail the match, so a token
+ * whose shape cannot be fully verified is escaped WHOLE rather than exempted
+ * with something unverified inside it.
+ *
+ * One source string, two regexes: the exemption has to mean the same thing in
+ * the broadcast escape and in the delabeler, and each rule must be
+ * independently correct because {@link stripSlackLinkLabels} is exported and
+ * callable on its own.
+ */
+const SAFE_DATE_TOKEN = String.raw`!date\^\d+\^[^<>^|]*\|[^<>]*>`;
+
+/**
+ * A `<!` that opens a broadcast — every occurrence except a safe date token.
+ *
+ * `<!` is Slack's CONTROL-SEQUENCE sigil, not a broadcast sigil, and the
+ * two-field date token is the one documented member of that family that can
+ * notify nobody: it renders a localized date. Escaping it is pure collateral
+ * damage — Slack un-escapes the entity for display, so the message shows the
+ * raw token, and the only opt-out (`allow_mentions`) re-enables live
+ * channel-wide pings in the same field.
+ *
+ * A `<!channel>` written inside a date token's fallback text is still escaped:
+ * the fallback half admits no `<`, so such a token fails the exemption and is
+ * escaped as a whole.
  *
  * With the exemption in place, everything this escape still removes
  * (`<!channel>`, `<!here>`, `<!everyone>`, `<!subteam^…>`) IS a mention, so
@@ -147,21 +174,22 @@ export type SlackNotifyTaskOutput = FromSchema<typeof outputSchema>;
  * cannot serve both. `allow_mentions` implies `allow_markup`: live mentions
  * without live markup is not a state anyone asks for.
  */
-const BROADCAST_SIGIL = /<!(?!date\^)/g;
+const BROADCAST_SIGIL = new RegExp(String.raw`<(?!${SAFE_DATE_TOKEN})!`, "g");
 
 /**
- * A `<url|label>` sequence, excluding the `<!…>` control family.
+ * A `<url|label>` sequence, excluding only a safe date token.
  *
- * `(?!!)` is what exempts `<!date^1700000000^{date_short}|Nov 14>`: the `|`
- * part of a date token is a FALLBACK for clients that cannot render the date,
- * not a label masking a destination, and the same exemption covers any other
- * `<!…>` control sequence the broadcast escape has already dealt with.
+ * {@link SAFE_DATE_TOKEN} is what the lookahead exempts, and nothing wider: a
+ * four-field date token IS a `<…|…>` masking a destination, so exempting the
+ * whole `<!…>` family here handed one straight through. Every other control
+ * sequence is `<sigil…>` with no destination in it, so reducing it to its first
+ * field changes nothing about what it does.
  *
  * `[^<>|]` on the URL half keeps a match inside ONE sequence — without it a
  * greedy run would span from one `<` past an intervening `>` to a later `|`,
  * swallowing whatever sat between two independent links.
  */
-const MASKED_LINK = /<(?!!)([^<>|]*)\|[^<>]*>/g;
+const MASKED_LINK = new RegExp(String.raw`<(?!${SAFE_DATE_TOKEN})([^<>|]*)\|[^<>]*>`, "g");
 
 /**
  * HTML-entity escapes Slack's three active characters.
@@ -237,6 +265,54 @@ export function neutralizeSlackBroadcasts(text: string): string {
 const STRUCTURAL_BROADCAST_TYPES: ReadonlySet<string> = new Set(["broadcast", "usergroup"]);
 
 /**
+ * Reduces a Block Kit object that IS a link to its bare destination — the
+ * structural twin of {@link stripSlackLinkLabels}' `<url|label>` → `<url>`.
+ *
+ * Block Kit says the same thing two ways, and only one of them has a `<` in it.
+ * A button, a rich_text `link` element and an overflow `option` each carry a
+ * `url` beside a label field, so a caller-supplied label masks a
+ * caller-supplied destination with nothing for the lexical delabeler to match.
+ *
+ * The rule keys on SHAPE, not on a list of element types, and both halves of
+ * that matter. An overflow `option` carries `url` + `text` and no `type`
+ * discriminator at all, so no type set can reach it; and a shape rule covers
+ * whatever url-bearing element Slack adds next. It is narrow by construction:
+ * the only Block Kit objects carrying a plain `url` beside a label ARE links —
+ * `image` uses `image_url`/`alt_text`, `video` uses `title_url` — so a false
+ * positive has no shape to arrive in.
+ *
+ * The destination is kept and the LABEL overwritten, never the reverse. A
+ * button stripped of its `url`, with no live `action_id` handler behind it, is
+ * an availability change — the same argument the broadcast rewrite makes for
+ * rewriting rather than deleting.
+ *
+ * A `url` with no label beside it is already unmasked and is left alone, with
+ * one exception: the rich_text `date` element, whose label comes from its
+ * `format`/`fallback` rather than from a label field. Its optional link is the
+ * structural half of the four-field `<!date^ts^label^url|fallback>` token, and
+ * a date renders perfectly well unlinked, so there the `url` is DELETED.
+ *
+ * Mutates the node, which is always the fresh child map the walk just built —
+ * the caller-supplied structure is never touched.
+ */
+function reduceStructuralLink(node: Record<string, unknown>): void {
+  if (typeof node.url !== "string") return;
+  const label = node.text;
+  if (typeof label === "string") {
+    node.text = node.url;
+    return;
+  }
+  if (typeof label === "object" && label !== null) {
+    const composition = label as Record<string, unknown>;
+    if (typeof composition.text === "string") {
+      composition.text = node.url;
+      return;
+    }
+  }
+  if (node.type === "date") delete node.url;
+}
+
+/**
  * Neutralizes channel-wide broadcasts inside a Block Kit structure, so `text`
  * and `blocks` share one rule rather than two.
  *
@@ -278,6 +354,13 @@ const STRUCTURAL_BROADCAST_TYPES: ReadonlySet<string> = new Set(["broadcast", "u
  *    The policy is required at every call site rather than defaulted — which of
  *    the two markup regimes a payload is under is exactly the thing a reader
  *    needs to see at the call.
+ *
+ * 4. STRUCTURAL MARKUP — {@link reduceStructuralLink}, under the SAME
+ *    `policy.stripLabels`, because Block Kit expresses a masked link
+ *    structurally as well as lexically: a `url` field beside a label field has
+ *    no `<` for rule 3 to match. The two remedies are the same remedy — keep
+ *    the destination, drop the label — so one flag governs both. Unlike rule 2,
+ *    this one IS shape-driven, so it cannot miss an element type Slack adds.
  *
  * Order within a leaf: the broadcast escape runs FIRST. Reversed, a masked link
  * whose label contains a broadcast (`<https://x/|<!channel>>`) survives —
@@ -328,6 +411,7 @@ export function neutralizeSlackBroadcastsDeep(
     for (const [key, entry] of Object.entries(value)) {
       escaped[key] = neutralizeSlackBroadcastsDeep(entry, policy, depth + 1);
     }
+    if (policy.stripLabels) reduceStructuralLink(escaped);
     return escaped;
   }
   return value;

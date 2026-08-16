@@ -1068,10 +1068,12 @@ describe("Webhook notification tasks", () => {
       expect(JSON.parse(lastCall().options.body as string).text).toBe(text);
     });
 
-    // The exemption is the two-character `<!` occurrence, not "everything after
-    // the first `<!date`": a broadcast written inside the token's fallback text
-    // is still a live broadcast.
-    test("a broadcast inside a date token's fallback is still escaped", async () => {
+    // The exemption is the token's whole SHAPE, so a fallback carrying a `<`
+    // is a shape the matcher cannot finish verifying — the token is escaped
+    // WHOLE rather than exempted with a live broadcast inside it. Previously
+    // the two-character `<!` prefix was exempt on its own and this asserted a
+    // surviving `<!date^`; a matcher that cannot verify a token fails closed.
+    test("a broadcast inside a date token's fallback escapes the whole token", async () => {
       await slackNotify({
         url: SLACK_URL,
         text: "<!date^1700000000^{date_short}|<!channel>>",
@@ -1080,7 +1082,8 @@ describe("Webhook notification tasks", () => {
 
       const posted = JSON.parse(lastCall().options.body as string).text as string;
       expect(posted).toContain("&lt;!channel");
-      expect(posted).toContain("<!date^");
+      expect(posted).toContain("&lt;!date");
+      expect(posted).not.toContain("<!");
     });
 
     // Whether Slack accepts an upper-case token is unverified, so the exemption
@@ -1290,6 +1293,13 @@ describe("Webhook notification tasks", () => {
       const posted = JSON.parse(lastCall().options.body as string);
       expect(posted.blocks[0].accessory.url).toBe("https://ci.example/build?a=1&b=2");
       expect(posted.blocks[0].accessory.action_id).toBe("open_build");
+      // Byte-identical, stated explicitly: the structural link reduction
+      // rewrites the LABEL of a url-bearing object and must never touch the
+      // destination it keeps.
+      expect(posted.blocks[0].accessory.url).toStrictEqual("https://ci.example/build?a=1&b=2");
+      expect((posted.blocks[0].accessory.url as string).length).toBe(
+        "https://ci.example/build?a=1&b=2".length
+      );
     });
 
     // The ladder has no dead rung: `allow_mentions` is the strictly wider
@@ -1493,6 +1503,253 @@ describe("Webhook notification tasks", () => {
       expect(body).toContain('"type":"section"');
       expect(body).toContain('"type":"mrkdwn"');
       expect(body).toContain("deploy done");
+    });
+  });
+
+  /**
+   * Block Kit says `<url|label>` a SECOND way — structurally, with a `url`
+   * field beside a label field — and the lexical delabeler cannot see it. A
+   * button, a rich_text link and an overflow option each mask an
+   * attacker-chosen destination behind an attacker-chosen label with no `<`
+   * anywhere in the payload, so the default config (no `allow_markup`, no
+   * `allow_mentions`) shipped exactly the phishing primitive the text form is
+   * escaped for.
+   */
+  describe("structural masked links in blocks", () => {
+    test("a rich_text link element is reduced to its destination", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [
+                  { type: "link", url: "https://evil.example/", text: "Deploy succeeded" },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+
+      const posted = JSON.parse(lastCall().options.body as string);
+      const link = posted.blocks[0].elements[0].elements[0];
+      expect(link.text).toBe("https://evil.example/");
+      expect(link.url).toBe("https://evil.example/");
+      expect(lastCall().options.body as string).not.toContain("Deploy succeeded");
+    });
+
+    // The destination is KEPT, never deleted: a button with no url and no live
+    // action_id handler behind it is an availability change, which is the same
+    // argument the broadcast rewrite makes for rewriting rather than deleting.
+    test("a button accessory's label cannot mask its url", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "build" },
+            accessory: {
+              type: "button",
+              text: { type: "plain_text", text: "Deploy succeeded" },
+              url: "https://evil.example/pwn",
+              action_id: "open_build",
+            },
+          },
+        ],
+      });
+
+      const accessory = JSON.parse(lastCall().options.body as string).blocks[0].accessory;
+      expect(accessory.text.text).toBe("https://evil.example/pwn");
+      expect(accessory.url).toBe("https://evil.example/pwn");
+      expect(accessory.action_id).toBe("open_build");
+    });
+
+    // Pins the rule as SHAPE-driven rather than type-enumerated: an overflow
+    // menu's option carries `url` + `text` and no `type` discriminator at all,
+    // so any list of element types misses it.
+    test("an overflow option's label cannot mask its url", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "overflow",
+                action_id: "menu",
+                options: [
+                  {
+                    text: { type: "plain_text", text: "Read the changelog" },
+                    value: "changelog",
+                    url: "https://evil.example/steal",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+
+      const option = JSON.parse(lastCall().options.body as string).blocks[0].elements[0].options[0];
+      expect(option.type).toBeUndefined();
+      expect(option.text.text).toBe("https://evil.example/steal");
+      expect(option.url).toBe("https://evil.example/steal");
+      expect(option.value).toBe("changelog");
+    });
+
+    // Narrowness guard. Only objects that ARE links carry a plain `url` beside
+    // a label — `image` uses `image_url`/`alt_text` — so the shape rule cannot
+    // reach it.
+    test("an image block is not treated as a structural link", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "image",
+            image_url: "https://ci.example/chart.png?a=1&b=2",
+            alt_text: "Build chart",
+          },
+        ],
+      });
+
+      const image = JSON.parse(lastCall().options.body as string).blocks[0];
+      expect(image.image_url).toBe("https://ci.example/chart.png?a=1&b=2");
+      expect(image.alt_text).toBe("Build chart");
+    });
+
+    test("allow_markup keeps a structural link intact", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "section",
+            accessory: {
+              type: "button",
+              text: { type: "plain_text", text: "Deploy succeeded" },
+              url: "https://evil.example/pwn",
+            },
+          },
+        ],
+        allow_markup: true,
+      });
+
+      const accessory = JSON.parse(lastCall().options.body as string).blocks[0].accessory;
+      expect(accessory.text.text).toBe("Deploy succeeded");
+      expect(accessory.url).toBe("https://evil.example/pwn");
+    });
+
+    test("allow_mentions leaves a structural link verbatim", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "section",
+            accessory: {
+              type: "button",
+              text: { type: "plain_text", text: "Deploy succeeded" },
+              url: "https://evil.example/pwn",
+            },
+          },
+        ],
+        allow_mentions: true,
+      });
+
+      const accessory = JSON.parse(lastCall().options.body as string).blocks[0].accessory;
+      expect(accessory.text.text).toBe("Deploy succeeded");
+      expect(accessory.url).toBe("https://evil.example/pwn");
+    });
+  });
+
+  /**
+   * Slack's date token is `<!date^ts^token_string^optional_link|fallback>`, so
+   * the four-field form carries BOTH an attacker-chosen label and an
+   * attacker-chosen destination. Exempting it on the two-character `<!date^`
+   * prefix re-admitted the very masked link the rest of this file escapes; the
+   * exemption is the safe ARITY instead.
+   */
+  describe("date token arity", () => {
+    test("a date token carrying an optional link is escaped in blocks by default", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "<!date^1700000000^Reset your password^https://evil.example|Nov 14>",
+            },
+          },
+        ],
+      });
+
+      const leaf = JSON.parse(lastCall().options.body as string).blocks[0].text.text as string;
+      expect(leaf).toContain("&lt;!date");
+      expect(leaf).not.toContain("<!date");
+      expect(leaf).not.toContain("<!");
+    });
+
+    // The structural twin of the same hole: a rich_text `date` element takes an
+    // optional `url` and gets its label from `format`/`fallback`, so this is
+    // the one shape where DELETING the url is right — the date still renders.
+    test("a rich_text date element's optional link is stripped", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [
+                  {
+                    type: "date",
+                    timestamp: 1700000000,
+                    format: "{date_num}",
+                    fallback: "Nov 14",
+                    url: "https://evil.example/pwn",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+
+      const date = JSON.parse(lastCall().options.body as string).blocks[0].elements[0].elements[0];
+      expect(Object.hasOwn(date, "url")).toBe(false);
+      expect(date.timestamp).toBe(1700000000);
+      expect(date.format).toBe("{date_num}");
+      expect(date.fallback).toBe("Nov 14");
+    });
+
+    // Fail-closed arity guard: a timestamp Slack would not accept is a token
+    // this matcher cannot verify, so it is escaped rather than exempted.
+    test("a date token with a non-numeric timestamp is escaped", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "<!date^notatimestamp^{date_short}|Nov 14>" },
+          },
+        ],
+      });
+
+      const leaf = JSON.parse(lastCall().options.body as string).blocks[0].text.text as string;
+      expect(leaf).toContain("&lt;!date");
+      expect(leaf).not.toContain("<!date");
     });
   });
 
