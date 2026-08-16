@@ -1084,6 +1084,184 @@ describe("TurboQuantize", () => {
     });
   });
 
+  /**
+   * WHAT THE MODULE DOC IS ALLOWED TO CLAIM ABOUT RANKING.
+   *
+   * The docstring asserted that "RANKING was never affected — ordering a candidate set was
+   * correct before and is correct now". Half of that is a property of the correction and
+   * half of it is a claim about the estimator, and only the first half is true by
+   * construction. These two cases separate them, and the module doc is written FROM the
+   * numbers the second one records — not the other way round.
+   */
+  describe("ranking fidelity", () => {
+    /**
+     * THE HALF THAT IS TRUE BY CONSTRUCTION.
+     *
+     * Switching the shrinkage correction on or off cannot change a ranking, because the
+     * correction is a monotone reparameterization of the score: it moves every score and
+     * moves none past another. That is the ONLY ranking claim this module can make without
+     * measuring anything, so it is worth pinning directly rather than inferring it from
+     * the end-to-end case below.
+     *
+     * This is a PIN, not a red test — it passes today and is expected to keep passing. The
+     * one mechanism by which the corrected wording could rot is a `shrinkageTable` whose
+     * quadrature is coarsened (fewer Simpson nodes, fewer knots) far enough to make the
+     * tabulated `g` non-monotone; the inverse would then fold back on itself and the
+     * doc's "moves none past another" would quietly stop holding.
+     *
+     * 1 bit is not swept here: its map is the closed form `cos(pi*(1 - r)/2)`, monotone by
+     * inspection over [-1, 1], and it is covered end-to-end by the fidelity case below.
+     *
+     * The map SATURATES at the ends — a ratio at or past the tabulated `g(1)` has no
+     * bracket to interpolate inside and returns exactly ±1 (2 bits from |r| >= 0.99,
+     * 3 bits from 0.995, 4 bits not within this grid). That is a documented clamp, and a
+     * flat region ties scores rather than inverting them, which is exactly the distinction
+     * the doc claim rests on. So: never decreasing anywhere, and strictly increasing
+     * wherever the value is not pinned to an endpoint.
+     */
+    test("the shrinkage correction is strictly monotone at every corrected width", () => {
+      const points = 401;
+      for (const bits of [2, 3, 4] as const) {
+        let previous = Number.NEGATIVE_INFINITY;
+        let previousRatio = Number.NaN;
+        for (let i = 0; i < points; i++) {
+          const ratio = -1 + (2 * i) / (points - 1);
+          const value = invertShrinkage(bits, ratio);
+          const label = `bits=${bits} ${previousRatio} -> ${ratio} gave ${previous} -> ${value}`;
+          if (i > 0) {
+            expect(value, label).toBeGreaterThanOrEqual(previous);
+            if (Math.abs(value) !== 1) expect(value, label).toBeGreaterThan(previous);
+          }
+          previous = value;
+          previousRatio = ratio;
+        }
+      }
+    });
+
+    /**
+     * THE HALF THAT HAD TO BE MEASURED.
+     *
+     * Monotonicity says the CORRECTION preserves ordering. It says nothing about whether
+     * the estimator's ordering matches the exact cosine's — that is quantization noise,
+     * and at 1 bit a whole vector is one sign per coordinate. So the doc bullet gets a
+     * recorded number per bit width, and these are those numbers.
+     *
+     * The corpus is built so the two metrics answer different questions and neither sits
+     * on a knife edge:
+     *
+     * - 10 "relevant" documents planted at t = 0.70 .. 0.88 and 10 "near-miss" ones at
+     *   t = 0.30 .. 0.48. The 0.22 gap between the 10th and 11th planted document (the
+     *   realized exact cosines run 0.876 .. 0.692, then 0.483) is far wider than any
+     *   width's error, so recall@10 measures set membership and is insensitive to noise.
+     * - The 0.02 spacing INSIDE the top 10 is comparable to the estimator's own error at
+     *   the low widths, so exact ordering is sensitive there. A single grid cannot make
+     *   both metrics informative; two spacings can.
+     *
+     * d = 1024 is a power of two, so nothing is padded and the case measures the estimator
+     * rather than the padding. The reference ranking is `cosineSimilarity` on the
+     * UNQUANTIZED vectors, never the planted `t` — a finite sample's realized cosine
+     * differs from `t` by ~1/sqrt(d), which is why the top-10 exact scores above are not
+     * the t values they were built from.
+     *
+     * `recall` and `orderIdentical` are pinned TWO-SIDED. A one-sided bound would let the
+     * corrected wording rot in the direction that matters: "1 bit reorders the top 10" is
+     * a claim that must fail if 1 bit ever stops reordering it, not just if it gets worse.
+     * Kendall tau is a floor rather than an equality because it is the one continuous
+     * number here, and floors non-decreasing in bits keep the case from reading as
+     * flaky-shaped if the grid is ever retuned.
+     */
+    test("ranking fidelity against the exact cosine, per bit width", () => {
+      const d = 1024;
+      const rnd = makeRandom(90210);
+
+      const query = new Float32Array(d);
+      for (let i = 0; i < d; i++) query[i] = rnd() - 0.5;
+
+      const docs: Float32Array[] = [];
+      for (let n = 0; n < 480; n++) {
+        const background = new Float32Array(d);
+        for (let i = 0; i < d; i++) background[i] = rnd() - 0.5;
+        docs.push(background);
+      }
+      /** `t * query + sqrt(1 - t^2) * noise`: a document at planted cosine `t`. */
+      const planted = (t: number): Float32Array => {
+        const noise = new Float32Array(d);
+        for (let i = 0; i < d; i++) noise[i] = rnd() - 0.5;
+        const k = Math.sqrt(1 - t * t);
+        const doc = new Float32Array(d);
+        for (let i = 0; i < d; i++) doc[i] = t * query[i]! + k * noise[i]!;
+        return doc;
+      };
+      for (let j = 0; j < 10; j++) docs.push(planted(0.7 + 0.02 * j));
+      for (let j = 0; j < 10; j++) docs.push(planted(0.3 + 0.02 * j));
+
+      const exactScores = docs.map((doc) => cosineSimilarity(query, doc));
+      const rankBy = (scores: readonly number[]): number[] =>
+        scores.map((_, index) => index).sort((a, b) => scores[b]! - scores[a]!);
+      const exactRank = rankBy(exactScores);
+
+      /**
+       * Kendall tau over the exact top 20, counting only pairs the two rankings both
+       * order: concordant minus discordant, over their total.
+       */
+      const kendallTau = (
+        subset: readonly number[],
+        candidate: readonly number[],
+        reference: readonly number[]
+      ): number => {
+        let concordant = 0;
+        let discordant = 0;
+        for (let i = 0; i < subset.length; i++) {
+          for (let j = i + 1; j < subset.length; j++) {
+            const x = subset[i]!;
+            const y = subset[j]!;
+            const agreement =
+              Math.sign(candidate[x]! - candidate[y]!) * Math.sign(reference[x]! - reference[y]!);
+            if (agreement > 0) concordant++;
+            else if (agreement < 0) discordant++;
+          }
+        }
+        const total = concordant + discordant;
+        return total === 0 ? 1 : (concordant - discordant) / total;
+      };
+
+      /** Measured on this corpus. Every planted document is retrieved at every width. */
+      const RECALL: Record<number, number> = { 1: 1, 2: 1, 4: 1, 8: 1 };
+      /**
+       * Measured: only 1 bit reorders the top 10. A one-sign-per-coordinate code cannot
+       * resolve the 0.02 steps between adjacent planted documents.
+       */
+      const ORDER: Record<number, boolean> = { 1: false, 2: true, 4: true, 8: true };
+      /**
+       * Measured tau over the exact top 20: 0.9368 / 0.9789 / 1.0000 / 1.0000. The floors
+       * sit just below each, and are non-decreasing in bits. Note 2 bits: it reproduces
+       * the top 10 exactly and still transposes a pair further down, which is why the two
+       * metrics are both reported rather than collapsed into one.
+       */
+      const TAU_FLOOR: Record<number, number> = { 1: 0.93, 2: 0.97, 4: 1, 8: 1 };
+
+      for (const bits of [1, 2, 4, 8] as const) {
+        const quantizedQuery = turboQuantize(query, { bits, seed: 42 });
+        const estimatedScores = docs.map((doc) =>
+          turboQuantizedCosineSimilarity(quantizedQuery, turboQuantize(doc, { bits, seed: 42 }))
+        );
+        const estimatedRank = rankBy(estimatedScores);
+
+        const exactTop10 = exactRank.slice(0, 10);
+        const estimatedTop10 = estimatedRank.slice(0, 10);
+        const recall = exactTop10.filter((i) => estimatedTop10.includes(i)).length / 10;
+        const orderIdentical = exactTop10.every((doc, i) => doc === estimatedTop10[i]);
+        const tau = kendallTau(exactRank.slice(0, 20), estimatedScores, exactScores);
+
+        expect(recall, `bits=${bits} recall@10`).toBe(RECALL[bits]!);
+        expect(orderIdentical, `bits=${bits} top-10 order identical`).toBe(ORDER[bits]!);
+        expect(tau, `bits=${bits} tau@20 = ${tau.toFixed(4)}`).toBeGreaterThanOrEqual(
+          TAU_FLOOR[bits]!
+        );
+      }
+    });
+  });
+
   describe("turboPrepareQuery / turboPreparedCosineSimilarity", () => {
     /**
      * BIT-FOR-BIT, at every width, is the whole contract.
