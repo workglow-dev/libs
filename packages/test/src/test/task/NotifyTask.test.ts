@@ -1717,6 +1717,81 @@ describe("Webhook notification tasks", () => {
       expect(image.alt_text).toBe("Build chart");
     });
 
+    // A `video` block pairs `title_url` with a required `title`, which is the
+    // same phishing primitive the button case is: the reader sees "Deploy
+    // succeeded" and clicks through to the attacker's URL. The property name is
+    // `title_url`, not `url`, so a rule keyed on `url` alone never saw it.
+    //
+    // Caveat, recorded rather than treated as a reason to skip the shape:
+    // Slack's video block needs `links.embed:write` and a registered unfurl
+    // domain, and the docs do not say whether an incoming webhook can satisfy
+    // that — so exploitability is bounded but unresolved.
+    test("a video block's title cannot mask its title_url", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "video",
+            title: { type: "plain_text", text: "Deploy succeeded" },
+            title_url: "https://evil.example/phish",
+            video_url: "https://ci.example/embed/build.mp4",
+            thumbnail_url: "https://ci.example/thumb.png",
+            alt_text: "Build recording",
+          },
+        ],
+      });
+
+      const video = JSON.parse(lastCall().options.body as string).blocks[0];
+      expect(video.title.text).toBe("https://evil.example/phish");
+      expect(video.title_url).toBe("https://evil.example/phish");
+      expect(lastCall().options.body as string).not.toContain("Deploy succeeded");
+    });
+
+    // The false positive the explicit pair table exists to avoid, and the twin
+    // of the `alt_text` guard above: an `image` block legitimately carries
+    // `image_url` AND a `title`, so "any `*_url` with a sibling label" would
+    // rewrite the caption to the CDN URL in the commonest block type there is.
+    test("an image block with a title is still not treated as a structural link", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "image",
+            image_url: "https://ci.example/chart.png?a=1&b=2",
+            title: { type: "plain_text", text: "Build chart" },
+            alt_text: "Build chart",
+          },
+        ],
+      });
+
+      const image = JSON.parse(lastCall().options.body as string).blocks[0];
+      expect(image.title.text).toBe("Build chart");
+      expect(image.image_url).toBe("https://ci.example/chart.png?a=1&b=2");
+    });
+
+    test("allow_markup keeps a video block's title intact", async () => {
+      await slackNotify({
+        url: SLACK_URL,
+        text: "ok",
+        blocks: [
+          {
+            type: "video",
+            title: { type: "plain_text", text: "Deploy succeeded" },
+            title_url: "https://evil.example/phish",
+            video_url: "https://ci.example/embed/build.mp4",
+            alt_text: "Build recording",
+          },
+        ],
+        allow_markup: true,
+      });
+
+      const video = JSON.parse(lastCall().options.body as string).blocks[0];
+      expect(video.title.text).toBe("Deploy succeeded");
+      expect(video.title_url).toBe("https://evil.example/phish");
+    });
+
     test("allow_markup keeps a structural link intact", async () => {
       await slackNotify({
         url: SLACK_URL,

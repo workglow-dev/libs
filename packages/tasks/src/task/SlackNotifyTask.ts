@@ -44,7 +44,7 @@ const inputSchema = {
       items: { type: "object", additionalProperties: true },
       title: "Blocks",
       description:
-        "Slack Block Kit blocks. Channel-wide broadcasts are neutralized in every string inside the structure, the same as 'text', and rich_text broadcast/usergroup elements — which carry no escapable text — are rewritten to plain text, unless 'allow_mentions' is set. Masked links are reduced to their bare URL unless 'allow_markup' is set, in BOTH forms Block Kit offers: the <url|label> text form, and the structural form where an object carries a 'url' beside a label (button, rich_text link, overflow option) — the label is overwritten with the destination. A blocks leaf cannot be entity-escaped the way 'text' is, because the same walk visits url fields. Slack's two-field <!date^ts^format|fallback> token notifies nobody and survives by default; the four-field form carries a link and label of its own and is escaped.",
+        "Slack Block Kit blocks. Channel-wide broadcasts are neutralized in every string inside the structure, the same as 'text', and rich_text broadcast/usergroup elements — which carry no escapable text — are rewritten to plain text, unless 'allow_mentions' is set. Masked links are reduced to their bare URL unless 'allow_markup' is set, in the <url|label> text form and in the structural form where an object pairs a destination with a label — 'url' beside 'text' (button, rich_text link, overflow option) and 'title_url' beside 'title' (video) — where the label is overwritten with the destination. An image block's 'image_url' is deliberately excluded: it is the picture, not a destination a caption can mask. A blocks leaf cannot be entity-escaped the way 'text' is, because the same walk visits url fields. Slack's two-field <!date^ts^format|fallback> token notifies nobody and survives by default; the four-field form carries a link and label of its own and is escaped.",
     },
     username: {
       type: "string",
@@ -265,51 +265,92 @@ export function neutralizeSlackBroadcasts(text: string): string {
 const STRUCTURAL_BROADCAST_TYPES: ReadonlySet<string> = new Set(["broadcast", "usergroup"]);
 
 /**
+ * The (destination, label) property pairs Block Kit uses to express a masked
+ * link structurally.
+ *
+ * An explicit table rather than "any `*_url` with a sibling label", and the
+ * difference is not stylistic. An `image` block legitimately carries
+ * `image_url` AND an optional `title`, so a wildcard would overwrite an
+ * image's caption with its own CDN URL — a false positive in the commonest
+ * block type there is. `image_url` is therefore deliberately absent: it is the
+ * picture, not a destination a label can mask.
+ *
+ * Residual, accepted: a url/label pair Slack adds later is uncovered until it
+ * joins this table. That is the price of not sweeping in `image_url`.
+ */
+const MASKED_LINK_PAIRS: ReadonlyArray<readonly [destination: string, label: string]> = [
+  ["url", "text"],
+  ["title_url", "title"],
+];
+
+/**
+ * Overwrites `node[label]` with `url`, handling both shapes a Block Kit label
+ * arrives in: a bare string, and a text composition (`{type, text}` — which is
+ * what a `video` block's `plain_text` title and a button's label both are).
+ *
+ * Returns whether a label was found and rewritten, so the caller can tell
+ * "masked link, handled" from "a bare destination with no label beside it".
+ */
+function overwriteLabel(node: Record<string, unknown>, label: string, url: string): boolean {
+  const value = node[label];
+  if (typeof value === "string") {
+    node[label] = url;
+    return true;
+  }
+  if (typeof value === "object" && value !== null) {
+    const composition = value as Record<string, unknown>;
+    if (typeof composition.text === "string") {
+      composition.text = url;
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Reduces a Block Kit object that IS a link to its bare destination — the
  * structural twin of {@link stripSlackLinkLabels}' `<url|label>` → `<url>`.
  *
  * Block Kit says the same thing two ways, and only one of them has a `<` in it.
  * A button, a rich_text `link` element and an overflow `option` each carry a
- * `url` beside a label field, so a caller-supplied label masks a
- * caller-supplied destination with nothing for the lexical delabeler to match.
+ * `url` beside a label field, and a `video` block carries `title_url` beside a
+ * required `title`, so a caller-supplied label masks a caller-supplied
+ * destination with nothing for the lexical delabeler to match.
  *
- * The rule keys on SHAPE, not on a list of element types, and both halves of
- * that matter. An overflow `option` carries `url` + `text` and no `type`
- * discriminator at all, so no type set can reach it; and a shape rule covers
- * whatever url-bearing element Slack adds next. It is narrow by construction:
- * the only Block Kit objects carrying a plain `url` beside a label ARE links —
- * `image` uses `image_url`/`alt_text`, `video` uses `title_url` — so a false
- * positive has no shape to arrive in.
+ * Which property PAIRS count is enumerated in {@link MASKED_LINK_PAIRS};
+ * within a pair the rule is still shape-driven, which is what reaches an
+ * overflow `option` (it carries `url` + `text` and no `type` discriminator at
+ * all, so no element-type set could).
  *
  * The destination is kept and the LABEL overwritten, never the reverse. A
  * button stripped of its `url`, with no live `action_id` handler behind it, is
  * an availability change — the same argument the broadcast rewrite makes for
- * rewriting rather than deleting.
+ * rewriting rather than deleting. Accepted cost: a `title` overwritten with a
+ * long `title_url` can exceed Slack's 200-character limit and draw
+ * `invalid_blocks`, the same trade the button path already makes against its
+ * 75-character `text` limit.
  *
- * A `url` with no label beside it is already unmasked and is left alone, with
- * one exception: the rich_text `date` element, whose label comes from its
+ * A destination with no label beside it is already unmasked and is left alone,
+ * with one exception: the rich_text `date` element, whose label comes from its
  * `format`/`fallback` rather than from a label field. Its optional link is the
  * structural half of the four-field `<!date^ts^label^url|fallback>` token, and
- * a date renders perfectly well unlinked, so there the `url` is DELETED.
+ * a date renders perfectly well unlinked, so there the `url` is DELETED. That
+ * deletion stays scoped to `url`: a `title_url` with no `title` is not a video
+ * block, because Slack requires one.
  *
  * Mutates the node, which is always the fresh child map the walk just built —
  * the caller-supplied structure is never touched.
  */
 function reduceStructuralLink(node: Record<string, unknown>): void {
-  if (typeof node.url !== "string") return;
-  const label = node.text;
-  if (typeof label === "string") {
-    node.text = node.url;
-    return;
-  }
-  if (typeof label === "object" && label !== null) {
-    const composition = label as Record<string, unknown>;
-    if (typeof composition.text === "string") {
-      composition.text = node.url;
+  for (const [destination, label] of MASKED_LINK_PAIRS) {
+    const url = node[destination];
+    if (typeof url !== "string") continue;
+    if (overwriteLabel(node, label, url)) return;
+    if (destination === "url" && node.type === "date") {
+      delete node.url;
       return;
     }
   }
-  if (node.type === "date") delete node.url;
 }
 
 /**
@@ -357,10 +398,20 @@ function reduceStructuralLink(node: Record<string, unknown>): void {
  *
  * 4. STRUCTURAL MARKUP — {@link reduceStructuralLink}, under the SAME
  *    `policy.stripLabels`, because Block Kit expresses a masked link
- *    structurally as well as lexically: a `url` field beside a label field has
- *    no `<` for rule 3 to match. The two remedies are the same remedy — keep
- *    the destination, drop the label — so one flag governs both. Unlike rule 2,
- *    this one IS shape-driven, so it cannot miss an element type Slack adds.
+ *    structurally as well as lexically: a destination field beside a label
+ *    field has no `<` for rule 3 to match. The two remedies are the same
+ *    remedy — keep the destination, drop the label — so one flag governs both.
+ *    Within a recognized property PAIR the rule is shape-driven, so it reaches
+ *    an overflow `option` that carries no `type` discriminator at all.
+ *
+ *    Residuals, all accepted: a url/label pair Slack adds later is uncovered
+ *    until it joins {@link MASKED_LINK_PAIRS}, which is the price of not
+ *    sweeping in `image_url` (an `image` block legitimately pairs it with a
+ *    `title`, so a wildcard would rewrite a caption to its own CDN URL). And a
+ *    `video` block additionally requires `links.embed:write` plus a registered
+ *    unfurl domain, so an incoming webhook may be rejected with
+ *    `invalid_blocks` before the pair ever renders — unverified either way, and
+ *    not a reason to leave the shape uncovered.
  *
  * Order within a leaf: the broadcast escape runs FIRST. Reversed, a masked link
  * whose label contains a broadcast (`<https://x/|<!channel>>`) survives —
