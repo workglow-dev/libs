@@ -724,6 +724,13 @@ const SHRINKAGE_NODES_PER_UNIT = 16;
  * decimals is the one exact reference this machinery has.
  */
 function shrinkageAt(bits: number, rho: number): number {
+  // At `rho = 1` the pair is degenerate — `y = x`, so `E[Q(x)Q(y)]` IS `E[Q(x)^2]` and the
+  // ratio is exactly 1. Returned analytically because the quadrature cannot reach it: the
+  // `conditionalSd` floor below turns `conditionalMean` into a step function landing on a
+  // bin boundary, so Simpson loses ~1.7% of `cross` at 1 bit while `square` stays exact.
+  // That was the single largest error on the map and it sat on the last knot, which is
+  // where {@link invertShrinkage} treats `g` as having reached 1.
+  if (rho >= 1) return 1;
   const levels = 1 << bits;
   const outer = optimalLoadingFactor(levels);
   const step = (2 * outer) / (levels - 1);
@@ -839,8 +846,11 @@ export function invertShrinkage(bits: number, estimate: number): number {
   const target = Math.min(1, Math.abs(estimate));
   const { rho, g } = shrinkageTable(bits);
   const last = g.length - 1;
-  // A ratio at or past the endpoints has no bracket to interpolate inside. `g(0) = 0` and
-  // `g(1) = 1`, so these are the exact answers rather than a clamp that loses information.
+  // A ratio at or past the endpoints has no bracket to interpolate inside. Both endpoints
+  // really are exact — `g(0)` is below 4e-25 and {@link shrinkageAt} returns `g(1) = 1`
+  // analytically — so these are the exact answers rather than a clamp that loses
+  // information. Before that analytic endpoint the last knot fell short (0.9834/0.9898/
+  // 0.9941/0.9968 at 1/2/3/4 bits), so every ratio above it collapsed to exactly 1.
   if (target <= g[0]!) return 0;
   if (target >= g[last]!) return sign;
 
@@ -1504,6 +1514,14 @@ export function turboPrepareQuery(query: TurboQuantizeResult): TurboPreparedQuer
  * would happily consume a candidate from a different bit width or rotation basis and
  * return a number.
  *
+ * The query's COORDINATES are re-checked for the same reason, and the failure they guard
+ * against is worse than a wrong number. The dot product is bounded by the candidate's
+ * padded length, so a `values` shorter than that (a query rebuilt by hand, or restored
+ * from JSON as a plain array) reads past its own end; every such read is
+ * `undefined -> NaN`, NaN survives {@link finishCosine} to become the score, and sorting a
+ * candidate set by NaN scores is implementation-defined rather than an error. The result
+ * is an arbitrary shortlist with nothing reported anywhere.
+ *
  * @param query - A query prepared by {@link turboPrepareQuery}
  * @param candidate - The quantized candidate to score
  * @returns Estimated cosine similarity in [-1, 1]
@@ -1524,6 +1542,35 @@ export function turboPreparedCosineSimilarity(
     throw new Error("Vectors must use the same rotation seed");
   }
   assertQuantizeResultShape(candidate);
+  // `TurboPreparedQuery` is as plain and serializable as `TurboQuantizeResult`, and the
+  // three scalars above do not cover its coordinates. The dot product below is bounded by
+  // the CANDIDATE's padded length, so a short `query.values` reads past its own end; every
+  // such read is `undefined -> NaN`, NaN survives `finishCosine` to become the score, and a
+  // ranking `sort((a, b) => scores[b] - scores[a])` over NaN is implementation-defined
+  // rather than an error — so the failure surfaces as an arbitrary shortlist with nothing
+  // reported. Checked before the zero early-return, which would otherwise let a malformed
+  // zero query through unchecked.
+  if (!(query.values instanceof Float64Array)) {
+    throw new Error(
+      `TurboQuant prepared query values must be a Float64Array, got ` +
+        `${Object.prototype.toString.call(query.values)}. A prepared query restored from JSON ` +
+        `must be rebuilt with turboPrepareQuery, not reconstructed by hand.`
+    );
+  }
+  if (query.values.length !== candidate.paddedDimensions) {
+    throw new Error(
+      `TurboQuant prepared query covers ${query.values.length} padded coordinates, but the ` +
+        `candidate has ${candidate.paddedDimensions}. Rebuild the query with turboPrepareQuery.`
+    );
+  }
+  // The same defect on the other field, for the reason `assertQuantizeResultShape` states
+  // for `norm`: `turboPrepareQuery` only ever emits a `Math.sqrt` result or 0, so a
+  // negative or non-finite `codeNorm` is corrupt rather than merely odd.
+  if (!Number.isFinite(query.codeNorm) || query.codeNorm < 0) {
+    throw new Error(
+      `TurboQuant prepared query codeNorm must be a finite, non-negative number, got ${query.codeNorm}`
+    );
+  }
 
   if (query.codeNorm === 0 || candidate.norm === 0) return 0;
   const { values, codeNorm } = reconstructRotatedCodes(candidate);
