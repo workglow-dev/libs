@@ -292,6 +292,31 @@ describe("TurboQuantize", () => {
       expect(first16).toEqual([
         16, -22, -15, -30, -17, -17, 35, 8, -34, -13, -31, -71, 8, 27, -10, -13,
       ]);
+
+      // INT16 over the same fixture. The int8 block above pins the 255-level loading
+      // factor; nothing pinned the 65535-level one at all until this.
+      //
+      // Both literals are what make these byte sequences ENGINE-INDEPENDENT rather than
+      // coincidentally equal. `optimalLoadingFactor` used to solve both by ternary search
+      // over `quantizerDistortion`, which calls `Math.exp` ~1200 times per evaluation —
+      // and ECMAScript leaves `Math.exp` implementation-approximated. Measured, the two
+      // engines this repo runs its tests under disagree at 255 levels:
+      // 3.9206374677710735810 under V8 (vitest on Node) against 3.9206374677728756950
+      // under JSC (`bun test`), a relative 4.6e-13. That is small enough to agree on
+      // today's bytes and not small enough to guarantee it, since a code is
+      // `Math.round((clamped / scale) * max)` and a value sitting near a half-integer can
+      // flip either way. `SOLVED_LOADING_FACTORS` tabulates both so the grid is fixed.
+      //
+      // THIS TEST MUST BE RUN UNDER BOTH RUNNERS before the pin is believed —
+      // `bun scripts/test.ts unit util vitest` AND `bun scripts/test.ts unit util bun`.
+      // Passing under one says nothing about the other, which is the entire property.
+      const first8Int16 = Array.from(
+        turboQuantizeToTypedArray(v64, TensorType.INT16, {
+          seed: 42,
+          padToPowerOf2: undefined,
+        }).slice(0, 8) as Int16Array
+      );
+      expect(first8Int16).toEqual([2700, -3745, -2606, -5122, -2817, -2863, 5901, 1356]);
     });
 
     test("should reject a decode whose codes are not a Uint8Array", () => {

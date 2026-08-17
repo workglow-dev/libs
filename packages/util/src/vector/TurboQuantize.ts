@@ -218,7 +218,8 @@ const TURBO_QUANTIZE_VERSION = 1;
  * Every entry point pads the input to `turboPaddedLength(dimensions)` and allocates several
  * `Float64Array`s of that length as working buffers, so peak cost is a multiple of the
  * padded length rather than the single buffer a naive estimate assumes: measured peak RSS
- * growth is 32 MB at d = 2^20, about 32 bytes per padded coordinate. 2^20 is already ~340x
+ * growth is 25 MB at d = 2^20, about 25 bytes per padded coordinate (down from 31 MB when
+ * the encoder's code buffer was a boxed `number[]`). 2^20 is already ~340x
  * the largest real embedding (3072-dim). Rejecting anything larger keeps a bogus or
  * hostile `dimensions` value from exhausting memory or spinning in the padding loop.
  */
@@ -540,6 +541,27 @@ const GAUSSIAN_LOADING_FACTORS = [
   0.7979, 1.4937, 2.0517, 2.5138, 2.9156, 3.2792, 3.6068, 3.927,
 ] as const;
 
+/**
+ * The two level counts the signed typed-array path reaches — `2 * max + 1` for int8 and
+ * int16 — which are never powers of two and so are absent from the table above.
+ *
+ * Literals rather than solver output because the solver is not engine-independent.
+ * {@link quantizerDistortion} calls `Math.exp` ~1200 times per evaluation and ECMAScript
+ * leaves `Math.exp` implementation-approximated; this repo runs the same tests under JSC
+ * (`bun test`) and V8 (vitest under Node), and measured here the two disagree in the last
+ * digits at 255 levels — 3.9206374677710735810 on Node v22 against 3.9206374677728756950
+ * on Bun 1.3, a relative 4.6e-13. (65535 happens to agree.) The golden-bytes test asserts
+ * an exact byte sequence derived from this constant, so leaving it engine-dependent makes
+ * that pin weaker than it reads.
+ *
+ * Regenerate by running the ternary search in {@link optimalLoadingFactor} with this table
+ * bypassed and printing `.toPrecision(20)`.
+ */
+const SOLVED_LOADING_FACTORS: Readonly<Record<number, number>> = {
+  255: 3.9206374677710736,
+  65535: 5.938238613625818,
+};
+
 /** Standard normal density. */
 function gaussianPdf(x: number): number {
   return Math.exp(-(x * x) / 2) / Math.sqrt(2 * Math.PI);
@@ -583,10 +605,11 @@ const loadingFactorCache = new Map<number, number>();
  * Outermost reconstruction level of the MSE-optimal uniform quantizer for a unit-variance
  * Gaussian with `levels` levels.
  *
- * Power-of-two level counts up to 256 come from {@link GAUSSIAN_LOADING_FACTORS}. Anything
- * else is solved numerically by minimizing {@link quantizerDistortion} — needed by
- * {@link turboQuantizeToTypedArray}, whose effective level count is `2 * max + 1`
- * (255 for int8, 65535 for int16) and so is never in the table.
+ * Power-of-two level counts up to 256 come from {@link GAUSSIAN_LOADING_FACTORS}, and the
+ * two counts {@link turboQuantizeToTypedArray} reaches — `2 * max + 1`, so 255 for int8 and
+ * 65535 for int16 — from {@link SOLVED_LOADING_FACTORS}, which tabulates what the search
+ * below converges to so the answer cannot vary with the JavaScript engine's `Math.exp`.
+ * Anything else is solved numerically by minimizing {@link quantizerDistortion}.
  *
  * The numeric solution converges onto the tabulated curve as the grid gets finer, and is
  * loosest at the coarse end where the distortion minimum is shallowest:
@@ -611,6 +634,13 @@ function optimalLoadingFactor(levels: number): number {
     bitsIndex <= GAUSSIAN_LOADING_FACTORS.length
   ) {
     return GAUSSIAN_LOADING_FACTORS[bitsIndex - 1];
+  }
+  // `hasOwn` rather than a bare index, for the same reason the target-type guard in
+  // `turboQuantizeToTypedArray` uses it: a bare index resolves inherited
+  // `Object.prototype` keys, so `levels` reaching a prototype member would return a
+  // function rather than a loading factor.
+  if (Object.hasOwn(SOLVED_LOADING_FACTORS, levels)) {
+    return SOLVED_LOADING_FACTORS[levels]!;
   }
 
   const cached = loadingFactorCache.get(levels);
@@ -965,8 +995,12 @@ function dequantizeScalar(code: number, scale: number, levels: number): number {
 /**
  * Packs an array of codes (each in [0, 2^bits - 1]) into a compact Uint8Array.
  * For sub-byte bit widths, multiple codes share a byte.
+ *
+ * `ArrayLike<number>` rather than `number[]`: only `.length` and `codes[i]` are read, so a
+ * `Uint8Array` works and lets the encode path skip a boxed array of one element per padded
+ * coordinate — the same reasoning {@link unpackCodes} states for the decode path.
  */
-function packCodes(codes: number[], bits: number): Uint8Array {
+function packCodes(codes: ArrayLike<number>, bits: number): Uint8Array {
   const totalBits = codes.length * bits;
   const numBytes = Math.ceil(totalBits / 8);
   const packed = new Uint8Array(numBytes);
@@ -1093,7 +1127,8 @@ export function turboQuantize(
 
   // Step 3: Scalar quantization per coordinate (all paddedLen)
   const { levels, scale } = getQuantizationParams(bits, paddedLen);
-  const codes: number[] = new Array(paddedLen);
+  // `assertBits` caps `bits` at 8, so every code is in [0, 255] and fits a byte.
+  const codes = new Uint8Array(paddedLen);
   for (let i = 0; i < paddedLen; i++) {
     codes[i] = quantizeScalar(rotated[i], scale, levels);
   }
