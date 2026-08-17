@@ -82,6 +82,7 @@
     "node-llama-cpp": "catalog:",
     "pg": "catalog:",
     "playwright": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "workglow": "workspace:*"
   }
 }

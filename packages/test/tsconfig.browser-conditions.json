@@ -1,0 +1,34 @@
+{
+  // The only compiler run in the repo that resolves a provider or meta-package
+  // subpath under the `browser` condition. Kept as its own program rather than
+  // folded into `packages/test`'s, which compiles under NODE conditions.
+  //
+  // No `references`: as `examples/web/tsconfig.json` records, under
+  // `use-source` the project-reference redirect turns `dist/*.d.ts` back into
+  // `src`, and the stubs then read as self-imports.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "customConditions": ["browser"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    // A browser consumer has no Bun/Node ambient globals.
+    "types": [],
+    // The root sets `emitDeclarationOnly`, which conflicts with `noEmit`
+    // unless every emit option is cleared alongside it.
+    "noEmit": true,
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false
+  },
+  "files": [],
+  "include": ["src/browser-conditions/**/*.ts"],
+  // Overridden, NOT inherited: `tsconfig.json` excludes `src/browser-conditions`
+  // so its own `build-types` never compiles the fixture under node conditions
+  // (where `_testOnly` resolves and every negative control becomes `TS2578`).
+  // Inheriting that exclude here would cancel the include above and compile
+  // nothing at all, silently.
+  "exclude": ["dist", "node_modules"],
+  "references": []
+}

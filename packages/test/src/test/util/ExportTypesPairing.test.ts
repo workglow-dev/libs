@@ -1068,6 +1068,74 @@ describe("browser consumers opt into the browser condition", () => {
     ) as { compilerOptions?: { customConditions?: readonly string[] } };
     expect(tsconfig.compilerOptions?.customConditions).toContain("browser");
   });
+
+  /**
+   * The type-only fixture that COMPILES the browser condition, and the two
+   * halves of the wiring that make it run.
+   *
+   * Everything else in this file and in `ExportBarrelParity.test.ts` reads
+   * manifests and barrels as TEXT. An `export *` dropped from BOTH halves of a
+   * pair keeps barrel parity, keeps the manifest self-consistent and builds
+   * clean, so only a compiler resolving the browser declarations catches it.
+   *
+   * The expected set is DERIVED, with no exemption list, so a new provider that
+   * ships a browser split fails until the fixture names it.
+   */
+  describe("provider ai barrels", () => {
+    const root = workspaceRoot();
+    const manifests = manifestsWithExports(root);
+    const fixturePath = "packages/test/src/browser-conditions/browserConditionResolution.types.ts";
+    const tsconfigPath = "packages/test/tsconfig.browser-conditions.json";
+
+    /**
+     * Every specifier whose subpath really splits browser from node, scoped to
+     * `providers/*` and `packages/workglow`.
+     *
+     * `packages/*` is out of scope on purpose: `examples/web` already compiles
+     * a slice of it under `customConditions`, and the two-barrel convention
+     * this fixture polices lives under `providers/`.
+     */
+    function browserSplitSpecifiers(): string[] {
+      const found: string[] = [];
+      for (const manifest of manifests) {
+        const dir = dirname(manifest.relative);
+        if (!dir.startsWith("providers/") && dir !== "packages/workglow") continue;
+        if (manifest.name === undefined) continue;
+        for (const [subpath, value] of Object.entries(manifest.exports)) {
+          if (!subpath.startsWith(".")) continue;
+          if (subpathSplit(value) !== "splits") continue;
+          found.push(manifest.name + subpath.slice(1));
+        }
+      }
+      return found.sort();
+    }
+
+    it("compiles every provider and meta-package browser split under the browser condition", () => {
+      const tsconfig = JSON.parse(
+        stripJsonComments(readFileSync(join(root.dir, tsconfigPath), "utf8"))
+      ) as { compilerOptions?: { customConditions?: readonly string[]; noEmit?: boolean } };
+      // Without these two the program is a second node-conditions compile that
+      // would emit into `dist` and resolve every negative control.
+      expect(tsconfig.compilerOptions?.customConditions).toContain("browser");
+      expect(tsconfig.compilerOptions?.noEmit).toBe(true);
+
+      const expected = browserSplitSpecifiers();
+      // Anti-vacuity: a derivation that found nothing satisfies "none missing".
+      expect(expected.length).toBeGreaterThan(10);
+      const named = new Set(specifiersIn(readFileSync(join(root.dir, fixturePath), "utf8")));
+      expect(expected.filter((specifier) => !named.has(specifier))).toEqual([]);
+    });
+
+    it("runs the browser-condition program from a script CI invokes", () => {
+      // Either half alone silently disables the check: a script nothing calls,
+      // or a workflow step naming a script that does not exist.
+      const manifest = readFileSync(join(root.dir, "package.json"), "utf8");
+      expect(JSON.parse(manifest).scripts["typecheck:browser"]).toContain(tsconfigPath);
+      expect(readFileSync(join(root.dir, ".github/workflows/test.yml"), "utf8")).toContain(
+        "bun run typecheck:browser"
+      );
+    });
+  });
 });
 
 /**

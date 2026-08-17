@@ -451,6 +451,14 @@ to the consumer's tsconfig. Browser consumers must opt in:
 need the same line — without it, `import { _testOnly } from "@workglow/openai/ai"` compiles with
 full autocomplete and is `undefined` at runtime.
 
+CI proves that condition still resolves. The `Typecheck the browser condition` step in
+`test.yml`'s `typecheck-budget` job runs `bun run typecheck:browser`, which compiles
+`packages/test/src/browser-conditions/browserConditionResolution.types.ts` under
+`customConditions: ["browser"]` — the only compiler run in CI that resolves a provider or
+meta-package subpath that way. Every other browser-split guard reads manifests and barrels as
+text, so an `export *` dropped from **both** halves of a pair passes them all and surfaces only
+in a downstream browser app.
+
 ---
 
 ## Developer Workflow
