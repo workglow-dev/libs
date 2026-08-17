@@ -1,6 +1,6 @@
-# Changelog
+# @workglow/bootstrap
 
-## 0.3.39
+## 0.3.45
 
 ### Features
 
