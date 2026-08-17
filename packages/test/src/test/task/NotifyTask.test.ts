@@ -98,6 +98,32 @@ function makeContext(): IExecuteContext {
   };
 }
 
+/**
+ * A registry whose enforcer grants `network:private` for exactly `resources`,
+ * on top of the browser profile (which grants `network:http` and `credential`
+ * but deliberately not `network:private`).
+ *
+ * A declaration on a URL that does not itself read as private is only as good
+ * as the grant grading it, so every case exercising that shape needs one — and
+ * they need to agree on how it is built, or "the grant is what authorizes this"
+ * becomes three slightly different claims.
+ */
+function grantingRegistry(resources: readonly string[]): ServiceRegistry {
+  const browserPolicy = createProfilePolicy("browser");
+  const registry = new ServiceRegistry(new Container());
+  registry.register(ENTITLEMENT_ENFORCER, () =>
+    createPolicyEnforcer({
+      deny: browserPolicy.deny,
+      grant: [
+        ...browserPolicy.grant,
+        { id: Entitlements.NETWORK_PRIVATE, resources: [...resources] },
+      ],
+      ask: browserPolicy.ask,
+    })
+  );
+  return registry;
+}
+
 describe("Webhook notification tasks", () => {
   let prevSafeFetch: SafeFetchFn;
 
@@ -2000,16 +2026,23 @@ describe("Webhook notification tasks", () => {
     // The suppression follows the declaration for the same reason the
     // transport does: the URL alone cannot say whether the host is internal,
     // so a caller who declared it MAY be private never gets its reply back.
+    //
+    // A public-reading URL only receives the widening when a graded grant says
+    // so, hence the registry — the suppression itself is keyed on the
+    // DECLARATION, which is what this case pins.
     test("a declared private destination never echoes its body, even for a public-looking hostname", async () => {
       mockFetch.mockImplementation(() =>
         Promise.resolve(new Response("AKIAEXAMPLESECRET", { status: 200 }))
       );
 
-      const result = await webhookNotify({
-        url: WEBHOOK_URL,
-        payload: {},
-        allow_private_destination: true,
-      });
+      const result = await new WebhookNotifyTask().run(
+        {
+          url: WEBHOOK_URL,
+          payload: {},
+          allow_private_destination: true,
+        },
+        { registry: grantingRegistry(["https://example.com/*"]) }
+      );
 
       expect(result.response).toBe("");
       expect(JSON.stringify(result)).not.toContain("AKIA");
@@ -2054,13 +2087,17 @@ describe("Webhook notification tasks", () => {
     // deriving `allowPrivate` from that classification leaves the declaration
     // unable to reach the destination it declares. What authorizes the
     // widening is the `network:private` GRANT, re-checked against the URL
-    // actually resolved — see the graph-root enforcement cases below.
+    // actually resolved — see the graph-root enforcement cases below. For a
+    // public-reading URL that grant is REQUIRED, so this case supplies one.
     test("a declared private destination widens the transport even for a public-looking hostname", async () => {
-      await webhookNotify({
-        url: WEBHOOK_URL,
-        payload: {},
-        allow_private_destination: true,
-      });
+      await new WebhookNotifyTask().run(
+        {
+          url: WEBHOOK_URL,
+          payload: {},
+          allow_private_destination: true,
+        },
+        { registry: grantingRegistry(["https://example.com/*"]) }
+      );
 
       expect(lastCall().options.allowPrivate).toBe(true);
       expect(lastCall().options.privateResourceScopes).toEqual(["https://example.com/*"]);
@@ -2073,7 +2110,11 @@ describe("Webhook notification tasks", () => {
       await webhookNotify({ url: PRIVATE_URL, payload: {}, allow_private_destination: true });
       expect(lastCall().options.privateResourceScopes).toEqual([urlResourcePattern(PRIVATE_URL)]);
 
-      await webhookNotify({ url: WEBHOOK_URL, payload: {}, allow_private_destination: true });
+      // The public-reading half needs a graded grant to be widened at all.
+      await new WebhookNotifyTask().run(
+        { url: WEBHOOK_URL, payload: {}, allow_private_destination: true },
+        { registry: grantingRegistry(["https://example.com/*"]) }
+      );
       expect(lastCall().options.privateResourceScopes).toEqual([urlResourcePattern(WEBHOOK_URL)]);
     });
 
@@ -2918,18 +2959,7 @@ describe("Webhook notification tasks", () => {
     // The fix is a gate, not a blanket refusal: the same run succeeds once the
     // destination is actually granted.
     test("a granted network:private scope permits the same run", async () => {
-      const browserPolicy = createProfilePolicy("browser");
-      const registry = new ServiceRegistry(new Container());
-      registry.register(ENTITLEMENT_ENFORCER, () =>
-        createPolicyEnforcer({
-          deny: browserPolicy.deny,
-          grant: [
-            ...browserPolicy.grant,
-            { id: Entitlements.NETWORK_PRIVATE, resources: ["http://169.254.169.254/*"] },
-          ],
-          ask: browserPolicy.ask,
-        })
-      );
+      const registry = grantingRegistry(["http://169.254.169.254/*"]);
 
       const graph = new TaskGraph();
       graph.addTask(new WebhookNotifyTask({ id: "notify", defaults: { payload: { ping: true } } }));
@@ -2945,18 +2975,7 @@ describe("Webhook notification tasks", () => {
     });
 
     test("a grant scoped elsewhere does not cover the resolved destination", async () => {
-      const browserPolicy = createProfilePolicy("browser");
-      const registry = new ServiceRegistry(new Container());
-      registry.register(ENTITLEMENT_ENFORCER, () =>
-        createPolicyEnforcer({
-          deny: browserPolicy.deny,
-          grant: [
-            ...browserPolicy.grant,
-            { id: Entitlements.NETWORK_PRIVATE, resources: ["http://localhost:*"] },
-          ],
-          ask: browserPolicy.ask,
-        })
-      );
+      const registry = grantingRegistry(["http://localhost:*"]);
 
       const graph = new TaskGraph();
       graph.addTask(new WebhookNotifyTask({ id: "notify", defaults: { payload: {} } }));
@@ -3015,30 +3034,20 @@ describe("Webhook notification tasks", () => {
     // A gate, not a blanket relaxation: the same post runs once the declared
     // origin is granted.
     test("a grant scoped to the declared origin permits a public-looking private destination", async () => {
-      const browserPolicy = createProfilePolicy("browser");
-      const registry = new ServiceRegistry(new Container());
-      registry.register(ENTITLEMENT_ENFORCER, () =>
-        createPolicyEnforcer({
-          deny: browserPolicy.deny,
-          grant: [
-            ...browserPolicy.grant,
-            { id: Entitlements.NETWORK_PRIVATE, resources: ["https://example.com/*"] },
-          ],
-          ask: browserPolicy.ask,
-        })
-      );
-
       await expect(
         new WebhookNotifyTask().run(
           { url: WEBHOOK_URL, payload: {}, allow_private_destination: true },
-          { registry }
+          { registry: grantingRegistry(["https://example.com/*"]) }
         )
       ).resolves.toBeDefined();
       expect(lastCall().options.allowPrivate).toBe(true);
     });
 
-    // The contract is opt-in: with no enforcer registered there is no policy to
-    // satisfy, so behaviour is unchanged.
+    // A declaration buys only the widening the URL itself already declares.
+    // `127.0.0.1` reads private on its own, so it is visible in the operator's
+    // configured value and the flag authorizes nothing a reader of that
+    // configuration could not already see — which is what `FetchUrlTask` does
+    // for a declared private URL too.
     test("no registered enforcer leaves a declared private post working", async () => {
       const result = await new WebhookNotifyTask().run(
         { url: "http://127.0.0.1:9200/ingest", payload: {}, allow_private_destination: true },
@@ -3047,6 +3056,54 @@ describe("Webhook notification tasks", () => {
 
       expect(result.status).toBe(200);
       expect(lastCall().url).toBe("http://127.0.0.1:9200/ingest");
+    });
+
+    // The case `19354ebaa` newly widened, and the one this gate exists for.
+    // Under split-horizon DNS `hooks.mycorp.com` reads public to `classifyUrl`
+    // (no literal IP, no reserved suffix) but resolves to 10.1.2.3, so the
+    // declaration is invisible in the configured `url` — and what it buys is a
+    // bypass of `SafeFetch.server.ts`'s resolved-address check, the only
+    // DNS-rebinding defence in the stack. With no enforcer able to grade the
+    // `network:private` grant, nothing authorized that, so the post is refused.
+    test("a public-looking declared private destination is refused when no enforcer can grade it", async () => {
+      const error = (await new WebhookNotifyTask()
+        .run(
+          { url: WEBHOOK_URL, payload: {}, allow_private_destination: true },
+          { registry: new ServiceRegistry(new Container()) }
+        )
+        .catch((e: unknown) => e)) as PermanentJobError;
+
+      expect(error).toBeInstanceOf(PermanentJobError);
+      expect(error.code).toBe(FetchUrlErrorCode.PRIVATE_DENIED);
+      expect(error.message).toContain("entitlement enforcer");
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    // Scoped, not blanket. A statically private URL is unaffected by the gate —
+    // there is no default enforcer registered anywhere, so failing closed on
+    // every declaration would make the flag inert for approximately every
+    // current user and remove the stock "post to my internal webhook" case.
+    test("a statically private declared destination still posts with no enforcer registered", async () => {
+      const result = await new WebhookNotifyTask().run(
+        { url: "http://10.1.2.3:9200/ingest", payload: {}, allow_private_destination: true },
+        { registry: new ServiceRegistry(new Container()) }
+      );
+
+      expect(result.status).toBe(200);
+      expect(lastCall().options.allowPrivate).toBe(true);
+    });
+
+    // The split-horizon feature `19354ebaa` added survives the gate: a grant is
+    // exactly what makes the public-looking destination reachable again.
+    test("a grant makes the public-looking destination reachable again", async () => {
+      const result = await new WebhookNotifyTask().run(
+        { url: WEBHOOK_URL, payload: {}, allow_private_destination: true },
+        { registry: grantingRegistry(["https://example.com/*"]) }
+      );
+
+      expect(result.status).toBe(200);
+      expect(lastCall().url).toBe(WEBHOOK_URL);
+      expect(lastCall().options.allowPrivate).toBe(true);
     });
   });
 });

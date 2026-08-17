@@ -23,9 +23,9 @@
  * poisoned.
  *
  * Loopback is private address space, so every case sets
- * `allow_private_destination`. No entitlement enforcer is registered, so
- * `assertPrivateDestinationGranted` has no policy to satisfy and the post
- * proceeds.
+ * `allow_private_destination`. No entitlement enforcer is registered, and none
+ * is needed: every case targets a loopback URL, which reads private on its own,
+ * so the declaration authorizes no widening past what the URL already states.
  */
 
 import { PermanentJobError, RetryableJobError } from "@workglow/job-queue";

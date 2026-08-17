@@ -84,7 +84,7 @@ const inputSchema = {
       default: false,
       title: "Allow Private Destination",
       description:
-        "Permit posting to a private/internal/loopback destination — including a public-looking hostname that resolves into private address space. Requires the `network:private` entitlement, re-checked at execute time against the URL actually resolved. A declared private destination's reply body and reason phrase are never surfaced.",
+        "Permit posting to a private/internal/loopback destination — including a public-looking hostname that resolves into private address space. Requires the `network:private` entitlement, re-checked at execute time against the URL actually resolved. A destination whose URL does not already read as private additionally requires a registered entitlement enforcer to grant it. A declared private destination's reply body and reason phrase are never surfaced.",
     },
     url_credential_key: {
       type: "string",

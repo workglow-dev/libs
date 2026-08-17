@@ -428,10 +428,15 @@ export interface WebhookPostRequest {
    * {@link assertPrivateDestinationGranted}.
    *
    * It governs the transport whatever the URL's spelling, so it also covers a
-   * public-looking hostname that resolves into private space. The invariant
-   * that follows: A CALLER WHO DECLARED THE DESTINATION MAY BE PRIVATE NEVER
-   * GETS ITS REPLY BACK — neither body nor reason phrase — because the URL
-   * alone cannot say whether it was.
+   * public-looking hostname that resolves into private space — but only as far
+   * as the URL itself already declares. A private-reading URL is widened by the
+   * declaration alone; a PUBLIC-reading one needs a graded `network:private`
+   * grant, since there the widening is invisible in the configured value and
+   * also disables the transport's DNS-resolution check.
+   *
+   * The invariant that follows: A CALLER WHO DECLARED THE DESTINATION MAY BE
+   * PRIVATE NEVER GETS ITS REPLY BACK — neither body nor reason phrase —
+   * because the URL alone cannot say whether it was.
    */
   readonly allowPrivateDestination: boolean;
   /**
@@ -694,15 +699,19 @@ async function readBodyText(
  * RESOLVES private, which is the case the static classification cannot see and
  * the one `network:private` exists to authorize.
  *
- * No enforcer registered means no policy to satisfy, and the post proceeds.
+ * Returns whether a policy actually GRADED this destination. `"unenforced"` is
+ * not `"allowed"`: with no enforcer registered there is no policy to satisfy,
+ * and it is the caller that decides what a declaration may buy in that case.
  */
+export type PrivateDestinationAuthorization = "granted" | "unenforced";
+
 export async function assertPrivateDestinationGranted(
   registry: ServiceRegistry | undefined,
   url: string,
   label: string
-): Promise<void> {
+): Promise<PrivateDestinationAuthorization> {
   if (registry === undefined || !registry.has(ENTITLEMENT_ENFORCER)) {
-    return;
+    return "unenforced";
   }
   const denied = await registry.get(ENTITLEMENT_ENFORCER).checkAll({
     entitlements: [
@@ -721,6 +730,7 @@ export async function assertPrivateDestinationGranted(
       { url: redactWebhookUrl(url) }
     );
   }
+  return "granted";
 }
 
 /**
@@ -826,9 +836,15 @@ export function withJsonContentType(
  *
  * The declaration — not the URL's static classification — is what widens the
  * transport, so a public-looking hostname resolving into private space is
- * reachable exactly when the grant covers it. Every request receiving the
- * widened transport is therefore entitlement-checked, which the classification
- * could not do for a name it reads as public.
+ * reachable exactly when the grant covers it. What a declaration may buy is
+ * bounded by what the URL itself declares, in two tiers:
+ *
+ * - a URL that reads private on its own is permitted by the declaration alone,
+ *   since the destination is visible in the operator's configured value;
+ * - a URL that reads public requires a GRADED `network:private` grant, because
+ *   there the widening is invisible in configuration and additionally disables
+ *   the transport's DNS-resolution check. With no enforcer registered there is
+ *   nothing able to grade it, so the post is refused.
  *
  * A declared private destination additionally overrides `readSuccessBody` and
  * `includeBodyInError` to `false`, and withholds the reason phrase: those flags
@@ -881,8 +897,28 @@ export async function postWebhookJson(request: WebhookPostRequest): Promise<Webh
   // re-enforces have to be the same string, or the grant that was checked and
   // the reachability that was handed out can diverge.
   const privateScope = urlResourcePattern(url);
-  if (allowPrivate) {
-    await assertPrivateDestinationGranted(request.registry, url, label);
+  const authorization = allowPrivate
+    ? await assertPrivateDestinationGranted(request.registry, url, label)
+    : undefined;
+  // A declaration may widen the transport only as far as the URL itself already
+  // declares. A private-reading URL is visible in the operator's configured
+  // value, so the flag on it authorizes nothing that reading the configuration
+  // would not already show. A public-reading one is the opposite on both
+  // counts: the widening is invisible in configuration, AND it disables the
+  // DNS-resolution check that is the only thing able to see what the static
+  // classifier cannot. That much has to be graded by a policy, so with no
+  // enforcer to grade it the post is refused.
+  if (allowPrivate && !staticallyPrivate && authorization === "unenforced") {
+    throw createFetchUrlJobError(
+      FetchUrlErrorCode.PRIVATE_DENIED,
+      `Refusing to post ${label} to ${redactWebhookUrl(url)}: 'allow_private_destination' is set ` +
+        `on a destination whose URL does not itself read as private, which widens the transport ` +
+        `past what the URL declares, and no entitlement enforcer is registered to grade the ` +
+        `'network:private' grant for it. Register an ENTITLEMENT_ENFORCER granting ` +
+        `'network:private' for this origin, or clear 'allow_private_destination' if the ` +
+        `destination is public.`,
+      { url: redactWebhookUrl(url) }
+    );
   }
   // Validated BEFORE the signal is armed, for the same reason the
   // `JSON.stringify` guard below exists: `AbortSignal.timeout` throws a bare
