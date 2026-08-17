@@ -68,9 +68,9 @@ await delay({}, { delay: 1000 });
 > `defaults` key — see the [WebhookNotifyTask](#webhooknotifytask) examples.
 
 ```typescript
-import { fetch, debugLog, delay } from "@workglow/tasks";
+import { fetchUrl, debugLog, delay } from "@workglow/tasks";
 
-const data = await fetch({
+const data = await fetchUrl({
   url: "https://example.com/readme.txt",
   response_type: "text",
 });

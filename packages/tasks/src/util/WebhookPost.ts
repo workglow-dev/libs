@@ -1143,14 +1143,22 @@ export function webhookPrivateEntitlements(
   if (allowPrivate === false) {
     return withCredential;
   }
-  const scoped = !urlFromCredential && typeof url === "string" && url.length > 0;
+  // `scoped` is one decision about the RESOURCE, but it is false in two
+  // unrelated situations — the URL is a credential, or the instance configures
+  // no URL at all — so the reason it reports is a separate, three-way
+  // question. Collapsing them made an unconfigured `url` blame the credential
+  // store, which is the wrong place to look and the wrong fix to attempt.
+  const urlKnown = typeof url === "string" && url.length > 0;
+  const scoped = !urlFromCredential && urlKnown;
   return mergeEntitlements(withCredential, {
     entitlements: [
       {
         id: Entitlements.NETWORK_PRIVATE,
         reason: scoped
           ? "'allow_private_destination' is set, permitting a private/internal destination on the configured `url`"
-          : "'allow_private_destination' is set and the webhook URL comes from the credential store, so the destination is not knowable during entitlement evaluation",
+          : urlFromCredential
+            ? "'allow_private_destination' is set and the webhook URL comes from the credential store, so the destination is not knowable during entitlement evaluation"
+            : "'allow_private_destination' is set and this instance configures no `url`, so the destination arrives as a dataflow or run-input value after entitlements are evaluated and is not knowable here",
         resources: scoped ? [urlResourcePattern(url as string)] : undefined,
       },
     ],

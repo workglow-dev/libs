@@ -888,6 +888,11 @@ describe("Webhook notification tasks", () => {
         expect(validateSchema(taskClass.inputSchema()).valid).toBe(true);
         expect(validateSchema(taskClass.outputSchema()).valid).toBe(true);
       }
+      // The two credential ports on WebhookNotifyTask do different things — one
+      // IS the destination, the other only rides on a header — so a UI that
+      // renders them by title has to be able to tell them apart.
+      const props = WebhookNotifyTask.inputSchema().properties;
+      expect(props.url_credential_key.title).not.toBe(props.credential_key.title);
     });
 
     test("Workflow.slackNotify runs end to end", async () => {
@@ -1006,6 +1011,22 @@ describe("Webhook notification tasks", () => {
       const granted = task.entitlements().entitlements.find((e) => e.id === "network:private");
       expect(granted).toBeDefined();
       expect(granted!.resources).toBeUndefined();
+      expect(granted!.reason).toContain("credential store");
+    });
+
+    // `scoped` is false in two unrelated situations, and only one of them is
+    // about the credential store. This is the other: the instance configures no
+    // `url` at all, so the destination arrives as run-input AFTER entitlements
+    // are graded — the exact shape the graph-root smuggling case constructs.
+    // Blaming the credential store here points at the wrong fix.
+    test("an unconfigured url reports the run-input shape, not a credential store", () => {
+      const task = new WebhookNotifyTask();
+      task.runInputData = { payload: {}, allow_private_destination: true } as any;
+      const granted = task.entitlements().entitlements.find((e) => e.id === "network:private");
+      expect(granted).toBeDefined();
+      expect(granted!.resources).toBeUndefined();
+      expect(granted!.reason).toContain("run-input");
+      expect(granted!.reason).not.toContain("credential store");
     });
 
     // The two credential ports have DIFFERENT consequences for scoping, which

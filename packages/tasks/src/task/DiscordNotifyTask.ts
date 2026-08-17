@@ -79,7 +79,7 @@ const inputSchema = {
     url_credential_key: {
       type: "string",
       format: "credential",
-      title: "Credential Key",
+      title: "Webhook URL Credential Key",
       description:
         "Key to look up in the credential store. The resolved value is the entire webhook URL — the secret itself, not a bearer token — and takes precedence over the url input.",
       "x-ui-hidden": true,
