@@ -59,11 +59,13 @@ backend, say — survives, so those may be installed **before**
 
 The **input resolvers and compactors** do not. `registerInputResolver` /
 `registerInputCompactor` are an unconditional `resolvers.set(formatPrefix, fn)`:
-last writer wins. Nine of the fourteen registrars call them, covering the
-`credential`, `image`, `knowledge-base`, `mcp-server`, `model`,
-`storage:tabular` and `tasks` prefixes. A custom resolver installed **before**
-`bootstrapWorkglow()` is silently replaced by the built-in one, with no warning
-and nothing in the registry to inspect:
+last writer wins. Seven of the fourteen registrars install a resolver, covering
+the `credential`, `image`, `knowledge-base`, `mcp-server`, `model`,
+`storage:tabular` and `tasks` prefixes; six of those install a compactor too.
+`image` is the exception — it hydrates a data URI it cannot compact back to an
+id. A custom resolver installed **before** `bootstrapWorkglow()` is silently
+replaced by the built-in one, with no warning and nothing in the registry to
+inspect:
 
 ```typescript
 // WRONG — bootstrapWorkglow() overwrites this during startup, and every

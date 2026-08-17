@@ -32,10 +32,10 @@ import { registerWorkerManagerDefaults } from "@workglow/util/worker";
  *   explicit registration (a custom storage backend, say) is not overwritten.
  * - **Input resolvers and compactors** do not. `registerInputResolver` /
  *   `registerInputCompactor` are an unconditional `Map.set` — last writer
- *   wins — and nine of the fourteen calls below register one of each. A custom
- *   resolver installed BEFORE this function is silently replaced by the
- *   built-in one, so install custom resolvers AFTER `bootstrapWorkglow()` /
- *   `registerAllDefaults()`.
+ *   wins — and seven of the fourteen calls below install a resolver, six of
+ *   those a compactor too. A custom resolver installed BEFORE this function is
+ *   silently replaced by the built-in one, so install custom resolvers AFTER
+ *   `bootstrapWorkglow()` / `registerAllDefaults()`.
  *
  * The registry is required, never defaulted: this mutates whichever container
  * it is handed, so the target is always stated at the call site. Pass

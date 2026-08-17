@@ -212,7 +212,7 @@ describe("registerAllDefaults", () => {
    * Ordering is invisible at runtime and cannot be asserted by calling the
    * function. `getInputResolvers` SELF-HEALS: handed a registry with no
    * `INPUT_RESOLVERS` map it calls `registerInputResolverDefaults` and carries
-   * on, so moving `registerInputResolverDefaults` after its nine consumers
+   * on, so moving `registerInputResolverDefaults` after its seven consumers
    * produces an identical registry and a green suite — until a resolver map is
    * pre-registered by a caller and the healed one silently replaces it. The
    * source text is the only place the ordering is stated, so it is the only
