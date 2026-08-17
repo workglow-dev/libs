@@ -193,6 +193,25 @@ const INTENTIONAL_NODE_ONLY: ReadonlyMap<string, readonly string[]> = new Map([
   ["providers/xai/src/ai/index.browser.ts", ["_testOnly"]],
 ]);
 
+/**
+ * Names the BROWSER barrel exports and the node barrel deliberately does not.
+ *
+ * Empty, and meant to stay that way. The one real case the both-directions
+ * check found was `Ollama_JobRunFns.browser.ts` re-exporting `getClient`,
+ * `getModelName` and `loadOllamaSDK` from `./Ollama_Client.browser` — and that
+ * line was DEAD, not intentional: `runtime.browser.ts` already does
+ * `export * from "./common/Ollama_Client.browser"`, so all three names reached
+ * `@workglow/ollama/ai-runtime` regardless; `ai/index.browser.ts` never
+ * re-exports the run-fns module, so `@workglow/ollama/ai` never saw them; and
+ * nothing imported them from that path. It was deleted rather than pinned.
+ *
+ * Do NOT add an entry here to silence drift. A browser-only name is the same
+ * defect as a node-only one, mirrored: a browser consumer compiles against a
+ * symbol the node build cannot supply. An entry is a claim that the asymmetry
+ * is deliberate, and the staleness check below holds it to that.
+ */
+const INTENTIONAL_BROWSER_ONLY: ReadonlyMap<string, readonly string[]> = new Map();
+
 interface BarrelPair {
   readonly packageDir: string;
   readonly nodePath: string;
@@ -269,9 +288,17 @@ function barrelPairs(root: string): BarrelPair[] {
   return pairs;
 }
 
-/** Sorted so a failure message is stable across runs. */
+/** Names in `from`'s surface and not in `other`'s. Sorted, so failures are stable. */
+function onlyIn(from: ParsedBarrel, other: ParsedBarrel): string[] {
+  return [...from.surface].filter((name) => !other.surface.has(name)).sort();
+}
+
 function nodeOnly(pair: BarrelPair): string[] {
-  return [...pair.node.surface].filter((name) => !pair.browser.surface.has(name)).sort();
+  return onlyIn(pair.node, pair.browser);
+}
+
+function browserOnly(pair: BarrelPair): string[] {
+  return onlyIn(pair.browser, pair.node);
 }
 
 describe("provider ai barrels", () => {
@@ -295,34 +322,55 @@ describe("provider ai barrels", () => {
     expect(unparseable).toEqual([]);
   });
 
-  it("exports the same surface from both barrels apart from the pinned node-only names", () => {
+  it("exports the same surface from both barrels apart from the pinned exceptions", () => {
+    // Both directions, which is what the title always claimed. A browser-only
+    // name is the same defect mirrored: a browser consumer compiles against a
+    // symbol the node build cannot supply, and the one-direction check said
+    // nothing about it.
     const drift: string[] = [];
     for (const pair of pairs) {
-      const expected = [...(INTENTIONAL_NODE_ONLY.get(pair.browserPath) ?? [])].sort();
-      const actual = nodeOnly(pair);
-      const extra = actual.filter((name) => !expected.includes(name));
-      if (extra.length === 0) continue;
-      drift.push(`${pair.nodePath} exports ${extra.join(", ")} but ${pair.browserPath} does not`);
+      const pinnedNode = [...(INTENTIONAL_NODE_ONLY.get(pair.browserPath) ?? [])].sort();
+      const extraNode = nodeOnly(pair).filter((name) => !pinnedNode.includes(name));
+      if (extraNode.length > 0) {
+        drift.push(
+          `${pair.nodePath} exports ${extraNode.join(", ")} but ${pair.browserPath} does not`
+        );
+      }
+      const pinnedBrowser = [...(INTENTIONAL_BROWSER_ONLY.get(pair.browserPath) ?? [])].sort();
+      const extraBrowser = browserOnly(pair).filter((name) => !pinnedBrowser.includes(name));
+      if (extraBrowser.length > 0) {
+        drift.push(
+          `${pair.browserPath} exports ${extraBrowser.join(", ")} but ${pair.nodePath} does not`
+        );
+      }
     }
     expect(drift).toEqual([]);
   });
 
-  it("keeps the node-only pins free of names that no longer differ", () => {
+  it("keeps the surface pins free of names that no longer differ", () => {
     // Staleness, mirroring `ALLOWED_MISMATCHES` in `ExportTypesPairing.test.ts`:
     // a pin that stops describing a real difference is an exemption nobody
     // asked for, and hides the next omission behind an entry that reads as
     // deliberate.
     const stale: string[] = [];
-    for (const [browserPath, names] of INTENTIONAL_NODE_ONLY) {
-      const pair = pairs.find((candidate) => candidate.browserPath === browserPath);
-      expect(pair, `${browserPath} is pinned but has no barrel pair`).toBeDefined();
-      if (pair === undefined) continue;
-      const actual = nodeOnly(pair);
-      for (const name of names) {
-        if (actual.includes(name)) continue;
-        stale.push(`${browserPath}: "${name}" is pinned node-only but both barrels export it`);
+    const checkStale = (
+      pins: ReadonlyMap<string, readonly string[]>,
+      side: (pair: BarrelPair) => string[],
+      label: string
+    ): void => {
+      for (const [browserPath, names] of pins) {
+        const pair = pairs.find((candidate) => candidate.browserPath === browserPath);
+        expect(pair, `${browserPath} is pinned but has no barrel pair`).toBeDefined();
+        if (pair === undefined) continue;
+        const actual = side(pair);
+        for (const name of names) {
+          if (actual.includes(name)) continue;
+          stale.push(`${browserPath}: "${name}" is pinned ${label} but both barrels export it`);
+        }
       }
-    }
+    };
+    checkStale(INTENTIONAL_NODE_ONLY, nodeOnly, "node-only");
+    checkStale(INTENTIONAL_BROWSER_ONLY, browserOnly, "browser-only");
     expect(stale).toEqual([]);
   });
 });
@@ -413,5 +461,46 @@ describe("sibling re-export detection", () => {
 
   it("does not treat a re-export of a different module as one", () => {
     expect(isSiblingReExport(parseBarrel('export * from "./ai/index";\n'), "ai")).toBe(false);
+  });
+
+  /**
+   * The comparison itself, in both directions. No pair in the tree differs
+   * either way once the dead ollama re-export is gone, so the drift branches
+   * would otherwise ship untested — and the browser-only one is NEW, so the
+   * first case below is the go-red proof: the old one-direction check returned
+   * `[]` for exactly this input.
+   */
+  describe("surface comparison", () => {
+    function pairOf(nodeText: string, browserText: string): BarrelPair {
+      return {
+        packageDir: "providers/p",
+        nodePath: "providers/p/src/ai/index.ts",
+        browserPath: "providers/p/src/ai/index.browser.ts",
+        node: parseBarrel(nodeText),
+        browser: parseBarrel(browserText),
+      };
+    }
+
+    it("reports a name only the browser barrel exports", () => {
+      const pair = pairOf('export * from "./A";\n', 'export * from "./A";\nexport * from "./B";\n');
+      expect(browserOnly(pair)).toEqual(['* from "./B"']);
+      // The half the one-direction check could not see.
+      expect(nodeOnly(pair)).toEqual([]);
+    });
+
+    it("reports a name only the node barrel exports", () => {
+      const pair = pairOf('export * from "./A";\nexport * from "./B";\n', 'export * from "./A";\n');
+      expect(nodeOnly(pair)).toEqual(['* from "./B"']);
+      expect(browserOnly(pair)).toEqual([]);
+    });
+
+    it("says nothing when the surfaces match", () => {
+      const pair = pairOf(
+        'export * from "./A";\nexport { thing } from "./B";\n',
+        'export { thing } from "./B";\nexport * from "./A";\n'
+      );
+      expect(nodeOnly(pair)).toEqual([]);
+      expect(browserOnly(pair)).toEqual([]);
+    });
   });
 });

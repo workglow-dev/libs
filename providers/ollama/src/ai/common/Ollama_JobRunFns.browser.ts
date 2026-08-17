@@ -26,8 +26,6 @@ import { createOllamaTextRewriterStream } from "./Ollama_TextRewriter";
 import { createOllamaTextSummaryStream } from "./Ollama_TextSummary";
 import { createOllamaToolCallingStream } from "./Ollama_ToolCalling";
 
-export { getClient, getModelName, loadOllamaSDK } from "./Ollama_Client.browser";
-
 function buildBrowserToolCallingMessages(input: ToolCallingTaskInput): Array<{
   role: string;
   content: string;
