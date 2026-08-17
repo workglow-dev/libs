@@ -231,8 +231,10 @@ function browserFilesUnder(root: string, dir: string, out: string[]): void {
  *
  * That shape is in parity by construction — it IS the node surface — and it is
  * the shape this convention wants where a package has no platform-specific
- * source (`providers/llamacpp-server`, `providers/stable-diffusion-server`).
- * Comparing it would report the node file's every other statement as drift.
+ * source. `providers/openrouter/src/ai/runtime.browser.ts` is the one live
+ * instance: the two server providers that used to be the example no longer
+ * have a browser entry at all. Comparing it would report the node file's every
+ * other statement as drift.
  */
 function isSiblingReExport(browser: ParsedBarrel, nodeStem: string): boolean {
   return browser.surface.size === 1 && browser.surface.has(`* from "./${nodeStem}"`);
