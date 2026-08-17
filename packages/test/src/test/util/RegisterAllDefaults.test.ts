@@ -48,6 +48,7 @@ import {
   TELEMETRY_PROVIDER,
   WORKER_MANAGER,
 } from "@workglow/util";
+import { registerImageDefaults } from "@workglow/util/media";
 import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../../../..");
@@ -251,5 +252,59 @@ describe("registerAllDefaults", () => {
     for (const consumer of consumers) {
       expect(callOrder.indexOf(consumer), consumer).toBeGreaterThan(lastPrimitive);
     }
+  });
+
+  /**
+   * `registerImageDefaults` does not live in the same JS bundle as the registry
+   * it is handed. `@workglow/util/media` is built separately
+   * (`bun build --target=node --packages=external ./src/media-node.ts`), and
+   * `--packages=external` externalizes bare specifiers only — `media-node.ts`
+   * reaches `di/ServiceRegistry` through a RELATIVE import, so
+   * `dist/media-node.js` carries its own inlined `globalContainer` and its own
+   * `INPUT_RESOLVERS` token object.
+   *
+   * The call lands in the caller's map only because `ServiceRegistry` keys the
+   * container by `token.id`, a plain string. Rename that id in one bundle and
+   * the two silently become two maps: the `image` resolver registers into a
+   * registry nothing reads, and a `format: "image"` port gets the raw id string
+   * back with no error anywhere.
+   *
+   * Under `bun run use-source` both entries resolve to the same module and the
+   * property is vacuously true — which is exactly why it is pinned by ID rather
+   * than by comparing module instances. A green source-mode run is not proof;
+   * the dist-mode run is.
+   */
+  describe("the cross-bundle registrar contract", () => {
+    it("the resolver-map token is keyed by a stable string id", () => {
+      expect(INPUT_RESOLVERS.id).toBe("task.input.resolvers");
+      expect(INPUT_COMPACTORS.id).toBe("task.input.compactors");
+    });
+
+    it("registerImageDefaults from @workglow/util/media reaches a registry built from @workglow/util", () => {
+      const registry = bareRegistry();
+      registerImageDefaults(registry);
+      expect(typeof getInputResolvers(registry).get("image")).toBe("function");
+    });
+
+    it("registerAllDefaults installs that same image resolver", () => {
+      const direct = bareRegistry();
+      registerImageDefaults(direct);
+
+      const viaDefaults = bareRegistry();
+      registerAllDefaults(viaDefaults);
+
+      expect(getInputResolvers(viaDefaults).get("image")).toBe(
+        getInputResolvers(direct).get("image")
+      );
+    });
+
+    it("the harness populated the image resolver on the process-wide map", () => {
+      // The harness-level property: the no-argument `getInputResolvers()` is
+      // what `InputResolver` consults, and this was FALSE before this PR under
+      // dist resolution — the old `bootstrapTestRegistry` called
+      // `registerImageDefaults()` with no argument, landing it on the media
+      // bundle's private registry instead. Vacuous under `use-source`.
+      expect(getInputResolvers().has("image")).toBe(true);
+    });
   });
 });
