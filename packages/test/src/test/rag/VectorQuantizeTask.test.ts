@@ -5,8 +5,10 @@
  */
 
 import { vectorQuantize } from "@workglow/ai";
+import { InMemoryVectorStorage, StorageValidationError } from "@workglow/storage";
 import { setLogger } from "@workglow/util";
-import { TensorType } from "@workglow/util/schema";
+import type { DataPortSchemaObject } from "@workglow/util/schema";
+import { TensorType, TypedArraySchema, turboPaddedLength } from "@workglow/util/schema";
 import { getTestingLogger } from "@workglow/util/test";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
@@ -83,6 +85,40 @@ async function turboOf(v: Float32Array): Promise<Int8Array> {
     turboPadToPowerOf2: true,
   });
   return result.vector as Int8Array;
+}
+
+/**
+ * Minimal vector-store fixtures for the round-trip case below, modelled on the storage
+ * package's own `InMemoryVectorStorage` tests. The store is constructed with an explicit
+ * dimensionality, which is the whole point here: it is the declared width every write and
+ * every query is checked against.
+ */
+const TurboVecSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    vector: TypedArraySchema(),
+    metadata: { type: "object", format: "metadata", additionalProperties: true },
+  },
+  required: ["id", "vector", "metadata"],
+  additionalProperties: false,
+} as const satisfies DataPortSchemaObject;
+
+const TurboVecPK = ["id"] as const;
+
+interface TurboVecEntity {
+  id: string;
+  vector: Int8Array;
+  metadata: Record<string, unknown>;
+}
+
+function newTurboStore(dimensions: number) {
+  return new InMemoryVectorStorage<
+    typeof TurboVecSchema,
+    typeof TurboVecPK,
+    Record<string, unknown>,
+    TurboVecEntity
+  >(TurboVecSchema, TurboVecPK, [], dimensions);
 }
 
 let _snap = snap();
@@ -752,6 +788,127 @@ describe("VectorQuantizeTask", () => {
       expect(out.length).toBe(2);
       out.forEach((v) => expect(v.length).toBe(4));
       expect(result.originalDimensions).toBe(4);
+    });
+
+    /**
+     * THE CLAIM THE MODULE DOC MAKES IN PROSE, EXECUTED.
+     *
+     * `TurboQuantize.ts`'s module doc says the typed-array encoder's output "drops into any
+     * backend that declares a fixed-width column at the output's length (mind that
+     * `padToPowerOf2` makes that length longer than the input's — declare the column at the
+     * padded width)". Nothing anywhere runs that. Three separate things are asserted only
+     * in prose, and each of them fails silently if it regresses:
+     *
+     * - that `turboQuantizeToTypedArray`'s output is a shape `assertVectorShape` accepts
+     *   entry by entry — an `Int8Array` of finite numbers, not a record and not a packed
+     *   buffer (the packed `turboQuantize` codec deliberately cannot go into a store at
+     *   all, so this is the ONLY turbo encoder with a storage path);
+     * - that the length is `turboPaddedLength(d)` and NOT `d`, end to end — through the
+     *   task, through `putBulk`'s validation, and back out of `similaritySearch`; and
+     * - that a padded vector still retrieves its neighbour, so a regression that cropped
+     *   back to `d` or re-padded a second time would be caught by more than a length check.
+     *
+     * Every other turbo test in this file stops at the task's return value. A regression
+     * that silently cropped or re-padded, or an `assertVectorShape` change that stopped
+     * accepting `Int8Array`, is invisible to all of them.
+     *
+     * The corpus is kept to ~25 vectors because each one is a full workflow run, and it
+     * reuses `turboOf` rather than building a second quantization path — the point is that
+     * what the TASK emits is storable, not what a hand-rolled encoder emits.
+     */
+    describe("IVectorStorage round trip", () => {
+      const d = 768;
+      const paddedD = turboPaddedLength(d); // 1024
+
+      /** Query plus 24 background vectors and one planted neighbour at true cosine ~0.85. */
+      function makeCorpus(): {
+        query: Float32Array;
+        planted: Float32Array;
+        background: Float32Array[];
+      } {
+        const rnd = makeRandom(9001);
+        const query = new Float32Array(d);
+        for (let i = 0; i < d; i++) query[i] = rnd() - 0.5;
+
+        const background: Float32Array[] = [];
+        for (let n = 0; n < 24; n++) {
+          const v = new Float32Array(d);
+          for (let i = 0; i < d; i++) v[i] = rnd() - 0.5;
+          background.push(v);
+        }
+
+        // `t * query + sqrt(1 - t^2) * noise` — a vector at planted cosine `t`.
+        const t = 0.85;
+        const k = Math.sqrt(1 - t * t);
+        const noise = new Float32Array(d);
+        for (let i = 0; i < d; i++) noise[i] = rnd() - 0.5;
+        const planted = new Float32Array(d);
+        for (let i = 0; i < d; i++) planted[i] = t * query[i]! + k * noise[i]!;
+
+        return { query, planted, background };
+      }
+
+      test("a padded turbo vector round-trips through a store declared at turboPaddedLength(d)", async () => {
+        const { query, planted, background } = makeCorpus();
+        const store = newTurboStore(paddedD);
+
+        // The width contract as an assertion rather than a comment: the store is 1024 wide
+        // for a 768-dimensional embedding, and that gap IS the thing being pinned.
+        expect(store.getVectorDimensions()).toBe(paddedD);
+        expect(store.getVectorDimensions()).not.toBe(d);
+
+        const rows: TurboVecEntity[] = [];
+        for (let n = 0; n < background.length; n++) {
+          rows.push({ id: `bg-${n}`, vector: await turboOf(background[n]!), metadata: {} });
+        }
+        rows.push({ id: "planted", vector: await turboOf(planted), metadata: {} });
+
+        // `putBulk` is what runs `validateVectorEntities`, so this write is the check that
+        // the task's output passes `assertVectorShape` entry by entry.
+        await store.putBulk(rows);
+
+        // `scoreThreshold: -1` so nothing is filtered out by score and the ranking itself
+        // is what the assertions read.
+        const results = await store.similaritySearch(await turboOf(query), {
+          topK: 5,
+          scoreThreshold: -1,
+        });
+
+        expect(results[0]!.id).toBe("planted");
+        expect(results[0]!.vector).toBeInstanceOf(Int8Array);
+        expect(results[0]!.vector.length).toBe(paddedD);
+
+        // The score is a quantized estimate of the exact cosine of the UNQUANTIZED pair,
+        // which is the only reference that cannot move with the code under test.
+        expect(results[0]!.score).toBeCloseTo(cosine(query, planted), 1.5);
+        expect(Math.abs(results[0]!.score - cosine(query, planted))).toBeLessThan(0.03);
+      });
+
+      /**
+       * THE FOOTGUN, EXECUTED.
+       *
+       * Four separate error messages in this codebase warn that padding widens the output
+       * and that a fixed-width column must be declared at the padded width —
+       * `TurboQuantize.ts`'s `padToPowerOf2` docs and its typed-array encoder's throw,
+       * `VectorQuantizeTask`'s `turboPadToPowerOf2` schema description and its own
+       * non-power-of-2 rejection. This is the only place the CONSEQUENCE of ignoring them
+       * is actually run: the write is refused by the store, not by turbo.
+       *
+       * That is also why `turboPadToPowerOf2` defaults to `false` — widening the output is
+       * an explicit choice precisely because the store that receives it has to be sized for
+       * it, and there is no way for the task to know how the caller's column is declared.
+       */
+      test("a store declared at d rejects the widened turbo vector on write", async () => {
+        const { planted } = makeCorpus();
+        const store = newTurboStore(d);
+        const row = { id: "planted", vector: await turboOf(planted), metadata: {} };
+
+        expect(row.vector.length).toBe(paddedD);
+        await expect(store.putBulk([row])).rejects.toThrow(
+          /Vector dimension mismatch on write: expected 768, got 1024/
+        );
+        await expect(store.putBulk([row])).rejects.toBeInstanceOf(StorageValidationError);
+      });
     });
   });
 });
