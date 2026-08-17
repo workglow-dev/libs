@@ -36,7 +36,8 @@
  * numbers, one per coordinate. That is exactly the shape every `IVectorStorage` backend in
  * this repo accepts, so it drops into any of them that declares a fixed-width column at
  * the output's length (mind that `padToPowerOf2` makes that length longer than the input's
- * — declare the column at the padded width).
+ * — declare the column at the padded width). Pinned by the test "a padded turbo vector
+ * round-trips through a store declared at turboPaddedLength(d)".
  *
  * {@link turboQuantize}, {@link turboDequantize}, {@link turboQuantizedInnerProduct} and
  * {@link turboQuantizedCosineSimilarity} are an **in-process codec**. They are the
@@ -73,11 +74,11 @@
  * {@link turboQuantizedCosineSimilarity} — and {@link turboQuantizedInnerProduct}, which
  * is that times the two norms — would systematically UNDER-report similar pairs. Mean
  * signed error against the exact cosine, 32 correlated pairs per cell, d=1024, seeded,
- * BEFORE the correction and as shipped:
+ * BEFORE THE 2-4 BIT CORRECTION and as shipped:
  *
  * | bits | true 0.50       | true 0.80       | true 0.95       |
  * | ---- | --------------- | --------------- | --------------- |
- * | 1    | +0.002 → +0.002 | +0.001 → +0.001 | -0.000 → -0.000 |
+ * | 1*   | +0.002 → +0.002 | +0.001 → +0.001 | -0.000 → -0.000 |
  * | 2    | -0.056 → -0.001 | -0.080 → -0.001 | -0.075 → +0.001 |
  * | 3    | -0.017 → +0.001 | -0.027 → -0.001 | -0.028 → +0.001 |
  * | 4    | -0.005 → +0.000 | -0.007 → +0.001 | -0.009 → -0.000 |
@@ -85,6 +86,16 @@
  * | 6    | -0.000          | -0.001          | -0.001          |
  * | 7    | -0.000          | -0.000          | -0.000          |
  * | 8    | -0.000          | -0.000          | -0.000          |
+ *
+ * `*` THE 1-BIT ROW'S "BEFORE" COLUMN IS ALREADY GOEMANS-WILLIAMSON-CORRECTED — the 1-bit
+ * correction landed in an earlier commit than the 2-4 bit one, so "before" means before
+ * THAT change, not before any correction. Read as-is it says 1 bit has no shrinkage to
+ * correct, which is the opposite of the truth. The genuinely uncorrected 1-bit bias comes
+ * straight from the closed form `(2/pi)*asin(rho) - rho`: **-0.167 at a true 0.50, -0.210
+ * at 0.80, -0.152 at 0.95** — roughly 200x the largest number anywhere in the table above,
+ * and the reason {@link finishCosine} corrects 1 bit in closed form rather than leaving it
+ * to the quadrature. The row's measured numbers are left as they are: they are honest
+ * measurements of the shipped estimator.
  *
  * Every corrected cell collapses to the sampling floor of a 32-pair estimate, which is what
  * the arrows show: the residual is no longer a bias, it is noise.
@@ -1268,8 +1279,37 @@ export function turboDequantize(quantized: TurboQuantizeResult): Float32Array {
 /**
  * Estimates the inner product between two TurboQuant-quantized vectors without full
  * dequantization: it skips the inverse rotation and the crop, working in the rotated
- * domain where the codes already live. For maximum accuracy, dequantize both sides and
- * take a real dot product.
+ * domain where the codes already live.
+ *
+ * ## THIS IS THE ACCURATE ROUTE, not a cheap approximation of one
+ *
+ * The docstring that stood here sent the reader the wrong way: "for maximum accuracy,
+ * dequantize both sides and take a real dot product". That is the UNCORRECTED estimator
+ * below {@link TURBO_MAX_CORRECTED_BITS}, and it reads systematically LOW with nothing
+ * reported anywhere. This helper scores through {@link finishCosine}, so the shrinkage
+ * correction is applied at 1-4 bits; dequantizing first destroys the code-domain ratio the
+ * correction is defined on, so no amount of care afterwards recovers it.
+ *
+ * Measured at d=1024 over 25 Gaussian pairs at true cosine 0.80, against a true mean inner
+ * product of 816.8:
+ *
+ * | bits | this helper | dequantize-then-dot |
+ * | ---- | ----------- | ------------------- |
+ * | 1    | 823.8       | 611.2 (-25%)        |
+ * | 2    | 820.2       | 739.7 (-9%)         |
+ * | 3    | 817.9       | 791.2 (-3%)         |
+ * | 4    | 817.2       | 808.7 (-1%)         |
+ * | 5    | 814.1       | 814.1               |
+ * | 8    | 816.7       | 816.7               |
+ *
+ * At 5-8 bits the two routes ARE interchangeable — the shrinkage is left uncorrected by
+ * design there, so both compute the same thing and the table shows them agreeing exactly.
+ * That boundary is {@link TURBO_MAX_CORRECTED_BITS}, and it is the same warning
+ * {@link turboDequantize} and {@link turboPrepareQuery} already carry.
+ *
+ * For a whole candidate set, use {@link turboPrepareQuery} plus
+ * {@link turboPreparedCosineSimilarity} in a loop and multiply by the two norms — same
+ * correction, without re-decoding the query per candidate.
  *
  * IT DOES NOT SKIP THE DECODE, and the docstring that stood here implied otherwise. Both
  * sides are unpacked and reconstructed on EVERY call — four fresh arrays per comparison —
