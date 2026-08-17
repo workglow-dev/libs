@@ -402,6 +402,105 @@ function specifiersIn(text: string): string[] {
   return [...text.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1] as string);
 }
 
+/** The package and `exports` subpath a bare specifier names. */
+interface BareSpecifierTarget {
+  readonly packageName: string;
+  /** `.` for the package root, `./ai` for a subpath. */
+  readonly subpath: string;
+}
+
+/**
+ * The package + subpath a BARE specifier resolves against, or `undefined` for a
+ * relative or absolute one (which names a file, not an exports map).
+ *
+ * Scoped names take two segments (`@workglow/openai/ai` → `@workglow/openai` +
+ * `./ai`); unscoped take one (`workglow/openai` → `workglow` + `./openai`).
+ */
+function bareSpecifierTarget(specifier: string): BareSpecifierTarget | undefined {
+  if (specifier.startsWith(".") || specifier.startsWith("/")) return undefined;
+  const parts = specifier.split("/");
+  const nameParts = specifier.startsWith("@") ? 2 : 1;
+  if (parts.length < nameParts) return undefined;
+  const packageName = parts.slice(0, nameParts).join("/");
+  const rest = parts.slice(nameParts);
+  return { packageName, subpath: rest.length === 0 ? "." : `./${rest.join("/")}` };
+}
+
+/** Whether a subpath's own `exports` really routes browser consumers elsewhere. */
+type SubpathSplit = "splits" | "no-split" | "unknown";
+
+/**
+ * Whether one subpath's `exports` value genuinely splits browser from node.
+ *
+ * Deliberately NOT `"browser" in exports`. `providers/chrome-ai` and
+ * `providers/tf-mediapipe` declare a `browser` block that names the very same
+ * target as the node branch — honest there, because each ships one bundle — and
+ * a presence test would call that a split. So the declared browser
+ * implementations are compared against {@link nodeImportTarget}: a split exists
+ * only when a browser consumer lands somewhere a node consumer does not.
+ */
+function subpathSplit(value: unknown): SubpathSplit {
+  const nodeTarget = nodeImportTarget(value);
+  const branch = findBrowserBlock(value);
+  if (branch === undefined) return "no-split";
+  const declared: string[] = [];
+  implementationsIn(branch, declared);
+  if (declared.length === 0) return "no-split";
+  return declared.some((target) => target !== nodeTarget) ? "splits" : "no-split";
+}
+
+/**
+ * Identical bare-specifier shims whose every target resolves to a subpath that
+ * does not split.
+ *
+ * {@link duplicateBrowserEntryViolations} exempts an identical pair whose
+ * specifiers are all bare, on the ground that the split happens one layer down.
+ * That is a claim about the TARGET, and nothing resolved it — so a shim, its
+ * `browser` block, its bundle and its declarations could all exist while
+ * resolving browser consumers to the NODE build, with every rule in this file
+ * silent. `@workglow/anthropic/ai`, `@workglow/google-gemini/ai`,
+ * `@workglow/huggingface-inference/ai` and `@workglow/huggingface-transformers/ai`
+ * declare no `browser` condition at all, so four `packages/workglow` shims were
+ * exactly that.
+ *
+ * ONE splitting specifier keeps the shim — that hop does real work. A pair
+ * naming no bare specifier belongs to the sibling rule. An `unknown` target is
+ * REPORTED rather than skipped, for the same reason an underivable dist stem
+ * is: a target the rule could not resolve is precisely where an inert shim
+ * would hide.
+ */
+function inertBareShimViolations(
+  pairs: readonly EntryPair[],
+  targetSplit: (packageName: string, subpath: string) => SubpathSplit
+): string[] {
+  const out: string[] = [];
+  for (const pair of pairs) {
+    const browserBody = entryBody(pair.browserText);
+    if (browserBody !== entryBody(pair.nodeText)) continue;
+    const specifiers = specifiersIn(browserBody);
+    if (specifiers.length === 0) continue;
+    const targets = specifiers.map(bareSpecifierTarget);
+    if (targets.some((target) => target === undefined)) continue; // the duplicate rule's case
+    const verdicts = targets.map((target) =>
+      targetSplit(
+        (target as BareSpecifierTarget).packageName,
+        (target as BareSpecifierTarget).subpath
+      )
+    );
+    if (verdicts.includes("splits")) continue;
+    const detail = specifiers
+      .map((specifier, index) => `"${specifier}" (${verdicts[index]})`)
+      .join(", ");
+    out.push(
+      `${pair.browserPath} is identical to ${pair.nodePath} and re-exports only bare specifiers ` +
+        `no subpath of which splits browser from node (${detail}), so the browser bundle, its ` +
+        `declarations and the "browser" condition pointing at them are all byte-identical to the ` +
+        `node ones — delete the shim and its "browser" block, or make the target split`
+    );
+  }
+  return out;
+}
+
 /**
  * Browser modules that are a copy of the node module beside them AND name only
  * relative specifiers.
@@ -425,13 +524,15 @@ function specifiersIn(text: string): string[] {
  *   browser entry to `export * from "./ai"`, which cannot drift.
  *
  * - A **bare** specifier (`"@workglow/openai/ai"`) is re-resolved at every hop
- *   under the CONSUMER's conditions, so the two identical files land on
- *   different modules: the split really happens one layer down, in the
- *   provider's own exports map. The nine `packages/workglow/src/*.browser.ts`
- *   shims are this shape, and their being byte-identical IS the mechanism —
- *   collapsing one into `export * from "./openai"` would pin browser consumers
- *   to whatever the shim's own condition resolved and destroy the split. They
- *   must stay identical; this rule must never report them.
+ *   under the CONSUMER's conditions, so the two identical files CAN land on
+ *   different modules — but only if the target subpath actually splits. Where
+ *   it does, being byte-identical IS the mechanism: collapsing the shim into
+ *   `export * from "./openai"` would pin browser consumers to whatever the
+ *   shim's own condition resolved and destroy the split. Those shims must stay
+ *   identical, and this rule must never report them.
+ *
+ *   Whether the split below exists is a question about the TARGET's exports
+ *   map, which this rule does not ask — {@link inertBareShimViolations} does.
  *
  * A pair with no specifiers at all is not reported: there is no import graph to
  * reason about, so "the two resolve the same graph" says nothing.
@@ -677,6 +778,8 @@ function workspaceManifests(root: WorkspaceRoot): string[] {
 
 interface Manifest {
   readonly relative: string;
+  /** The published package name, which is what a bare specifier names. */
+  readonly name: string | undefined;
   readonly exports: Record<string, unknown>;
   /** The manifest's `scripts`, which is where the build entry lists live. */
   readonly scripts: Readonly<Record<string, string>>;
@@ -686,6 +789,7 @@ function manifestsWithExports(root: WorkspaceRoot): Manifest[] {
   const found: Manifest[] = [];
   for (const relative of workspaceManifests(root)) {
     const pkg = JSON.parse(readFileSync(join(root.dir, relative), "utf8")) as {
+      name?: unknown;
       exports?: Record<string, unknown>;
       scripts?: Record<string, unknown>;
     };
@@ -694,9 +798,57 @@ function manifestsWithExports(root: WorkspaceRoot): Manifest[] {
     for (const [name, body] of Object.entries(pkg.scripts ?? {})) {
       if (typeof body === "string") scripts[name] = body;
     }
-    found.push({ relative, exports: pkg.exports, scripts });
+    found.push({
+      relative,
+      name: typeof pkg.name === "string" ? pkg.name : undefined,
+      exports: pkg.exports,
+      scripts,
+    });
   }
   return found;
+}
+
+/**
+ * Every `<stem>.browser.ts(x)` under a package `src` that has a `<stem>.ts(x)`
+ * beside it, collected recursively.
+ *
+ * Module-level because two rules now read it. Recursion is load-bearing: a
+ * nominal split reads the same one directory down
+ * (`providers/openrouter/src/ai/runtime.browser.ts`), and a flat scan of the
+ * entry layer the manifests name could not see it. A `.browser.ts` with no
+ * `.ts` beside it (`packages/tasks/src/codec.browser.ts`) is not a pair and has
+ * nothing to be a duplicate of.
+ */
+function entryPairs(root: WorkspaceRoot, manifests: readonly Manifest[]): EntryPair[] {
+  const pairs: EntryPair[] = [];
+  const collect = (packageDir: string, relative: string): void => {
+    for (const entry of readdirSync(join(root.dir, packageDir, relative), {
+      withFileTypes: true,
+    })) {
+      if (entry.name === "node_modules" || entry.name === "dist") continue;
+      if (entry.isDirectory()) {
+        collect(packageDir, `${relative}/${entry.name}`);
+        continue;
+      }
+      const stem = /^(.+)\.browser\.(tsx?)$/.exec(entry.name);
+      if (stem === null) continue;
+      const nodeFile = `${stem[1]}.${stem[2]}`;
+      const dir = join(root.dir, packageDir, relative);
+      if (!existsSync(join(dir, nodeFile))) continue;
+      pairs.push({
+        browserPath: `${packageDir}/${relative}/${entry.name}`,
+        nodePath: `${packageDir}/${relative}/${nodeFile}`,
+        browserText: readFileSync(join(dir, entry.name), "utf8"),
+        nodeText: readFileSync(join(dir, nodeFile), "utf8"),
+      });
+    }
+  };
+  for (const manifest of manifests) {
+    const packageDir = dirname(manifest.relative);
+    if (!existsSync(join(root.dir, packageDir, "src"))) continue;
+    collect(packageDir, "src");
+  }
+  return pairs;
 }
 
 describe("workspace exports maps", () => {
@@ -705,6 +857,25 @@ describe("workspace exports maps", () => {
   const branches = manifests.flatMap((manifest) =>
     branchesFor(manifest.relative, manifest.exports)
   );
+  const pairs = entryPairs(root, manifests);
+  const byName = new Map(
+    manifests
+      .filter((manifest): manifest is Manifest & { name: string } => manifest.name !== undefined)
+      .map((manifest) => [manifest.name, manifest])
+  );
+
+  /**
+   * Whether a bare specifier's target subpath really splits. `unknown` for a
+   * package outside this workspace, or a subpath its `exports` never declares —
+   * both are answers the rule must report rather than skip.
+   */
+  const targetSplit = (packageName: string, subpath: string): SubpathSplit => {
+    const manifest = byName.get(packageName);
+    if (manifest === undefined) return "unknown";
+    const value = manifest.exports[subpath];
+    if (value === undefined) return "unknown";
+    return subpathSplit(value);
+  };
 
   it("finds condition branches to check", () => {
     // Guards against the scan silently finding nothing and the suite passing vacuously.
@@ -813,47 +984,23 @@ describe("workspace exports maps", () => {
   });
 
   it("re-exports rather than duplicates a browser module that has no split", () => {
-    // Collected recursively from `src`, not just the entry layer the manifests
-    // name: a nominal split reads the same one directory down, and the flat
-    // scan could not see it. A `.browser.ts` with no `.ts` beside it (e.g.
-    // `packages/tasks/src/codec.browser.ts`) is not a pair and has nothing to
-    // be a duplicate of.
-    const pairs: EntryPair[] = [];
-    const collect = (packageDir: string, relative: string): void => {
-      for (const entry of readdirSync(join(root.dir, packageDir, relative), {
-        withFileTypes: true,
-      })) {
-        if (entry.name === "node_modules" || entry.name === "dist") continue;
-        if (entry.isDirectory()) {
-          collect(packageDir, `${relative}/${entry.name}`);
-          continue;
-        }
-        const stem = /^(.+)\.browser\.(tsx?)$/.exec(entry.name);
-        if (stem === null) continue;
-        const nodeFile = `${stem[1]}.${stem[2]}`;
-        const dir = join(root.dir, packageDir, relative);
-        if (!existsSync(join(dir, nodeFile))) continue;
-        pairs.push({
-          browserPath: `${packageDir}/${relative}/${entry.name}`,
-          nodePath: `${packageDir}/${relative}/${nodeFile}`,
-          browserText: readFileSync(join(dir, entry.name), "utf8"),
-          nodeText: readFileSync(join(dir, nodeFile), "utf8"),
-        });
-      }
-    };
-    for (const manifest of manifests) {
-      const packageDir = dirname(manifest.relative);
-      if (!existsSync(join(root.dir, packageDir, "src"))) continue;
-      collect(packageDir, "src");
-    }
-    // The nine `packages/workglow` shims are pairs, and correctly identical —
-    // they are the negative case the rule has to keep passing, so a scan that
-    // found nothing would prove nothing.
-    expect(pairs.length).toBeGreaterThan(9);
+    // The surviving `packages/workglow` shims are pairs, and correctly
+    // identical — they are the negative case the rule has to keep passing, so a
+    // scan that found nothing would prove nothing. A lower bound rather than an
+    // exact count: the number moves whenever a shim or a provider entry lands.
+    expect(pairs.length).toBeGreaterThan(20);
     // And the scan recursed: a regression to the flat `src` listing loses every
     // pair below the entry layer, silently.
     expect(pairs.some((pair) => pair.browserPath.includes("/src/ai/"))).toBe(true);
     expect(duplicateBrowserEntryViolations(pairs)).toEqual([]);
+  });
+
+  it("keeps a duplicated bare-specifier shim only where its target really splits", () => {
+    // Anti-vacuity first: the meta-package's shims are the shape this rule is
+    // about, so a scan that found none of them would pass having checked
+    // nothing.
+    expect(pairs.some((pair) => pair.browserPath.startsWith("packages/workglow/src/"))).toBe(true);
+    expect(inertBareShimViolations(pairs, targetSplit)).toEqual([]);
   });
 
   it("keeps the allowlist free of entries that no longer mismatch", () => {
@@ -1441,9 +1588,10 @@ describe("exports map violation detection", () => {
   });
 
   /**
-   * The duplicate-entry rule. No pair in the tree violates it after
-   * `providers/llamacpp-server` and `providers/stable-diffusion-server` were
-   * collapsed onto `export * from "./ai"`, so both branches need fixtures.
+   * The duplicate-entry rule. No pair in the tree violates it —
+   * `providers/llamacpp-server` and `providers/stable-diffusion-server` no
+   * longer have a browser entry at all — so both branches need fixtures, and
+   * the synthetic ones below are what keeps the reporting path exercised.
    */
   describe("duplicate browser entries", () => {
     const license =
@@ -1481,6 +1629,9 @@ describe("exports map violation detection", () => {
       // being byte-identical is the mechanism, not a defect: collapsing the
       // browser shim onto `export * from "./openai"` would resolve the bare
       // specifier once, under the shim's own condition, and destroy the split.
+      //
+      // Whether that split really exists below is not this rule's question —
+      // `inertBareShimViolations` asks it, over the target's own exports map.
       expect(
         duplicateBrowserEntryViolations([
           {
@@ -1527,6 +1678,127 @@ describe("exports map violation detection", () => {
           '("./ai/index"), so both entries resolve the same module graph and the declaration ' +
           "split is nominal — re-export the node entry from it instead of duplicating it",
       ]);
+    });
+  });
+
+  /**
+   * The other half of the bare-specifier claim: the duplicate rule exempts a
+   * bare pair because "the split happens one layer down", and this rule is what
+   * checks that it does. No pair in the tree violates it once the four inert
+   * shims are gone, so every case here is a fixture.
+   */
+  describe("inert bare-specifier shims", () => {
+    const license =
+      "/**\n * @license\n * Copyright 2026 Steven Roussey <sroussey@gmail.com>\n" +
+      " * SPDX-License-Identifier: Apache-2.0\n */\n\n// organize-imports-ignore\n\n";
+
+    /** An identical bare-specifier shim pair naming `specifier`. */
+    function shim(
+      specifier: string,
+      browserPath = "packages/workglow/src/x.browser.ts"
+    ): EntryPair {
+      return {
+        browserPath,
+        nodePath: browserPath.replace(".browser.", "."),
+        browserText: `${license}export * from "${specifier}";\n`,
+        nodeText: `${license}export * from "${specifier}";\n`,
+      };
+    }
+
+    const splits = (): SubpathSplit => "splits";
+    const noSplit = (): SubpathSplit => "no-split";
+    const unknown = (): SubpathSplit => "unknown";
+
+    it("reports a shim whose target declares no browser condition", () => {
+      // `@workglow/anthropic/ai` as it stands: `{types, import}` and nothing
+      // else, so the shim's bundle, its declarations and the `browser` block
+      // pointing at them are all copies of the node ones.
+      const pair = shim("@workglow/anthropic/ai", "packages/workglow/src/anthropic.browser.ts");
+      // Every OTHER rule is silent on this shape — asserted rather than left in
+      // prose, because "nothing else catches it" is why this rule exists.
+      expect(duplicateBrowserEntryViolations([pair])).toEqual([]);
+      const reported = inertBareShimViolations([pair], noSplit);
+      expect(reported).toHaveLength(1);
+      expect(reported[0]).toContain("packages/workglow/src/anthropic.browser.ts");
+      expect(reported[0]).toContain('"@workglow/anthropic/ai" (no-split)');
+      expect(reported[0]).toContain("byte-identical to the node ones");
+    });
+
+    it("says nothing about a shim whose target splits", () => {
+      expect(inertBareShimViolations([shim("@workglow/openai/ai")], splits)).toEqual([]);
+    });
+
+    it("does not accept a browser block that names the node target as a split", () => {
+      // The case a naive `"browser" in exports` probe gets wrong.
+      // `providers/chrome-ai` declares a browser condition whose target IS the
+      // node target — honest there, since it ships one bundle, and not a split.
+      const chromeAi = {
+        browser: { types: "./dist/ai.d.ts", import: "./dist/ai.js" },
+        types: "./dist/ai.d.ts",
+        import: "./dist/ai.js",
+      };
+      expect(subpathSplit(chromeAi)).toBe("no-split");
+      expect(
+        inertBareShimViolations([shim("@workglow/chrome-ai/ai")], () => subpathSplit(chromeAi))
+      ).toHaveLength(1);
+    });
+
+    it("reports an unresolvable specifier rather than passing it", () => {
+      // A target the rule could not resolve is exactly where an inert shim
+      // would hide, so `unknown` is reported like `no-split`.
+      const reported = inertBareShimViolations([shim("@workglow/gone/ai")], unknown);
+      expect(reported).toHaveLength(1);
+      expect(reported[0]).toContain("(unknown)");
+    });
+
+    it("keeps a shim that splits on one of several specifiers", () => {
+      // One hop doing real work is enough: browser and node consumers land on
+      // different modules, which is the whole justification for the duplicate.
+      const pair: EntryPair = {
+        browserPath: "packages/workglow/src/x.browser.ts",
+        nodePath: "packages/workglow/src/x.ts",
+        browserText: `${license}export * from "@workglow/a/ai";\nexport * from "@workglow/b/ai";\n`,
+        nodeText: `${license}export * from "@workglow/a/ai";\nexport * from "@workglow/b/ai";\n`,
+      };
+      const mixed = (packageName: string): SubpathSplit =>
+        packageName === "@workglow/b" ? "splits" : "no-split";
+      expect(inertBareShimViolations([pair], mixed)).toEqual([]);
+    });
+
+    it("leaves a purely relative pair to the duplicate rule", () => {
+      // Two rules, two questions. A relative specifier names a file, not an
+      // exports map, so there is no target to resolve.
+      const pair: EntryPair = {
+        browserPath: "providers/p/src/ai.browser.ts",
+        nodePath: "providers/p/src/ai.ts",
+        browserText: `${license}export * from "./ai/index";\n`,
+        nodeText: `${license}export * from "./ai/index";\n`,
+      };
+      expect(inertBareShimViolations([pair], noSplit)).toEqual([]);
+      expect(duplicateBrowserEntryViolations([pair])).toHaveLength(1);
+    });
+
+    it("says nothing about a pair whose bodies differ", () => {
+      const pair: EntryPair = {
+        browserPath: "packages/workglow/src/x.browser.ts",
+        nodePath: "packages/workglow/src/x.ts",
+        browserText: `${license}export * from "@workglow/a/ai-runtime";\n`,
+        nodeText: `${license}export * from "@workglow/a/ai";\n`,
+      };
+      expect(inertBareShimViolations([pair], noSplit)).toEqual([]);
+    });
+
+    it("splits a bare specifier into its package and subpath", () => {
+      expect(bareSpecifierTarget("@workglow/openai/ai")).toEqual({
+        packageName: "@workglow/openai",
+        subpath: "./ai",
+      });
+      expect(bareSpecifierTarget("workglow")).toEqual({ packageName: "workglow", subpath: "." });
+      expect(bareSpecifierTarget("workglow/openai")).toEqual({
+        packageName: "workglow",
+        subpath: "./openai",
+      });
+      expect(bareSpecifierTarget("./ai/index")).toBeUndefined();
     });
   });
 
