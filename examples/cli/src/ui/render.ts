@@ -11,6 +11,7 @@ import React from "react";
 import type { PromptFieldDescriptor } from "../input/prompt";
 import { getCliTheme } from "../terminal/detectTerminalTheme";
 import { formatError, outputResult } from "../util";
+import { releaseOnAbort } from "./promptAbort";
 import { CliThemeProvider } from "./CliThemeContext";
 import { SchemaPromptApp } from "./SchemaPromptApp";
 import type { SearchSelectAppProps, SearchSelectItem } from "./SearchSelectApp";
@@ -133,16 +134,20 @@ export interface SchemaPromptRenderOptions {
 
 export async function renderSchemaPrompt(
   fields: readonly PromptFieldDescriptor[],
-  options?: SchemaPromptRenderOptions
+  options?: SchemaPromptRenderOptions,
+  signal?: AbortSignal
 ): Promise<Record<string, unknown> | undefined> {
   return new Promise<Record<string, unknown> | undefined>((resolve) => {
+    let detachAbort = (): void => {};
     const onComplete = (values: Record<string, unknown>) => {
+      detachAbort();
       instance.clear();
       instance.unmount();
       resolve(values);
     };
 
     const onCancel = () => {
+      detachAbort();
       instance.clear();
       instance.unmount();
       console.log("Cancelled.");
@@ -159,6 +164,7 @@ export async function renderSchemaPrompt(
         })
       )
     );
+    detachAbort = releaseOnAbort(signal, instance, resolve);
   });
 }
 
@@ -195,10 +201,13 @@ export async function renderSearchSelect<T extends SearchSelectItem>(
 
 export async function renderSelectPrompt(
   options: Array<{ label: string; value: string }>,
-  message?: string
+  message?: string,
+  signal?: AbortSignal
 ): Promise<string | undefined> {
   return new Promise<string | undefined>((resolve) => {
+    let detachAbort = (): void => {};
     const onSelect = (value: string) => {
+      detachAbort();
       instance.clear();
       instance.unmount();
       const label = message?.replace(/:$/, "") ?? "Selected";
@@ -208,6 +217,7 @@ export async function renderSelectPrompt(
     };
 
     const onCancel = () => {
+      detachAbort();
       instance.clear();
       instance.unmount();
       console.log("Cancelled.");
@@ -224,5 +234,6 @@ export async function renderSelectPrompt(
         })
       )
     );
+    detachAbort = releaseOnAbort(signal, instance, resolve);
   });
 }

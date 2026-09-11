@@ -152,9 +152,12 @@ export function TaskRunApp({
       if (msg) progressRef.current.msg = msg;
     });
 
-    task.events.on("stream_chunk", (event: { type: string; text?: string }) => {
-      if (event.type === "text-delta" && event.text) {
-        setStreamText((prev) => prev + event.text);
+    // `textDelta`, not `text`: that is the field name on StreamTextDelta, and
+    // the loose local type here is why reading the wrong one showed as an
+    // empty panel rather than as a compile error.
+    task.events.on("stream_chunk", (event: { type: string; textDelta?: string }) => {
+      if (event.type === "text-delta" && event.textDelta) {
+        setStreamText((prev) => prev + event.textDelta);
       }
     });
 

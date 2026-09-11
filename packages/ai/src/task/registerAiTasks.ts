@@ -5,6 +5,7 @@
  */
 
 import { TaskRegistry } from "@workglow/task-graph";
+import { AgentTask } from "./AgentTask";
 import { AiChatTask } from "./AiChatTask";
 import { AiChatWithKbTask } from "./AiChatWithKbTask";
 import { BackgroundRemovalTask } from "./BackgroundRemovalTask";
@@ -65,6 +66,7 @@ import { VectorSimilarityTask } from "./VectorSimilarityTask";
  */
 export const registerAiTasks = () => {
   const tasks = [
+    AgentTask,
     AiChatTask,
     AiChatWithKbTask,
     BackgroundRemovalTask,

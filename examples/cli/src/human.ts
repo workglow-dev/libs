@@ -17,6 +17,8 @@ export type { AnswerReaderFactory } from "./run-events/RunEventHumanConnector";
 export type { RunEvent } from "./run-events/RunEventTypes";
 export type { RunEventSink } from "./run-events/runEventChannel";
 export { InkHumanConnector } from "./ui/InkHumanConnector";
+export { PromptHumanConnector } from "./ui/PromptHumanConnector";
+export type { PromptHumanRenderers } from "./ui/PromptHumanConnector";
 export { humanPromptModel } from "./ui/model/humanPrompt";
 export type {
   HumanPromptDetail,

@@ -206,6 +206,23 @@ RAG tasks: `ChunkVectorUpsertTask` (`knowledgeBase` + `chunks` + `vector`, optio
 `method: "similarity" | "hybrid"`), `HierarchyJoinTask`, `RerankerTask`,
 `QueryExpanderTask`, `TextChunkerTask`, `HierarchicalChunkerTask`.
 
+`AgentTask` is the turn loop: one `ToolCallingTask` per round, then the tools the model asked
+for, then their results back to it, until the model answers or `maxRounds` runs out.
+`messages` goes in and comes back out, so the host owns the conversation. **Every `tool_use`
+is answered** — an unknown tool, arguments failing the tool's schema, a throw, a person
+declining — because dropping the call orphans it and the provider rejects the next round. A
+tool is backed by a registered task (looked up by `taskType`, else `name`) or by a
+`ToolDefinition.execute` function, which is handed a `ToolExecuteContext` — the tool-use id
+its answer belongs to, and the run's signal — and may throw a `ToolCallError` to report a
+failure in its own words rather than wrapped. The turn also emits a `snapshot` of `messages`
+after every message it records, so a host can draw a tool card from the moment the model asks
+for it; a `snapshot` rather than an object-delta because an array delta is folded as an upsert
+list and successive whole-list snapshots would append into a transcript several times its
+length. A tool reaching beyond `INFERENCE_ENTITLEMENTS` is put to
+`IHumanConnector` as a `confirm` first: `requiresApproval` overrides that per tool,
+`approval: "never"` turns it off for a headless run, and with no connector registered such a
+call is refused rather than run.
+
 Conversation helpers for a host keeping its own message list, none of which run inside a
 task: `normalizeHistoryForModel` / `trimHistoryForModel` (`ChatHistory.ts`), and
 `collectToolUseIds` / `uniquifyToolCallIds` / `repairDuplicateToolCallIds` (`ToolCallIds.ts`).
@@ -401,6 +418,29 @@ terminal runs. Three load-bearing properties:
   `PanelData` covers `table` (with per-row tones), `kv`, `stats`,
   `timeline`, `markdown`, `empty` and `error`; a status widget contributes meters **or** text
   lines, since most of what an operator checks has no denominator to draw a bar against.
+
+`workglow agent chat` is the terminal consumer of `AgentTask`: a line-based REPL that
+streams the model's reply straight to stdout — so the transcript stays in scrollback, which
+the Ink run UI's clear-on-complete would erase — prints one row per tool call off the task's
+own progress messages, and carries `messages` from one turn's output into the next's input.
+`--tools` takes task type names and **has no default**: what an agent may call decides what it
+can reach. Approvals go through `PromptHumanConnector`, the connector for anything prompting
+BETWEEN runs rather than during one: `InkHumanConnector` needs a mounted
+`HumanInteractionHost` and throws without one, while this draws its own prompt and gives the
+screen back. It has no `followUp` — a modal prompt settles the question it asked — and
+decides form-vs-approval through the same `humanPromptModel` the Ink panel and the console
+read.
+
+**The same command serves the web console**, because a chat needs no channel the console did
+not already have: each turn runs through `withCli` so its rows and text report up the event
+stream, and the next message is asked for as an ordinary `elicit` whose field carries
+`format: "chat-message"` — the marker the console keys on to draw a composer instead of a
+one-line field, and to fold the answer into a transcript instead of a form somebody once
+filled in. A reported session does NOT install `PromptHumanConnector`: the channel installs
+its own connector, and overriding it would point a console session's approvals at an Ink
+prompt on a process whose stdout is a pipe. `chatTranscript` (`web/client/state.ts`) zips
+what the console sent against the `AgentTask` rows it saw, one turn per message, so the
+conversation is derived rather than a second copy of the run.
 
 `workglow mcp serve` is the second server the CLI hosts: the registered tasks offered to
 MCP clients as tools, one per task type, named for the registered type itself (`task list`

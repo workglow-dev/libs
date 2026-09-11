@@ -8,11 +8,14 @@ import { describe, expect, it } from "vitest";
 import type { RunEvent } from "../../run-events/RunEventTypes";
 import type { WebCommandNode } from "../commandTree";
 import {
+  FULL_ITERATION_TRACKING_MAX,
+  appendChatAsk,
   applyRecord,
+  chatTranscript,
   consoleContent,
   emptyRunView,
   filterCommandTree,
-  FULL_ITERATION_TRACKING_MAX,
+  isChatRequest,
   openPathsFor,
   orderedRows,
   reduceRunEvent,
@@ -224,5 +227,110 @@ describe("stackedPane", () => {
     // fit, so picking a command has to switch the visible pane.
     expect(stackedPane("select")).toBe("detail");
     expect(stackedPane("back")).toBe("list");
+  });
+});
+
+describe("the console's view of a conversation", () => {
+  const chatSchema = {
+    type: "object",
+    properties: { message: { type: "string", format: "chat-message" } },
+  };
+
+  function turnRow(state: RunViewState, id: string): RunViewState {
+    return reduceRunEvent(state, {
+      k: "task_added",
+      id,
+      type: "AgentTask",
+      label: "Agent",
+      depth: 0,
+    });
+  }
+
+  it("tells a chat request apart from a form", () => {
+    expect(
+      isChatRequest({
+        requestId: "r1",
+        kind: "elicit",
+        message: "Your message",
+        schema: chatSchema,
+        data: undefined,
+      })
+    ).toBe(true);
+    expect(
+      isChatRequest({
+        requestId: "r2",
+        kind: "elicit",
+        message: "Your name",
+        schema: { type: "object", properties: { name: { type: "string" } } },
+        data: undefined,
+      })
+    ).toBe(false);
+    // An approval carrying the same field is still an approval — drawing it as
+    // a chat box would leave nowhere to say no.
+    expect(
+      isChatRequest({
+        requestId: "r3",
+        kind: "confirm",
+        message: "Run it?",
+        schema: chatSchema,
+        data: undefined,
+      })
+    ).toBe(false);
+    expect(isChatRequest(undefined)).toBe(false);
+  });
+
+  it("pairs each answer with the turn it started", () => {
+    let state = appendChatAsk(emptyRunView(), "first");
+    state = turnRow(state, "t1");
+    state = reduceRunEvent(state, { k: "text", id: "t1", delta: "one" });
+    state = reduceRunEvent(state, { k: "status", id: "t1", status: "COMPLETED" });
+    state = appendChatAsk(state, "second");
+    state = turnRow(state, "t2");
+    state = reduceRunEvent(state, { k: "text", id: "t2", delta: "tw" });
+
+    expect(chatTranscript(state)).toEqual([
+      { role: "user", text: "first", pending: false },
+      { role: "assistant", text: "one", pending: false },
+      { role: "user", text: "second", pending: false },
+      // Still running, and showing what it has said so far rather than nothing.
+      { role: "assistant", text: "tw", pending: true },
+    ]);
+  });
+
+  it("shows a message whose turn has not written anything yet", () => {
+    let state = appendChatAsk(emptyRunView(), "hello");
+    state = turnRow(state, "t1");
+
+    expect(chatTranscript(state)).toEqual([
+      { role: "user", text: "hello", pending: false },
+      { role: "assistant", text: "", pending: true },
+    ]);
+  });
+
+  it("shows a message whose turn has not started at all", () => {
+    const state = appendChatAsk(emptyRunView(), "hello");
+    expect(chatTranscript(state)).toEqual([{ role: "user", text: "hello", pending: false }]);
+  });
+
+  it("leaves a turn that finished silently out rather than showing an empty reply", () => {
+    let state = appendChatAsk(emptyRunView(), "hello");
+    state = turnRow(state, "t1");
+    state = reduceRunEvent(state, { k: "status", id: "t1", status: "COMPLETED" });
+
+    expect(chatTranscript(state)).toEqual([{ role: "user", text: "hello", pending: false }]);
+  });
+
+  it("ignores rows that are not turns", () => {
+    let state = appendChatAsk(emptyRunView(), "hello");
+    state = reduceRunEvent(state, {
+      k: "task_added",
+      id: "tool",
+      type: "FetchUrlTask",
+      label: "Fetch",
+      depth: 1,
+    });
+    state = reduceRunEvent(state, { k: "text", id: "tool", delta: "not the answer" });
+
+    expect(chatTranscript(state)).toEqual([{ role: "user", text: "hello", pending: false }]);
   });
 });

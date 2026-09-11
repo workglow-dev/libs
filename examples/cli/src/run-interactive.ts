@@ -142,7 +142,13 @@ export function tuiDisabledByEnv(): boolean {
 
 export interface WithCliTaskHandle {
   readonly kind: "task";
-  run(overrides?: Record<string, unknown>): Promise<unknown>;
+  /**
+   * `runConfig` reaches `task.run` and the Ink renderer alike — the
+   * implementation has always threaded it, and the caller that needs it is one
+   * running a task inside something longer than a command, where the registry
+   * and the abort signal are the session's rather than the process's.
+   */
+  run(overrides?: Record<string, unknown>, runConfig?: Partial<IRunConfig>): Promise<unknown>;
   abort(): void;
 }
 

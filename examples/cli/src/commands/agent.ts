@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { ToolDefinition } from "@workglow/ai";
+import { AgentTask, taskTypesToTools } from "@workglow/ai";
 import {
   computeGraphInputSchema,
   createGraphFromGraphJSON,
@@ -28,6 +30,8 @@ import { ensureCredentialStoreUnlocked } from "../keyring";
 import { createAgentRepository } from "../storage";
 import { renderSelectPrompt, renderWorkflowRun } from "../ui/render";
 import { formatError, formatTable, outputResult } from "../util";
+import { runAgentChat } from "../agent/runAgentChat";
+import { ensureRunReporting } from "../run-events/runReporting";
 
 export function registerAgentCommand(program: Command): void {
   const agent = program.command("agent").description("Manage and run agents");
@@ -351,4 +355,89 @@ export function registerAgentCommand(program: Command): void {
         process.exit(1);
       }
     });
+
+  agent
+    .command("chat")
+    .description("Talk to a model that can run registered tasks as tools")
+    .option("-m, --model <id>", "Model to use; prompted for when omitted")
+    .option(
+      "-t, --tools <types>",
+      "Comma-separated task types the model may call. None by default — an agent reaches only what it is given."
+    )
+    .option("-s, --system <text>", "System prompt")
+    .option("--max-rounds <n>", "Model calls per turn before it gives up", parseRounds)
+    .option(
+      "--no-approval",
+      "Run every tool without asking. For a session you are not watching; the default confirms anything reaching past the model."
+    )
+    .action(async (opts: Record<string, unknown>) => {
+      // A session started from the web console has no terminal and does not
+      // need one: it asks and answers over the run's event channel. What it
+      // cannot do is read a line from a pipe nobody is typing into.
+      if (!process.stdin.isTTY && !ensureRunReporting()) {
+        console.error(
+          "agent chat needs a terminal, or the web console. Use `workglow task run AgentTask` for a scripted turn."
+        );
+        process.exit(1);
+      }
+      let tools: ToolDefinition[];
+      try {
+        tools = toolsFromTypes(opts.tools as string | undefined);
+      } catch (err) {
+        console.error(`Error: ${formatError(err)}`);
+        process.exit(1);
+      }
+      const model = await resolveChatModel(opts.model as string | undefined);
+      await ensureCredentialStoreUnlocked();
+      await runAgentChat({
+        model,
+        tools,
+        systemPrompt: opts.system as string | undefined,
+        maxRounds: opts.maxRounds as number | undefined,
+        // Commander gives `--no-approval` as `approval: false`.
+        approval: opts.approval === false ? "never" : "beyond-inference",
+      });
+    });
+}
+
+function parseRounds(raw: string): number {
+  const rounds = Number.parseInt(raw, 10);
+  if (!Number.isFinite(rounds) || rounds < 1) {
+    throw new Error(`--max-rounds must be a positive integer, got "${raw}"`);
+  }
+  return rounds;
+}
+
+/**
+ * The task types named on `--tools`, as tool definitions.
+ *
+ * No default, for the reason a pinned search provider has none: which tools an
+ * agent holds decides what it can reach, and inheriting a set nobody chose is
+ * how a chat session ends up able to write files.
+ */
+function toolsFromTypes(raw: string | undefined): ToolDefinition[] {
+  const names = (raw ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+  return names.length === 0 ? [] : taskTypesToTools(names);
+}
+
+/** `--model`, or the same picker every other model port gets. */
+async function resolveChatModel(named: string | undefined): Promise<string> {
+  if (named) return named;
+  // Only the model port, so the picker asks the one thing a session needs and
+  // does not walk the rest of the task's inputs.
+  const full = AgentTask.inputSchema() as DataPortSchemaObject;
+  const schema: DataPortSchemaObject = {
+    type: "object",
+    properties: { model: full.properties.model! },
+    required: ["model"],
+  };
+  const filled = await promptMissingInput({}, schema);
+  const model = filled.model;
+  if (typeof model !== "string" || model.length === 0) {
+    throw new Error("No model chosen");
+  }
+  return model;
 }

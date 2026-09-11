@@ -72,8 +72,78 @@ export interface RunViewState {
         readonly data: unknown;
       }
     | undefined;
+  /**
+   * What the person has sent this session, in order.
+   *
+   * Held rather than derived because it never crosses the event stream: the
+   * console typed it and answered with it, and what comes back up is the run
+   * getting on with the turn.
+   */
+  readonly chatAsks: readonly string[];
   readonly lastSeq: number;
   readonly nextOrder: number;
+}
+
+/** One side of a conversation, as the console draws it. */
+export interface ChatEntry {
+  readonly role: "user" | "assistant";
+  readonly text: string;
+  /** Whether this turn is still being written. */
+  readonly pending: boolean;
+}
+
+/** The task whose rows are turns of a conversation. */
+const CHAT_TURN_TYPE = "AgentTask";
+
+/**
+ * Whether a run is asking for the next message of a conversation rather than
+ * filling in a form.
+ *
+ * Keyed on the `format` the asking side puts on the field, which is the same
+ * way every other port says what it means. A chat drawn as a one-line text
+ * input is answerable, but it is not a conversation, and the answer it takes
+ * shows up afterwards as a form somebody once filled in.
+ */
+export function isChatRequest(request: RunViewState["humanRequest"]): boolean {
+  if (!request || request.kind !== "elicit") return false;
+  const properties = (request.schema as { properties?: Record<string, { format?: string }> } | null)
+    ?.properties;
+  return Object.values(properties ?? {}).some((field) => field?.format === "chat-message");
+}
+
+/**
+ * The conversation, zipped from the two halves the console holds: what it sent,
+ * and what each turn wrote back.
+ *
+ * One turn is one {@link CHAT_TURN_TYPE} row, in the order the rows arrived, so
+ * the Nth answer belongs under the Nth message — a turn is only ever started by
+ * a message, so the pairing cannot slip. A turn still running shows what it has
+ * said so far rather than nothing.
+ */
+export function chatTranscript(state: RunViewState): readonly ChatEntry[] {
+  const turns = [...state.rows.values()]
+    .filter((row) => row.type === CHAT_TURN_TYPE)
+    .sort((left, right) => left.order - right.order);
+  const entries: ChatEntry[] = [];
+  for (let index = 0; index < state.chatAsks.length; index++) {
+    entries.push({ role: "user", text: state.chatAsks[index]!, pending: false });
+    const turn = turns[index];
+    if (!turn) continue;
+    const settled = SETTLED.has(turn.status);
+    if (turn.streamText.length === 0 && !settled) {
+      entries.push({ role: "assistant", text: "", pending: true });
+      continue;
+    }
+    if (turn.streamText.length > 0) {
+      entries.push({ role: "assistant", text: turn.streamText, pending: !settled });
+    }
+  }
+  return entries;
+}
+
+/** Records a message the console just sent, so the transcript can show it. */
+export function appendChatAsk(state: RunViewState, text: string): RunViewState {
+  return { ...state, chatAsks: [...state.chatAsks, text] };
 }
 
 export function emptyRunView(): RunViewState {
@@ -87,6 +157,7 @@ export function emptyRunView(): RunViewState {
     error: undefined,
     output: undefined,
     humanRequest: undefined,
+    chatAsks: [],
     lastSeq: 0,
     nextOrder: 0,
   };

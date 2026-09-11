@@ -43,14 +43,18 @@ import {
 } from "./heartbeat";
 import { loadRailWidths, saveRailWidths, type RailSide, type RailWidths } from "./railWidths";
 import {
+  appendChatAsk,
   applyRecord,
+  chatTranscript,
   emptyRunView,
   filterCommandTree,
+  isChatRequest,
   openPathsFor,
   stackedPane,
   type RunViewState,
   type StackedPane,
 } from "./state";
+import { ChatTranscript } from "./views/ChatTranscript";
 import { CommandTree } from "./views/CommandTree";
 import { GroupView } from "./views/GroupView";
 import { HumanPrompt } from "./views/HumanPrompt";
@@ -610,7 +614,37 @@ function App(): JSX.Element {
               {error}
             </div>
           ) : null}
-          {view.humanRequest && run ? (
+          {view.humanRequest && run && isChatRequest(view.humanRequest) ? (
+            <ChatTranscript
+              entries={chatTranscript(view)}
+              message={view.humanRequest.message}
+              canAnswer={cli.online}
+              onSend={(text) => {
+                if (!cli.online) return;
+                void answerHuman(run.id, {
+                  requestId: view.humanRequest!.requestId,
+                  action: "accept",
+                  content: { message: text },
+                  done: true,
+                });
+                setView((current) => ({
+                  ...appendChatAsk(current, text),
+                  humanRequest: undefined,
+                }));
+              }}
+              onEnd={() => {
+                if (!cli.online) return;
+                void answerHuman(run.id, {
+                  requestId: view.humanRequest!.requestId,
+                  action: "decline",
+                  content: undefined,
+                  done: true,
+                });
+                setView((current) => ({ ...current, humanRequest: undefined }));
+              }}
+            />
+          ) : null}
+          {view.humanRequest && run && !isChatRequest(view.humanRequest) ? (
             <HumanPrompt
               request={view.humanRequest}
               canAnswer={cli.online}

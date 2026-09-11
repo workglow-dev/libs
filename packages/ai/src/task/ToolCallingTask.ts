@@ -106,6 +106,12 @@ export const ToolDefinitionSchema = {
       description: "JSON Schema describing what the tool returns",
       additionalProperties: true,
     },
+    taskType: {
+      type: "string",
+      title: "Task Type",
+      description:
+        "The registered task type backing this tool, when it differs from the name the model sees",
+    },
     configSchema: {
       type: "object",
       title: "Config Schema",

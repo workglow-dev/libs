@@ -35,6 +35,13 @@ export interface ToolDefinition {
    * (check `execute`, then registry lookup, then stub).
    */
   type?: "function" | "task";
+  /**
+   * The task type backing this tool, when it is not the name the model sees.
+   * A host is free to present `search_the_web` for a task registered under
+   * another name, and a runner resolving on the presented name would then find
+   * nothing. `taskTypesToTools` always sets it.
+   */
+  taskType?: string;
   /** JSON Schema describing the task's configuration options. */
   configSchema?: JsonSchema;
   /** Concrete configuration values matching {@link configSchema}. */
@@ -42,8 +49,49 @@ export interface ToolDefinition {
   /**
    * Optional custom executor function. When provided, the tool is executed
    * by calling this function directly instead of instantiating a Task.
+   *
+   * A string comes back to the model as the tool result verbatim; anything else
+   * is serialized. To answer with a failure rather than a value, throw a
+   * {@link ToolCallError} — its message reaches the model unwrapped.
    */
-  execute?: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  execute?: (input: Record<string, unknown>, context: ToolExecuteContext) => Promise<unknown>;
+  /**
+   * Whether a person approves each call before it runs, overriding whatever a
+   * runner would otherwise decide for this tool. Set it in both directions: a
+   * host function that spends money says `true`, and a task whose reach a host
+   * has already scoped away says `false`. Absent leaves the decision to the
+   * runner — see `AgentTask`, which reads it from the backing task class.
+   */
+  requiresApproval?: boolean;
+}
+
+/**
+ * What a host function is told about the call it is serving.
+ *
+ * A tool that draws something, or asks a person something, has to say WHICH
+ * call it is drawing for — a transcript keys its cards on the tool-use id, and
+ * an answer that arrives against the wrong one is worse than no answer. The
+ * signal is the run's: work a tool starts outlives the tool otherwise.
+ */
+export interface ToolExecuteContext {
+  readonly toolUseId: string;
+  readonly signal: AbortSignal;
+}
+
+/**
+ * A tool failure that is an answer rather than a fault.
+ *
+ * A runner wraps an ordinary throw ("<tool> failed: …"), which is right for a
+ * bug and wrong for an outcome the tool means to report — a person declining an
+ * action, a workflow that ran and errored. The message of one of these reaches
+ * the model exactly as written, so the tool keeps the wording it chose,
+ * including whatever it wants the model to do next.
+ */
+export class ToolCallError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolCallError";
+  }
 }
 
 /**
