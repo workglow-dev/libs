@@ -299,6 +299,60 @@ export type StreamPhase = {
 };
 
 /**
+ * How far one tool call a task is running on a model's behalf has got.
+ *
+ * Emitted per call, so a host drawing a card for one has the card's whole
+ * life on the wire. Without it the only account of a tool call is the
+ * conversation the task publishes, and a card has to be reconstructed by
+ * diffing successive copies of that: the ask appears when the assistant
+ * message lands, and the outcome when the results land — as one batch, after
+ * the last of them, with nothing in between and no way to tell which call is
+ * running now. A host owning its own tools can fill that in from inside them,
+ * which is why this was not missed earlier; a host whose tools are task types
+ * it named cannot, and neither can one relaying to a protocol.
+ *
+ * Metadata, not data, on the same terms as {@link StreamPhase}: emitted on
+ * `stream_chunk`, never accumulated into a port, never part of a `finish`
+ * payload, and no status flip. A task that reports these still reports its
+ * conversation — this says where a call has got to, not what was said.
+ *
+ * `status` discriminates what else is known, rather than every field being
+ * optional on one shape:
+ *  - `pending` — the model asked for it; nothing has run. Carries `input`.
+ *  - `running` — the task has taken the call up. Every call passes through
+ *    this, including the ones nothing ever executes for: a tool that does not
+ *    exist, arguments its schema rejects, a call nobody approves. A host then
+ *    draws one lifecycle rather than one per way a call can go, and `running`
+ *    covers waiting on a person for the same reason — an approval is part of
+ *    making the call, and a host drawing its own approval knows it asked.
+ *  - `completed` / `failed` — settled, carrying the text the model reads
+ *    back. `failed` is the call's own outcome — it threw, its arguments were
+ *    rejected, nobody approved it — and not an error that ends the run.
+ */
+export type StreamToolCall =
+  | {
+      type: "tool-call";
+      status: "pending";
+      toolCallId: string;
+      name: string;
+      input: Record<string, unknown>;
+    }
+  | {
+      type: "tool-call";
+      status: "running";
+      toolCallId: string;
+      name: string;
+    }
+  | {
+      type: "tool-call";
+      status: "completed" | "failed";
+      toolCallId: string;
+      name: string;
+      /** What the model reads back, after the same clamp the result carries. */
+      result: string;
+    };
+
+/**
  * Discriminated union of all stream event types.
  * Used as the element type for `AsyncIterable<StreamEvent>` streams
  * flowing through the DAG.
@@ -312,7 +366,8 @@ export type StreamEvent<Output = Record<string, any>> =
   | StreamError
   | StreamRefusal
   | StreamUsage
-  | StreamPhase;
+  | StreamPhase
+  | StreamToolCall;
 
 // ========================================================================
 // Port-level stream helpers
