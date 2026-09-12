@@ -18,6 +18,7 @@ import {
   getOutputStreamMode,
   getPortStreamMode,
   getStreamingPorts,
+  isDataflowExcluded,
   isDeltaStreamMode,
   isStreamConsumer,
   isTaskStreamable,
@@ -836,10 +837,11 @@ export class StreamPump {
             if (portId !== undefined && StreamPump.isPortDelta(event) && event.port !== portId) {
               return;
             }
-            // Phase events are not accumulated into dataflow edges per the
-            // StreamTypes contract, so they must not be enqueued onto edge
-            // streams; drop them here.
-            if (event.type === "phase") {
+            // A task's own reporting is not content on a port, so it never
+            // reaches an edge. The port filter above cannot decide this: it
+            // recognises only the three delta types, so an event carrying no
+            // `port` passes it by construction.
+            if (isDataflowExcluded(event)) {
               return;
             }
             // Tap: on snapshot events, write per-port data into each edge's

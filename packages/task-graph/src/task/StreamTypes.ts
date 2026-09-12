@@ -299,6 +299,75 @@ export type StreamPhase = {
 };
 
 /**
+ * How far one tool call a task is running on a model's behalf has got.
+ *
+ * Emitted per call, so a host drawing a card for one has the card's whole
+ * life on the wire. Without it the only account of a tool call is the
+ * conversation the task publishes, and a card has to be reconstructed by
+ * diffing successive copies of that: the ask appears when the assistant
+ * message lands, and the outcome when the results land — as one batch, after
+ * the last of them, with nothing in between and no way to tell which call is
+ * running now. A host owning its own tools can fill that in from inside them,
+ * which is why this was not missed earlier; a host whose tools are task types
+ * it named cannot, and neither can one relaying to a protocol.
+ *
+ * Metadata, not data, on the same terms as {@link StreamPhase}: emitted on
+ * `stream_chunk`, never accumulated into a port, never part of a `finish`
+ * payload, and no status flip. A task that reports these still reports its
+ * conversation — this says where a call has got to, not what was said.
+ *
+ * `status` discriminates what else is known, rather than every field being
+ * optional on one shape:
+ *  - `pending` — the model asked for it; nothing has run. Carries `input`.
+ *  - `running` — the task has taken the call up. Every call passes through
+ *    this, including the ones nothing ever executes for: a tool that does not
+ *    exist, arguments its schema rejects, a call nobody approves. A host then
+ *    draws one lifecycle rather than one per way a call can go, and `running`
+ *    covers waiting on a person for the same reason — an approval is part of
+ *    making the call, and a host drawing its own approval knows it asked.
+ *  - `completed` / `failed` — settled, carrying the text the model reads
+ *    back. `failed` is the call's own outcome — it threw, its arguments were
+ *    rejected, nobody approved it — and not an error that ends the run.
+ *
+ * The two settled states are separate members carrying identical fields rather
+ * than one member with `status: "completed" | "failed"`. A shared member makes
+ * `status` no discriminant at all: `Extract<StreamEvent, { type: "tool-call";
+ * status: "completed" }>` is then `never`, because no member is assignable to a
+ * constraint narrower than its own union, and a consumer wanting the settled
+ * shape has to key on whichever property happens to be unique to it.
+ */
+export type StreamToolCall =
+  | {
+      type: "tool-call";
+      status: "pending";
+      toolCallId: string;
+      name: string;
+      input: Record<string, unknown>;
+    }
+  | {
+      type: "tool-call";
+      status: "running";
+      toolCallId: string;
+      name: string;
+    }
+  | {
+      type: "tool-call";
+      status: "completed";
+      toolCallId: string;
+      name: string;
+      /** What the model reads back, after the same clamp the result carries. */
+      result: string;
+    }
+  | {
+      type: "tool-call";
+      status: "failed";
+      toolCallId: string;
+      name: string;
+      /** What the model reads back, after the same clamp the result carries. */
+      result: string;
+    };
+
+/**
  * Discriminated union of all stream event types.
  * Used as the element type for `AsyncIterable<StreamEvent>` streams
  * flowing through the DAG.
@@ -312,7 +381,8 @@ export type StreamEvent<Output = Record<string, any>> =
   | StreamError
   | StreamRefusal
   | StreamUsage
-  | StreamPhase;
+  | StreamPhase
+  | StreamToolCall;
 
 // ========================================================================
 // Port-level stream helpers
@@ -575,6 +645,26 @@ export const DEFAULT_STREAM_GATE_WATCHDOG_MS = 60_000;
  * deterministic per event, so charge and credit sites can each compute it
  * independently and always agree.
  */
+/**
+ * Whether an event is the task's own reporting rather than content on a port,
+ * and so must not be enqueued onto a dataflow edge.
+ *
+ * These are the events {@link StreamPhase} and {@link StreamToolCall} document
+ * as metadata: a downstream task is not a subscriber to how its producer got
+ * on, and forwarding them onto an edge has two consequences beyond the wrong
+ * audience. A nested graph re-yields them under a second task id, so one tool
+ * call is reported twice under different names; and {@link streamEventCost}
+ * charges them nothing, so an event carrying a settled call's whole result text
+ * passes the backpressure gate uncounted and a slow consumer accumulates one
+ * per call without the gate ever closing.
+ *
+ * The port filter cannot do this job: it only recognises the three delta types,
+ * so anything without a `port` passes it by construction.
+ */
+export function isDataflowExcluded(event: StreamEvent): boolean {
+  return event.type === "phase" || event.type === "tool-call";
+}
+
 export function streamEventCost(event: StreamEvent): number {
   switch (event.type) {
     case "text-delta":

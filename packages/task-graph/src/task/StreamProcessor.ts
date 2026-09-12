@@ -360,6 +360,13 @@ export class StreamProcessor<Input extends TaskInput, Output extends TaskOutput>
             this.task.emit("stream_chunk", event as StreamEvent);
             break;
           }
+          case "tool-call": {
+            // Where one tool call has got to. Metadata only, like `phase`: no
+            // accumulator, no runOutputData, no status flip — a task is not
+            // streaming its output because something it called started.
+            this.task.emit("stream_chunk", event as StreamEvent);
+            break;
+          }
           case "finish": {
             sawFinish = true;
             // finish supersedes the snapshots it summarizes; `?? liveUsage`
