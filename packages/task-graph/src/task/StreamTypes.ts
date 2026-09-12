@@ -328,6 +328,13 @@ export type StreamPhase = {
  *  - `completed` / `failed` — settled, carrying the text the model reads
  *    back. `failed` is the call's own outcome — it threw, its arguments were
  *    rejected, nobody approved it — and not an error that ends the run.
+ *
+ * The two settled states are separate members carrying identical fields rather
+ * than one member with `status: "completed" | "failed"`. A shared member makes
+ * `status` no discriminant at all: `Extract<StreamEvent, { type: "tool-call";
+ * status: "completed" }>` is then `never`, because no member is assignable to a
+ * constraint narrower than its own union, and a consumer wanting the settled
+ * shape has to key on whichever property happens to be unique to it.
  */
 export type StreamToolCall =
   | {
@@ -345,7 +352,15 @@ export type StreamToolCall =
     }
   | {
       type: "tool-call";
-      status: "completed" | "failed";
+      status: "completed";
+      toolCallId: string;
+      name: string;
+      /** What the model reads back, after the same clamp the result carries. */
+      result: string;
+    }
+  | {
+      type: "tool-call";
+      status: "failed";
       toolCallId: string;
       name: string;
       /** What the model reads back, after the same clamp the result carries. */
@@ -630,6 +645,26 @@ export const DEFAULT_STREAM_GATE_WATCHDOG_MS = 60_000;
  * deterministic per event, so charge and credit sites can each compute it
  * independently and always agree.
  */
+/**
+ * Whether an event is the task's own reporting rather than content on a port,
+ * and so must not be enqueued onto a dataflow edge.
+ *
+ * These are the events {@link StreamPhase} and {@link StreamToolCall} document
+ * as metadata: a downstream task is not a subscriber to how its producer got
+ * on, and forwarding them onto an edge has two consequences beyond the wrong
+ * audience. A nested graph re-yields them under a second task id, so one tool
+ * call is reported twice under different names; and {@link streamEventCost}
+ * charges them nothing, so an event carrying a settled call's whole result text
+ * passes the backpressure gate uncounted and a slow consumer accumulates one
+ * per call without the gate ever closing.
+ *
+ * The port filter cannot do this job: it only recognises the three delta types,
+ * so anything without a `port` passes it by construction.
+ */
+export function isDataflowExcluded(event: StreamEvent): boolean {
+  return event.type === "phase" || event.type === "tool-call";
+}
+
 export function streamEventCost(event: StreamEvent): number {
   switch (event.type) {
     case "text-delta":

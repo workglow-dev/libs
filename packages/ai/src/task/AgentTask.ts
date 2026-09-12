@@ -186,6 +186,11 @@ function assistantMessage(text: string, calls: readonly ToolCall[]): ChatMessage
   return { role: "assistant", content };
 }
 
+/** The text of a settled call, as the model will read it. */
+function toolResultText(result: ContentBlockToolResult): string {
+  return result.content.map((block) => (block.type === "text" ? block.text : "")).join("");
+}
+
 /**
  * Every path into a `tool_result` is bounded by the same budget, not just the
  * one carrying a tool's output. "Unknown tool X. Available: …" names every tool
@@ -193,11 +198,6 @@ function assistantMessage(text: string, calls: readonly ToolCall[]): ChatMessage
  * context window as a fetched page — and it would then do it on every round the
  * model keeps guessing.
  */
-/** The text of a settled call, as the model will read it. */
-function toolResultText(result: ContentBlockToolResult): string {
-  return result.content.map((block) => (block.type === "text" ? block.text : "")).join("");
-}
-
 function toolResult(
   call: ToolCall,
   text: string,

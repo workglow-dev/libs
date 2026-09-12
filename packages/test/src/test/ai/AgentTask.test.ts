@@ -865,11 +865,13 @@ describe("AgentTask", () => {
     }
 
     /**
-     * The settled member, picked out by the field only it carries. Extracting
-     * on `status: "completed"` yields `never` instead — that member's status is
-     * the wider `"completed" | "failed"`, which no narrower constraint matches.
+     * Each settled state on its own, which is what `status` being a real
+     * discriminant buys a consumer. Extracting one terminal status works only
+     * because they are separate members: were they one member carrying
+     * `"completed" | "failed"`, both of these would be `never`.
      */
-    type SettledToolCall = Extract<StreamEvent, { type: "tool-call"; result: string }>;
+    type CompletedToolCall = Extract<StreamEvent, { type: "tool-call"; status: "completed" }>;
+    type FailedToolCall = Extract<StreamEvent, { type: "tool-call"; status: "failed" }>;
 
     /** `status:id` for each event — the whole sequence in one readable line. */
     function trace(seen: ReadonlyArray<Extract<StreamEvent, { type: "tool-call" }>>): string[] {
@@ -895,7 +897,7 @@ describe("AgentTask", () => {
 
       // The settled text IS the string the model reads back, not a second copy
       // of it that could drift from the result or miss its clamp.
-      const settled = seen[2] as SettledToolCall;
+      const settled = seen[2] as CompletedToolCall;
       const block = toolResults(output.messages)[0] as {
         readonly content: ReadonlyArray<{ readonly text?: string }>;
       };
@@ -999,7 +1001,7 @@ describe("AgentTask", () => {
       // Every call passes the same three states, the ones this loop answers
       // itself included: a host draws one card lifecycle, not two.
       expect(trace(seen)).toEqual(["pending:c1", "running:c1", "failed:c1"]);
-      expect((seen[2] as SettledToolCall).result).toContain("Unknown tool");
+      expect((seen[2] as FailedToolCall).result).toContain("Unknown tool");
     });
   });
 });
