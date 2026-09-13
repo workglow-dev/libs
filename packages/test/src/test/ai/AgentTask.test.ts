@@ -14,7 +14,7 @@ import {
   setAiProviderRegistry,
   ToolCallError,
 } from "@workglow/ai";
-import type { TaskEntitlements, TaskGraphJson } from "@workglow/task-graph";
+import type { StreamEvent, TaskEntitlements, TaskGraphJson } from "@workglow/task-graph";
 import { createGraphFromGraphJSON, Entitlements, Task, TaskRegistry } from "@workglow/task-graph";
 import { HumanInputTask } from "@workglow/tasks";
 import type { IHumanConnector, IHumanRequest, IHumanResponse } from "@workglow/util";
@@ -848,5 +848,160 @@ describe("AgentTask", () => {
 
     expect(seen).toEqual({ a: 2, b: 3 });
     expect(JSON.stringify(toolResults(output.messages)[0])).toContain("5");
+  });
+
+  // ======================================================================
+  // Per-tool lifecycle events
+  // ======================================================================
+
+  describe("tool-call events", () => {
+    /** Collects the lifecycle events a run reports, in the order they arrive. */
+    function lifecycle(task: AgentTask): Array<Extract<StreamEvent, { type: "tool-call" }>> {
+      const seen: Array<Extract<StreamEvent, { type: "tool-call" }>> = [];
+      task.subscribe("stream_chunk", (event) => {
+        if (event.type === "tool-call") seen.push(event);
+      });
+      return seen;
+    }
+
+    /**
+     * Each settled state on its own, which is what `status` being a real
+     * discriminant buys a consumer. Extracting one terminal status works only
+     * because they are separate members: were they one member carrying
+     * `"completed" | "failed"`, both of these would be `never`.
+     */
+    type CompletedToolCall = Extract<StreamEvent, { type: "tool-call"; status: "completed" }>;
+    type FailedToolCall = Extract<StreamEvent, { type: "tool-call"; status: "failed" }>;
+
+    /** `status:id` for each event — the whole sequence in one readable line. */
+    function trace(seen: ReadonlyArray<Extract<StreamEvent, { type: "tool-call" }>>): string[] {
+      return seen.map((event) => `${event.status}:${event.toolCallId}`);
+    }
+
+    it("reports a call pending, then running, then completed", async () => {
+      scriptModel([
+        { calls: [{ id: "c1", name: "AgentTest_EchoTask", input: { text: "hi" } }] },
+        { text: "It said HI." },
+      ]);
+      const task = new AgentTask();
+      const seen = lifecycle(task);
+
+      const output = await task.run(
+        { model: MODEL, prompt: "echo hi", tools: [ECHO_TOOL], approval: "never" },
+        { registry }
+      );
+
+      expect(trace(seen)).toEqual(["pending:c1", "running:c1", "completed:c1"]);
+      expect(seen.every((event) => event.name === "AgentTest_EchoTask")).toBe(true);
+      expect(seen[0]).toMatchObject({ status: "pending", input: { text: "hi" } });
+
+      // The settled text IS the string the model reads back, not a second copy
+      // of it that could drift from the result or miss its clamp.
+      const settled = seen[2] as CompletedToolCall;
+      const block = toolResults(output.messages)[0] as {
+        readonly content: ReadonlyArray<{ readonly text?: string }>;
+      };
+      expect(block.content[0]?.text).toBe(settled.result);
+      expect(settled.result).toContain("HI");
+    });
+
+    it("announces every call the model asked for before running any of them", async () => {
+      scriptModel([
+        {
+          calls: [
+            { id: "c1", name: "AgentTest_EchoTask", input: { text: "a" } },
+            { id: "c2", name: "AgentTest_EchoTask", input: { text: "b" } },
+          ],
+        },
+        { text: "done" },
+      ]);
+      const task = new AgentTask();
+      const seen = lifecycle(task);
+
+      await task.run(
+        { model: MODEL, prompt: "echo twice", tools: [ECHO_TOOL], approval: "never" },
+        { registry }
+      );
+
+      // The model asked for both at once, so both cards can be drawn at once;
+      // the calls then run one at a time, each settling before the next starts.
+      expect(trace(seen)).toEqual([
+        "pending:c1",
+        "pending:c2",
+        "running:c1",
+        "completed:c1",
+        "running:c2",
+        "completed:c2",
+      ]);
+    });
+
+    it("settles a call the tool refused as failed, in the tool's own words", async () => {
+      scriptModel([{ calls: [{ id: "c1", name: "decline", input: {} }] }, { text: "ok" }]);
+      const task = new AgentTask();
+      const seen = lifecycle(task);
+
+      await task.run(
+        {
+          model: MODEL,
+          prompt: "go",
+          approval: "never",
+          tools: [
+            {
+              name: "decline",
+              description: "Declines",
+              inputSchema: { type: "object", properties: {} },
+              execute: async () => {
+                throw new ToolCallError("Not this time.");
+              },
+            },
+          ],
+        },
+        { registry }
+      );
+
+      expect(trace(seen)).toEqual(["pending:c1", "running:c1", "failed:c1"]);
+      expect(seen[2]).toMatchObject({ status: "failed", result: "Not this time." });
+    });
+
+    it("settles a call nobody approved as failed, without running it", async () => {
+      scriptModel([
+        {
+          calls: [
+            { id: "c1", name: "AgentTest_FetchTask", input: { url: "https://example.test" } },
+          ],
+        },
+        { text: "ok" },
+      ]);
+      const human = connector((request) => ({
+        requestId: request.requestId,
+        action: "decline",
+        content: undefined,
+        done: true,
+      }));
+      registry.registerInstance(HUMAN_CONNECTOR, human.connector);
+      const task = new AgentTask();
+      const seen = lifecycle(task);
+
+      await task.run({ model: MODEL, prompt: "fetch", tools: [FETCH_TOOL] }, { registry });
+
+      expect(trace(seen)).toEqual(["pending:c1", "running:c1", "failed:c1"]);
+      expect(fetchRuns).toBe(0);
+    });
+
+    it("settles a call for a tool that does not exist", async () => {
+      scriptModel([{ calls: [{ id: "c1", name: "nope", input: {} }] }, { text: "ok" }]);
+      const task = new AgentTask();
+      const seen = lifecycle(task);
+
+      await task.run(
+        { model: MODEL, prompt: "go", tools: [ECHO_TOOL], approval: "never" },
+        { registry }
+      );
+
+      // Every call passes the same three states, the ones this loop answers
+      // itself included: a host draws one card lifecycle, not two.
+      expect(trace(seen)).toEqual(["pending:c1", "running:c1", "failed:c1"]);
+      expect((seen[2] as FailedToolCall).result).toContain("Unknown tool");
+    });
   });
 });

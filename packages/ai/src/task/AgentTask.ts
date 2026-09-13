@@ -186,6 +186,11 @@ function assistantMessage(text: string, calls: readonly ToolCall[]): ChatMessage
   return { role: "assistant", content };
 }
 
+/** The text of a settled call, as the model will read it. */
+function toolResultText(result: ContentBlockToolResult): string {
+  return result.content.map((block) => (block.type === "text" ? block.text : "")).join("");
+}
+
 /**
  * Every path into a `tool_result` is bounded by the same budget, not just the
  * one carrying a tool's output. "Unknown tool X. Available: …" names every tool
@@ -337,16 +342,40 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
         return;
       }
 
+      // Every call the model asked for, announced before any of them runs: it
+      // asked for them together, and a host laying out cards can draw the whole
+      // set rather than watching them appear one at a time in an order that is
+      // this loop's business and not the model's.
+      for (const call of calls) {
+        yield {
+          type: "tool-call",
+          status: "pending",
+          toolCallId: call.id,
+          name: call.name,
+          input: call.input,
+        };
+      }
+
       const results: ContentBlockToolResult[] = [];
       for (const call of calls) {
         context.signal.throwIfAborted();
         await context.updateProgress(undefined, `Running ${call.name}`);
-        results.push(
-          await this.runCall(call, byName, validators, context, {
-            approval,
-            maxResultChars: maxToolResultChars,
-          })
-        );
+        yield { type: "tool-call", status: "running", toolCallId: call.id, name: call.name };
+        const result = await this.runCall(call, byName, validators, context, {
+          approval,
+          maxResultChars: maxToolResultChars,
+        });
+        results.push(result);
+        // Read back off the block rather than from a second copy of the text:
+        // what the card says the call produced is then the same string the
+        // model is about to read, clamp included.
+        yield {
+          type: "tool-call",
+          status: result.is_error === true ? "failed" : "completed",
+          toolCallId: call.id,
+          name: call.name,
+          result: toolResultText(result),
+        };
       }
       messages.push({ role: "tool", content: results });
       yield transcript();

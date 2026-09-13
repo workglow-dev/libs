@@ -215,10 +215,15 @@ tool is backed by a registered task (looked up by `taskType`, else `name`) or by
 `ToolDefinition.execute` function, which is handed a `ToolExecuteContext` — the tool-use id
 its answer belongs to, and the run's signal — and may throw a `ToolCallError` to report a
 failure in its own words rather than wrapped. The turn also emits a `snapshot` of `messages`
-after every message it records, so a host can draw a tool card from the moment the model asks
-for it; a `snapshot` rather than an object-delta because an array delta is folded as an upsert
+after every message it records, so a host can mirror the conversation while the turn is still
+running; a `snapshot` rather than an object-delta because an array delta is folded as an upsert
 list and successive whole-list snapshots would append into a transcript several times its
-length. A tool reaching beyond `INFERENCE_ENTITLEMENTS` is put to
+length. **A tool card reads `tool-call` events, not those snapshots** — one per call per state
+(`pending` → `running` → `completed | failed`), so a card has its whole life on the wire
+instead of being reconstructed by diffing transcripts, which reports outcomes only as one
+batch after the last call and never says which call is running. Every call passes all three
+states, the ones nothing executes for included (unknown tool, rejected arguments, refused
+approval), so a host draws one lifecycle rather than one per way a call can end. A tool reaching beyond `INFERENCE_ENTITLEMENTS` is put to
 `IHumanConnector` as a `confirm` first: `requiresApproval` overrides that per tool,
 `approval: "never"` turns it off for a headless run, and with no connector registered such a
 call is refused rather than run.
