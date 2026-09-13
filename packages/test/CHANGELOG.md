@@ -1,5 +1,31 @@
 # @workglow/test
 
+## 0.6.0
+
+### Features
+
+#### task-graph,ai
+
+- a tool call's whole life on the wire (#936)
+
+#### ai
+
+- AgentTask: the tool-calling turn loop as a task, with the CLI and its console on it (#935)
+
+### Bug Fixes
+
+#### storage
+
+- decide the join pushdown on enlistment, not the instance flag (#934)
+
+#### pricing
+
+- stop reporting an unpriced rate as free (#930)
+
+### Updated Dependencies
+
+- `miniflare`: ^5.20260911.0-alpha
+
 ## 0.5.1
 
 ### Features

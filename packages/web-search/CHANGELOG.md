@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+### Bug Fixes
+
+#### web-search
+
+- reduce domain entries on every route, not just site: (#931)
+
 ## 0.5.1
 
 _No changes in this package._

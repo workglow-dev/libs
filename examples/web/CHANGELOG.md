@@ -1,5 +1,14 @@
 # @workglow/web
 
+## 0.6.0
+
+### Updated Dependencies
+
+- `react-dom`: ^19.3.0
+- `tailwind-merge`: ^3.7.0
+- `@types/react-dom`: ^19.3.0
+- `vite`: ^8.3.0
+
 ## 0.5.1
 
 ### Chores

@@ -1,5 +1,13 @@
 # @workglow/storage
 
+## 0.6.0
+
+### Bug Fixes
+
+#### storage
+
+- decide the join pushdown on enlistment, not the instance flag (#934)
+
 ## 0.5.1
 
 ### Chores

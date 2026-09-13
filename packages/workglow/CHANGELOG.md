@@ -1,5 +1,11 @@
 # workglow
 
+## 0.6.0
+
+### Updated Dependencies
+
+- `tslog`: ^5.2.0
+
 ## 0.5.1
 
 _No changes in this package._

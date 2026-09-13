@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0
+
+### Breaking Changes
+
+- **bug fixes(mcp)**: require the auth choice startMcpHttpServer serves under (#933)
+
+### Bug Fixes
+
+#### mcp
+
+- require the auth choice startMcpHttpServer serves under (#933)
+
 ## 0.5.1
 
 ### Features

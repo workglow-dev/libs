@@ -2,7 +2,7 @@
   "name": "@workglow/test",
   "type": "module",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.6.0",
   "license": "Apache-2.0",
   "bugs": {
     "url": "https://github.com/workglow-dev/libs/issues"
@@ -75,7 +75,7 @@
     "@workglow/xai": "workspace:*",
     "aws-sdk-client-mock": "catalog:",
     "fake-indexeddb": "catalog:",
-    "miniflare": "^5.20260908.0-alpha",
+    "miniflare": "^5.20260911.0-alpha",
     "node-llama-cpp": "catalog:",
     "pg": "catalog:",
     "playwright": "catalog:",

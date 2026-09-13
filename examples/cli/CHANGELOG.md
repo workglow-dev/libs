@@ -1,5 +1,23 @@
 # @workglow/cli
 
+## 0.6.0
+
+### Breaking Changes
+
+- **bug fixes(mcp)**: require the auth choice startMcpHttpServer serves under (#933)
+
+### Features
+
+#### ai
+
+- AgentTask: the tool-calling turn loop as a task, with the CLI and its console on it (#935)
+
+### Bug Fixes
+
+#### mcp
+
+- require the auth choice startMcpHttpServer serves under (#933)
+
 ## 0.5.1
 
 ### Chores

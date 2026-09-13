@@ -1,5 +1,13 @@
 # @workglow/task-graph
 
+## 0.6.0
+
+### Features
+
+#### task-graph,ai
+
+- a tool call's whole life on the wire (#936)
+
 ## 0.5.1
 
 ### Features

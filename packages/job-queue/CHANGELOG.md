@@ -1,5 +1,9 @@
 # @workglow/job-queue
 
+## 0.6.0
+
+_No changes in this package._
+
 ## 0.5.1
 
 ### Chores

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+### Bug Fixes
+
+#### pricing
+
+- stop reporting an unpriced rate as free (#930)
+
 ## 0.5.1
 
 _No changes in this package._

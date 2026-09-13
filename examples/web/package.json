@@ -1,7 +1,7 @@
 {
   "name": "@workglow/web",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.6.0",
   "bugs": {
     "url": "https://github.com/workglow-dev/libs/issues"
   },
@@ -47,20 +47,20 @@
     "@xyflow/react": "=12.11.6",
     "clsx": "^2.1.1",
     "react": "catalog:",
-    "react-dom": "^19.2.8",
+    "react-dom": "^19.3.0",
     "react-icons": "^5.7.0",
     "react-resizable-panels": "^4.12.4",
-    "tailwind-merge": "^3.6.0"
+    "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
     "@types/react": "catalog:",
-    "@types/react-dom": "^19.2.7",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "@tailwindcss/vite": "^4.3.3",
     "tailwindcss": "^4.3.3",
     "jsdom": "^30.0.1",
     "rollup-plugin-visualizer": "^7.1.1",
-    "vite": "^8.2.2",
+    "vite": "^8.3.0",
     "vite-plugin-wasm": "^3.6.0"
   },
   "publishConfig": {
