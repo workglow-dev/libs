@@ -1,5 +1,27 @@
 # @workglow/util
 
+## 0.6.1
+
+### Features
+
+#### job-queue,util,ai
+
+- carry a failure's retryability across the worker boundary
+
+### Bug Fixes
+
+#### util
+
+- move humanPromptModel where a browser can reach it
+
+### Refactors
+
+- share the HTTP server guards out of the MCP server
+
+#### util,mcp
+
+- share the JSON-RPC HTTP scaffolding, not just its predicates
+
 ## 0.6.0
 
 _No changes in this package._

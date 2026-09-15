@@ -1,5 +1,13 @@
 # @workglow/ai
 
+## 0.6.1
+
+### Features
+
+#### job-queue,util,ai
+
+- carry a failure's retryability across the worker boundary
+
 ## 0.6.0
 
 ### Features

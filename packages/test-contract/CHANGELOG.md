@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.1
+
+### Features
+
+#### test-contract
+
+- publish the conformance suites so downstream adapters can inherit them
+
+### Tests
+
+#### test-contract
+
+- close four gaps a review found in the new suites
+
+#### web-search
+
+- hold all seven providers to the capability record they publish
+
+#### storage
+
+- hold the two join strategies to the same answer
+
 ## Unreleased
 
 ### Features

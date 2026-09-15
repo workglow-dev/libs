@@ -1,5 +1,25 @@
 # @workglow/job-queue
 
+## 0.6.1
+
+### Features
+
+#### job-queue,util,ai
+
+- carry a failure's retryability across the worker boundary
+
+### Bug Fixes
+
+#### util
+
+- move humanPromptModel where a browser can reach it
+
+### Tests
+
+#### test-contract
+
+- close four gaps a review found in the new suites
+
 ## 0.6.0
 
 _No changes in this package._

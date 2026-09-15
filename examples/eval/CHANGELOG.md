@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+_No changes in this package._
+
 ## 0.6.0
 
 ### Updated Dependencies

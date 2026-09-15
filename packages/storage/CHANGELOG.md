@@ -1,5 +1,19 @@
 # @workglow/storage
 
+## 0.6.1
+
+### Bug Fixes
+
+#### util
+
+- move humanPromptModel where a browser can reach it
+
+### Tests
+
+#### storage
+
+- hold the two join strategies to the same answer
+
 ## 0.6.0
 
 ### Bug Fixes

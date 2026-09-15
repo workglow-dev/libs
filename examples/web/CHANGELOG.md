@@ -1,5 +1,16 @@
 # @workglow/web
 
+## 0.6.1
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `@codemirror/state`: 6.7.5
+- `@codemirror/view`: 6.43.12
+
 ## 0.6.0
 
 ### Updated Dependencies

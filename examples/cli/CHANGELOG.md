@@ -1,5 +1,21 @@
 # @workglow/cli
 
+## 0.6.1
+
+### Features
+
+- serve a saved agent over A2A from the CLI
+
+#### cli,workglow
+
+- serve headless, refuse a model-less agent, and share the serve helpers
+
+### Bug Fixes
+
+#### util
+
+- move humanPromptModel where a browser can reach it
+
 ## 0.6.0
 
 ### Breaking Changes

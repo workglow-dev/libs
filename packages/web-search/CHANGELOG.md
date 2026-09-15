@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.1
+
+### Tests
+
+#### web-search
+
+- hold all seven providers to the capability record they publish
+
 ## 0.6.0
 
 ### Bug Fixes

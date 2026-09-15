@@ -1,5 +1,13 @@
 # workglow
 
+## 0.6.1
+
+### Features
+
+#### cli,workglow
+
+- serve headless, refuse a model-less agent, and share the serve helpers
+
 ## 0.6.0
 
 ### Updated Dependencies

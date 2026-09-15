@@ -1,5 +1,49 @@
 # @workglow/test
 
+## 0.6.1
+
+### Features
+
+#### test-contract
+
+- publish the conformance suites so downstream adapters can inherit them
+
+#### job-queue,util,ai
+
+- carry a failure's retryability across the worker boundary
+
+### Bug Fixes
+
+#### test
+
+- fill vi.waitFor in Bun's vitest shim, so the nightly is green
+
+#### scripts
+
+- gate the release on green CI before anything writes or pushes
+
+### Tests
+
+#### test-contract
+
+- close four gaps a review found in the new suites
+
+#### web-search
+
+- hold all seven providers to the capability record they publish
+
+#### storage
+
+- hold the two join strategies to the same answer
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `miniflare`: ^5.20260915.0-alpha
+
 ## 0.6.0
 
 ### Features

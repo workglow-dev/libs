@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1
+
+### Refactors
+
+- share the HTTP server guards out of the MCP server
+
+#### util,mcp
+
+- share the JSON-RPC HTTP scaffolding, not just its predicates
+
 ## 0.6.0
 
 ### Breaking Changes
