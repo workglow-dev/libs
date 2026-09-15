@@ -183,7 +183,12 @@ function HumanElicitPanel({
           onFinish={(response) => {
             onFinish({
               requestId: response.requestId,
-              action: "cancel",
+              // A refusal survives; anything else becomes `cancel`. A form that
+              // failed to load has no values, so Enter cannot report an accept
+              // — but the person who pressed `n` did refuse, and collapsing
+              // that into `cancel` would advertise an action this panel then
+              // threw away.
+              action: response.action === "decline" ? "decline" : "cancel",
               content: undefined,
               done: true,
             });
