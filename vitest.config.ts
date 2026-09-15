@@ -109,17 +109,20 @@ const shared = {
   retry: 1,
   // Transform is the cost sharding cannot divide: it is mostly the shared module
   // graph, so a quarter of the unit files still transforms nearly all of it.
-  // Persisting the results turns that into a read on every run after the first.
+  // Persisting the results turns that into a read on every run AFTER the first,
+  // which is why this is a local-development win and not a CI one — a CI job
+  // starts on a fresh container, and nothing carries the directory between
+  // runs (see the note in CLAUDE.md for the churn arithmetic behind that).
   //
   // It belongs HERE rather than at the root, twice over. `fsModuleCache` is a
   // per-PROJECT option (vitest lists it among the project CLI overrides) and
   // these projects set `extends: false`, so a root-level value would reach none
   // of them. And `fsModuleCachePath` resolves against the project's own root,
   // which would scatter eighteen cache directories through `packages/*` and
-  // `providers/*` — one absolute path keeps it to a single directory, which is
-  // what CI can restore as one entry. Sharing it across projects is sound
-  // because they share the resolver plugin and these options, so the same file
-  // transforms to the same output whichever project asks for it.
+  // `providers/*` instead of one a developer can find and clear. Sharing it
+  // across projects is sound because they share the resolver plugin and these
+  // options, so the same file transforms to the same output whichever project
+  // asks for it.
   fsModuleCache: true,
   fsModuleCachePath: abs("node_modules/.vitest-cache"),
   exclude: [...configDefaults.exclude, ...tierExclude],
