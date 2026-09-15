@@ -561,14 +561,36 @@ cost is per FILE: vitest accounts the slice as ~51% setup (a fresh module regist
 `vitest.setup.ts` bootstrapping the task registry into each), ~21% transform, ~5% import and
 ~22% tests. Four shards measured 2.9x, not 4x, and transform is the shortfall — it is mostly
 the shared module graph, so a quarter of the files still transforms nearly all of it (43% of
-that shard's wall clock against 21% of the whole slice's). That is the part `fsModuleCache`
-would address, not sharding.
+that shard's wall clock against 21% of the whole slice's). Sharding cannot divide that part,
+which is what **`fsModuleCache`** is for.
 
 `scripts/lib/testShards.ts` holds the partition, dealt round-robin from a **sorted** list:
 each shard runs on its own machine off a discovery walk in `readdirSync` order, so an
 order-dependent partition would let a file land in two shards, or in none and never run with
 every job still green. An empty shard passes, which is what a `--changed` pull request
 narrowed to a handful of files produces.
+
+**`fsModuleCache` is on**, persisting transform results to `node_modules/.vitest-cache`.
+Measured on a 177-file shard: 111s cold (the same as without it — enabling it costs nothing
+on a miss), 75s warm, transform falling from 46% to 17% of the run. It is set in `shared`
+rather than at the root because it is a per-PROJECT option and these projects declare
+`extends: false`, and the path is given explicitly because the default resolves against each
+project's own root — which would scatter eighteen cache directories through `packages/*` and
+`providers/*` instead of one that CI can restore as a single entry.
+
+Entries are keyed by content, verified: editing an imported module fails the test that
+depended on it and reverting passes it again, so a warm cache is never able to serve stale
+code. Nothing prunes it, though — it accumulates the transforms of every version of every
+file it has seen (186MB, ~9900 entries, after one 177-file shard), so
+`npx vitest --clearCache` is the reset. `bun run clean` takes it too, since it lives under
+`node_modules`.
+
+In CI it is **restored on every run and saved only on a push to main**, keyed on `bun.lock`.
+A per-run key would hold the hit rate higher, but it also uploads ~61MB compressed per shard
+per run into a store that is capped repo-wide and evicted LRU — and the rag/provider jobs
+keep multi-GB HuggingFace model caches in that same store. Between lockfile changes the entry
+goes stale only by the files that changed, and those are invalidated individually, so a stale
+entry costs a miss rather than correctness.
 
 **Test credentials are decrypted once per RUN, not once per test file.** Each credential in
 `.secrets` carries its own random salt, so opening the store derives a 600k-iteration PBKDF2

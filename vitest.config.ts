@@ -107,6 +107,21 @@ const shared = {
   // Vitest uses hookTimeout for beforeEach/afterAll separately from testTimeout; keep both aligned
   hookTimeout: 15000,
   retry: 1,
+  // Transform is the cost sharding cannot divide: it is mostly the shared module
+  // graph, so a quarter of the unit files still transforms nearly all of it.
+  // Persisting the results turns that into a read on every run after the first.
+  //
+  // It belongs HERE rather than at the root, twice over. `fsModuleCache` is a
+  // per-PROJECT option (vitest lists it among the project CLI overrides) and
+  // these projects set `extends: false`, so a root-level value would reach none
+  // of them. And `fsModuleCachePath` resolves against the project's own root,
+  // which would scatter eighteen cache directories through `packages/*` and
+  // `providers/*` — one absolute path keeps it to a single directory, which is
+  // what CI can restore as one entry. Sharing it across projects is sound
+  // because they share the resolver plugin and these options, so the same file
+  // transforms to the same output whichever project asks for it.
+  fsModuleCache: true,
+  fsModuleCachePath: abs("node_modules/.vitest-cache"),
   exclude: [...configDefaults.exclude, ...tierExclude],
 };
 

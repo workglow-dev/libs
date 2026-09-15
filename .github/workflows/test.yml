@@ -152,6 +152,29 @@ jobs:
         with:
           bun-version: 1.4.0
       - run: bun i
+      # Vitest's `fsModuleCache` (enabled in vitest.config.ts) persists transform
+      # results, which is the one cost sharding cannot divide: transform is mostly
+      # the shared module graph, so each shard still transforms nearly all of it.
+      # Measured on a 177-file shard: 111s cold, 75s warm.
+      #
+      # RESTORED on every run, SAVED only on a push to main. A key that changed
+      # per run would keep the hit rate highest, but it also uploads ~61MB
+      # compressed per shard per run into a store that is capped repo-wide and
+      # evicted LRU — and the other jobs in this workflow keep multi-GB
+      # HuggingFace model caches in that same store, which is not a thing to
+      # evict for a 35s saving. Keyed on the lockfile instead: one entry per
+      # shard, refreshed whenever dependencies move. Between those refreshes it
+      # goes stale only by the files that changed, and vitest invalidates those
+      # individually by content hash — a stale entry is a miss, never wrong code.
+      #
+      # After `bun i`, which creates the `node_modules` this lives under.
+      - name: Restore vitest transform cache
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.vitest-cache
+          key: vitest-transform-unit-${{ matrix.shard }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            vitest-transform-unit-${{ matrix.shard }}-
       - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
@@ -161,6 +184,18 @@ jobs:
       # of files, and the shards past the first then hold none of them.
       - name: Run unit tests via vitest (shard ${{ matrix.shard }})
         run: bun run test:vitest:unit -- --shard ${{ matrix.shard }} ${{ env.TEST_CHANGED }}
+      # Saved even when the tests failed, deliberately: a transform result is
+      # keyed by content and says nothing about whether the test passed, so a
+      # red run still warms the next one. (A step with its own `if:` loses the
+      # implicit `success()`, so this is what that spelling means either way —
+      # stated rather than left to be discovered.) Not on cancellation, where
+      # the cache would be truncated for no benefit.
+      - name: Save vitest transform cache
+        if: ${{ !cancelled() && github.event_name == 'push' }}
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules/.vitest-cache
+          key: vitest-transform-unit-${{ matrix.shard }}-${{ hashFiles('bun.lock') }}
 
   test-vitest-integration:
     runs-on: ubuntu-latest
@@ -176,6 +211,18 @@ jobs:
         with:
           bun-version: 1.4.0
       - run: bun i
+      # Same arrangement as the unit shards above, under its own key — see the
+      # comment there for why this is restore-always / save-on-push. The
+      # provider and rag jobs are deliberately left out: they run 3-14 files
+      # each against multi-GB model caches in the same store, and the transform
+      # share of their wall clock has not been measured.
+      - name: Restore vitest transform cache
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.vitest-cache
+          key: vitest-transform-integration-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            vitest-transform-integration-
       - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
@@ -185,6 +232,12 @@ jobs:
         env:
           WORKGLOW_SECRETS_PASSPHRASE: ${{ secrets.WORKGLOW_SECRETS_PASSPHRASE }}
         run: bun run test:vitest:integration -- ${{ env.TEST_CHANGED }}
+      - name: Save vitest transform cache
+        if: ${{ !cancelled() && github.event_name == 'push' }}
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules/.vitest-cache
+          key: vitest-transform-integration-${{ hashFiles('bun.lock') }}
 
   test-vitest-rag:
     runs-on: ubuntu-latest
