@@ -7,6 +7,7 @@
 import type { IJobExecuteContext } from "@workglow/job-queue";
 import {
   AbortSignalJobError,
+  declaredRetryability,
   Job,
   PermanentJobError,
   RetryableJobError,
@@ -16,11 +17,6 @@ import type { TaskInput, TaskOutput } from "@workglow/task-graph";
 import type { JsonSchema } from "@workglow/util/schema";
 import type { AiEmit } from "../capability/AiEmit";
 import type { Capability } from "../capability/Capabilities";
-import {
-  ImageGenerationContentPolicyError,
-  ImageGenerationProviderError,
-  ProviderUnsupportedFeatureError,
-} from "../errors/ImageGenerationErrors";
 import type { ModelConfig } from "../model/ModelSchema";
 import type { AiSessionContext } from "../provider/AiProviderRegistry";
 import { getAiProviderRegistry } from "../provider/AiProviderRegistry";
@@ -87,6 +83,11 @@ export interface AiJobInput<Input extends TaskInput = TaskInput> {
  * Classifies a provider error as retryable or permanent based on known patterns.
  * Returns a RetryableJobError for transient issues (rate limits, network errors,
  * server errors) and a PermanentJobError for non-recoverable issues (auth, not found).
+ *
+ * The heuristics below are the LAST resort, for a provider that classified
+ * nothing. An error that states an answer — any error, in or out of this
+ * package — is taken at its word first, because the code that threw it saw the
+ * failure and this function only sees a string.
  */
 export function classifyProviderError(err: unknown, taskType: string, provider: string): Error {
   if (
@@ -97,17 +98,8 @@ export function classifyProviderError(err: unknown, taskType: string, provider: 
     return err;
   }
 
-  if (
-    err instanceof ProviderUnsupportedFeatureError ||
-    err instanceof ImageGenerationContentPolicyError
-  ) {
-    return new PermanentJobError(err.message);
-  }
-  if (err instanceof ImageGenerationProviderError) {
-    return err.retryable ? new RetryableJobError(err.message) : new PermanentJobError(err.message);
-  }
-
   const message = err instanceof Error ? err.message : String(err);
+
   const status =
     typeof (err as any)?.status === "number"
       ? (err as any).status
@@ -124,7 +116,10 @@ export function classifyProviderError(err: unknown, taskType: string, provider: 
             return m ? parseInt(m[1], 10) : undefined;
           })();
 
-  if (err instanceof Error && err.name === "AbortError") {
+  // `name` is one of the two fields that survive a worker boundary, so it is
+  // also how an `AbortSignalJobError` thrown in a worker is recognised — the
+  // `instanceof` above only ever sees the ones thrown in this process.
+  if (err instanceof Error && (err.name === "AbortError" || err.name === "AbortSignalJobError")) {
     return new AbortSignalJobError(
       withJobErrorDiagnostics(`Provider call aborted for ${taskType} (${provider})`, err)
     );
@@ -147,6 +142,23 @@ export function classifyProviderError(err: unknown, taskType: string, provider: 
         err
       )
     );
+  }
+
+  // Read as a declaration, not as a class: an error thrown in a worker reaches
+  // here flattened — `ImageGenerationProviderError`, and the `JobError`
+  // subclasses above, all arrive as a plain `Error` — and this flag is what
+  // crosses with it. Testing the classes instead honoured a provider's answer
+  // only where it was registered inline, and read every worker-backed
+  // provider's classification as an unlabelled failure to pattern-match.
+  //
+  // It sits after the abort checks and before the heuristics: an abort is a
+  // different question from a retry, and a stated answer beats a guess made
+  // from the message.
+  const declared = declaredRetryability(err);
+  if (declared !== undefined) {
+    return declared
+      ? new RetryableJobError(withJobErrorDiagnostics(message, err))
+      : new PermanentJobError(withJobErrorDiagnostics(message, err));
   }
 
   // Incomplete model cache (e.g. missing preprocessor_config.json) — let the queue retry
