@@ -226,6 +226,11 @@ export default defineConfig({
         "**/dist/**",
         // The cross-package suite is the harness, not the subject.
         "packages/test/**",
+        // The conformance suites are the harness too. Unlike `packages/test`
+        // this one publishes, so the `access: "none"` filter below does not
+        // reach it — and a suite scores its own coverage by being run, which
+        // says nothing about the interfaces it exercises.
+        "packages/test-contract/**",
         // The examples keep their suites in `src/test`, which also holds the
         // odd non-`.test.` helper the filename rules below cannot catch.
         "examples/*/src/test/**",

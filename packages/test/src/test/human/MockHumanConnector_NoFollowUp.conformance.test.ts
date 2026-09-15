@@ -7,7 +7,7 @@
 import {
   MockHumanConnector,
   runHumanConnectorConformance,
-} from "../../contract/human-connector/runHumanConnectorConformance";
+} from "@workglow/test-contract/human-connector";
 
 runHumanConnectorConformance({
   name: "MockHumanConnector (no followUp)",

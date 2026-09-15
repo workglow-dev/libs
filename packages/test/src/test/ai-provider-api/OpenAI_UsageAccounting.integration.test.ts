@@ -7,7 +7,7 @@
 import { mapOpenAIResponsesUsage } from "@workglow/ai/provider-utils";
 import { describe, expect } from "vitest";
 
-import { it } from "../../contract/creditExhaustedSkip";
+import { it } from "@workglow/test-contract/credit-exhausted-skip";
 
 /**
  * Pins, against the live Responses API, the arithmetic

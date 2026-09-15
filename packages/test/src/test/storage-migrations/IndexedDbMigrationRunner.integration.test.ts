@@ -12,8 +12,8 @@ import { setLogger, uuid4 } from "@workglow/util";
 import { describe } from "vitest";
 
 import { getTestingLogger } from "@workglow/util/test";
-import type { BuildMigrationFn } from "../../contract/storage-migrations/runMigrationRunnerContract";
-import { runMigrationRunnerContract } from "../../contract/storage-migrations/runMigrationRunnerContract";
+import type { BuildMigrationFn } from "@workglow/test-contract/storage-migrations";
+import { runMigrationRunnerContract } from "@workglow/test-contract/storage-migrations";
 
 // IndexedDB upgrade transactions auto-commit when control returns to the
 // event loop, so migration `up()` callbacks must be synchronous. Callers

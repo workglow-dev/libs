@@ -6,10 +6,7 @@
 
 import type { ITabularStorage } from "@workglow/storage";
 import type { DataPortSchemaObject } from "@workglow/util/schema";
-import type {
-  CompoundPrimaryKeyNames,
-  CompoundSchema,
-} from "../../test/storage-tabular/genericTabularStorageTests";
+import type { CompoundPrimaryKeyNames, CompoundSchema } from "./fixtures";
 
 export const VectorItemPrimaryKeyNames = ["id"] as const;
 export const VectorItemSchema = {

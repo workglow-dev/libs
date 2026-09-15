@@ -1,0 +1,107 @@
+{
+  "name": "@workglow/test-contract",
+  "type": "module",
+  "version": "0.6.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/workglow-dev/libs.git",
+    "directory": "packages/test-contract"
+  },
+  "bugs": {
+    "url": "https://github.com/workglow-dev/libs/issues"
+  },
+  "description": "Parameterized conformance suites for the Workglow interfaces, so an adapter outside this repo inherits the same behavioral assertions its in-repo siblings run.",
+  "homepage": "https://workglow.dev",
+  "scripts": {
+    "watch": "concurrently -c 'auto' 'bun:watch-*'",
+    "watch-js": "bun build --watch --no-clear-screen --target=node --sourcemap=external --packages=external --root ./src --outdir ./dist ./src/ai-provider.ts ./src/browser-context.ts ./src/entitlement-profile.ts ./src/human-connector.ts ./src/storage-migrations.ts ./src/tabular-migrations.ts ./src/tabular-storage.ts ./src/vector-storage.ts ./src/worker-proxy.ts ./src/creditExhaustedSkip.ts ./src/itExpectFail.ts",
+    "watch-types": "tsc --watch --preserveWatchOutput",
+    "build-package": "bun run build-js && bun run build-types",
+    "build-js": "bun build --target=node --sourcemap=external --packages=external --root ./src --outdir ./dist ./src/ai-provider.ts ./src/browser-context.ts ./src/entitlement-profile.ts ./src/human-connector.ts ./src/storage-migrations.ts ./src/tabular-migrations.ts ./src/tabular-storage.ts ./src/vector-storage.ts ./src/worker-proxy.ts ./src/creditExhaustedSkip.ts ./src/itExpectFail.ts",
+    "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
+    "build-types": "rm -f tsconfig.tsbuildinfo && tsc"
+  },
+  "exports": {
+    "./ai-provider": {
+      "types": "./dist/ai-provider.d.ts",
+      "import": "./dist/ai-provider.js"
+    },
+    "./browser-context": {
+      "types": "./dist/browser-context.d.ts",
+      "import": "./dist/browser-context.js"
+    },
+    "./entitlement-profile": {
+      "types": "./dist/entitlement-profile.d.ts",
+      "import": "./dist/entitlement-profile.js"
+    },
+    "./human-connector": {
+      "types": "./dist/human-connector.d.ts",
+      "import": "./dist/human-connector.js"
+    },
+    "./storage-migrations": {
+      "types": "./dist/storage-migrations.d.ts",
+      "import": "./dist/storage-migrations.js"
+    },
+    "./tabular-migrations": {
+      "types": "./dist/tabular-migrations.d.ts",
+      "import": "./dist/tabular-migrations.js"
+    },
+    "./tabular-storage": {
+      "types": "./dist/tabular-storage.d.ts",
+      "import": "./dist/tabular-storage.js"
+    },
+    "./vector-storage": {
+      "types": "./dist/vector-storage.d.ts",
+      "import": "./dist/vector-storage.js"
+    },
+    "./worker-proxy": {
+      "types": "./dist/worker-proxy.d.ts",
+      "import": "./dist/worker-proxy.js"
+    },
+    "./credit-exhausted-skip": {
+      "types": "./dist/creditExhaustedSkip.d.ts",
+      "import": "./dist/creditExhaustedSkip.js"
+    },
+    "./expect-fail": {
+      "types": "./dist/itExpectFail.d.ts",
+      "import": "./dist/itExpectFail.js"
+    }
+  },
+  "peerDependencies": {
+    "@workglow/ai": "workspace:*",
+    "@workglow/browser-control": "workspace:*",
+    "@workglow/storage": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*",
+    "@workglow/web-search": "workspace:*",
+    "vitest": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "@workglow/ai": {
+      "optional": true
+    },
+    "@workglow/browser-control": {
+      "optional": true
+    },
+    "@workglow/web-search": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@workglow/ai": "workspace:*",
+    "@workglow/browser-control": "workspace:*",
+    "@workglow/storage": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*",
+    "@workglow/web-search": "workspace:*",
+    "vitest": "catalog:"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

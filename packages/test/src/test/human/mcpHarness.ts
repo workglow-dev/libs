@@ -12,7 +12,10 @@ import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { IHumanRequest, IHumanResponse } from "@workglow/util";
 import type { DataPortSchema } from "@workglow/util/schema";
 
-import type { MockResponseEntry, MockResponseScript } from "../../contract/human-connector/types";
+import type {
+  MockResponseEntry,
+  MockResponseScript,
+} from "@workglow/test-contract/human-connector";
 
 interface PairedMcpHarness {
   readonly server: Server;

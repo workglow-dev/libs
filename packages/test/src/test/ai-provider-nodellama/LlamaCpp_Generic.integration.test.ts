@@ -23,7 +23,7 @@ import { setTaskQueueRegistry } from "@workglow/task-graph";
 import { setLogger } from "@workglow/util";
 
 import { getTestingLogger } from "@workglow/util/test";
-import { runAiProviderConformance } from "../../contract/ai-provider/runAiProviderConformance";
+import { runAiProviderConformance } from "@workglow/test-contract/ai-provider";
 
 const llmModel: LlamaCppModelRecord = {
   model_id: "llamacpp:SmolLM2-135M-Instruct:Q4_K_M",

@@ -13,7 +13,7 @@ import {
   runTabularStorageContract,
   VectorItemPrimaryKeyNames,
   VectorItemSchema,
-} from "../../contract/tabular-storage/runTabularStorageContract";
+} from "@workglow/test-contract/tabular-storage";
 import { CompoundPrimaryKeyNames, CompoundSchema } from "./genericTabularStorageTests";
 
 const SearchSchema = {

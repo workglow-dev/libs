@@ -22,6 +22,7 @@
     { "path": "../indexeddb" },
     { "path": "../mcp" },
     { "path": "../browser-control" },
+    { "path": "../test-contract" },
     { "path": "../../providers/anthropic" },
     { "path": "../../providers/bun-webview" },
     { "path": "../../providers/cactus" },

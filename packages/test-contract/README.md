@@ -1,4 +1,4 @@
-# Contract Conformance Suites
+# `@workglow/test-contract`
 
 Parameterized test suites that exercise an interface contract against
 every adapter that implements it. Each suite exports one function:
@@ -8,12 +8,32 @@ every adapter that implements it. Each suite exports one function:
 An adapter writes a thin caller that supplies a factory and capability flags;
 all behavioral assertions are inherited.
 
-## Why a separate directory
+    import { runTabularStorageContract } from "@workglow/test-contract/tabular-storage";
 
-`packages/test/src/contract/` contains only parameterized suites. Concrete
-test files (`*.test.ts`) live under `packages/test/src/test/`. This boundary
-makes the pattern obvious: anything in `contract/` is reusable; nothing here
-runs on its own.
+    runTabularStorageContract({
+      name: "MyTabularStorage",
+      createStorage: async () => new MyTabularStorage(CompoundSchema, CompoundPrimaryKeyNames),
+      capabilities: { supportsSubscriptions: false, supportsVectorColumns: false,
+                      supportsTransactions: true, supportsQuery: true },
+    });
+
+## Why a separate package
+
+An adapter that implements one of these interfaces is usually not in this
+repository. `@workglow/test` — the 441 concrete tests — is `private: true` and
+404s on npm, so while the suites lived inside it, every implementation
+downstream inherited exactly zero assertions and re-derived the contract by
+hand. This package is the suites and nothing else, published so they can be
+taken.
+
+Its dependency surface is deliberately small, and split one subpath per
+contract: a tabular-storage adapter installs `@workglow/storage` and `vitest`,
+and never loads `@workglow/ai` or `@workglow/browser-control` — those are
+optional peers that only the suites needing them pull in.
+
+Concrete test files (`*.test.ts`) stay in `packages/test/src/test/`. The
+boundary is what makes the pattern obvious: everything here is reusable and
+nothing here runs on its own.
 
 Two pre-existing parameterized suites live with their concrete callers and
 stay in place — moving them is unnecessary churn:
@@ -105,22 +125,24 @@ Capability flags:
 
 ## Available suites
 
-| Contract                                | Suite                                                           | Adapters                                                                   |
-| --------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `AiProvider`                            | `contract/ai-provider/runAiProviderConformance`                 | Anthropic, OpenAI, Gemini, Ollama, HF Inference, HF Transformers, LlamaCpp |
-| `IMigrationRunner`                      | `contract/storage-migrations/runMigrationRunnerContract`        | Postgres, SQLite, IndexedDB                                                |
-| `IQueueStorage` + `IRateLimiterStorage` | `test/job-queue/genericJobQueueTests`                           | InMemory, IndexedDB, Postgres, SQLite, Supabase                            |
-| `ITabularStorage`                       | `test/storage-tabular/genericTabularStorageTests`               | InMemory, IndexedDB, Postgres, SQLite, Supabase, FsFolder, HuggingFace     |
-| `IVectorStorage`                        | `contract/vector-storage/runVectorStorageContract`              | InMemory, SQLite, Postgres, IndexedDB, Scoped, Telemetry                   |
-| `IEntitlementProfile`                   | `contract/entitlement-profile/runEntitlementProfileConformance` | Browser, Desktop, Server, Custom                                           |
-| `IBrowserContext`                       | `contract/browser-context/runIBrowserContextConformance`        | Mock, Playwright, BunWebView, Electron                                     |
-| `IHumanConnector`                       | `contract/human-connector/runHumanConnectorConformance`         | MockHumanConnector, McpElicitationConnector                                |
-| Worker-proxy parity                     | `contract/worker-proxy/runWorkerProxyBoundary`                  | _harness only — no adapters wired yet_                                     |
+| Contract                                | Suite                                             | Adapters                                                                                             |
+| --------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `AiProvider`                            | `@workglow/test-contract/ai-provider`             | Anthropic, OpenAI, Gemini, Ollama, HF Inference, HF Transformers, LlamaCpp                           |
+| `IMigrationRunner`                      | `@workglow/test-contract/storage-migrations`      | Postgres, SQLite, IndexedDB                                                                          |
+| Tabular schema migrations               | `@workglow/test-contract/tabular-migrations`      | InMemory, IndexedDB, Postgres, SQLite, FsFolder                                                      |
+| `ITabularStorage`                       | `@workglow/test-contract/tabular-storage`         | InMemory, SharedInMemory, IndexedDB, Postgres, SQLite, DuckDB, Supabase, Cached, Telemetry, FsFolder |
+| `ITabularStorage` (rest of the surface) | `test/storage-tabular/genericTabularStorageTests` | InMemory, IndexedDB, Postgres, SQLite, Supabase, FsFolder, HuggingFace                               |
+| `IQueueStorage` + `IRateLimiterStorage` | `test/job-queue/genericJobQueueTests`             | InMemory, IndexedDB, Postgres, SQLite, Supabase                                                      |
+| `IVectorStorage`                        | `@workglow/test-contract/vector-storage`          | InMemory, SQLite, Postgres, IndexedDB, Scoped, Telemetry                                             |
+| `IEntitlementProfile`                   | `@workglow/test-contract/entitlement-profile`     | Browser, Desktop, Server, Custom                                                                     |
+| `IBrowserContext`                       | `@workglow/test-contract/browser-context`         | Mock, Playwright, BunWebView, Electron                                                               |
+| `IHumanConnector`                       | `@workglow/test-contract/human-connector`         | MockHumanConnector, McpElicitationConnector                                                          |
+| Worker-proxy parity                     | `@workglow/test-contract/worker-proxy`            | _harness only — no adapters wired yet_                                                               |
 
 ## Billing failures: skipped on CI, failed locally
 
 Live provider suites run against real accounts, so "we ran out of money" is a
-condition every one of them can hit. `contract/creditExhaustedSkip.ts` detects
+condition every one of them can hit. `@workglow/test-contract/credit-exhausted-skip` detects
 it — 402s, `insufficient_quota`, `insufficient_credits`, DeepSeek's
 `Insufficient Balance`, Anthropic's credit-balance error — and the `it` exported
 from that module (which every conformance assertion imports) decides what to do
@@ -155,12 +177,16 @@ transient and the retry policy handles them.
    currently asserted in any concrete test.
 3. Decide the capability matrix — which assertions are universal, which
    are opt-in.
-4. Create `packages/test/src/contract/<contract-name>/` with `types.ts`,
+4. Create `packages/test-contract/src/<contract-name>/` with `types.ts`,
    `fixtures.ts`, `run<Contract>Conformance.ts`, and per-assertion files
    under `assertions/`.
-5. Write one shim caller per adapter under
+5. Add `src/<contract-name>.ts` re-exporting all of it, and an
+   `exports["./<contract-name>"]` entry plus a `build-js` entrypoint in
+   `package.json` — a suite nobody can import is the problem this package
+   exists to fix.
+6. Write one shim caller per adapter under
    `packages/test/src/test/<contract-name>/<Adapter>_Generic.integration.test.ts`.
-6. Add a row to the table above.
+7. Add a row to the table above.
 
 ## Roadmap
 

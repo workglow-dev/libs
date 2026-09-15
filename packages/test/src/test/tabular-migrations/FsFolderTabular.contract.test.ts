@@ -9,7 +9,7 @@ import { FsFolderTabularStorage } from "@workglow/storage";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTabularMigrationContract } from "../../contract/tabular-migrations/runTabularMigrationContract";
+import { runTabularMigrationContract } from "@workglow/test-contract/tabular-migrations";
 
 runTabularMigrationContract({
   name: "FsFolder",

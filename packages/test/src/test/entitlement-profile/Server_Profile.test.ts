@@ -6,7 +6,7 @@
 
 import { Entitlements, createProfileEnforcer } from "@workglow/task-graph";
 
-import { runEntitlementProfileConformance } from "../../contract/entitlement-profile/runEntitlementProfileConformance";
+import { runEntitlementProfileConformance } from "@workglow/test-contract/entitlement-profile";
 
 runEntitlementProfileConformance({
   name: "server",

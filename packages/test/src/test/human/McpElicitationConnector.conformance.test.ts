@@ -6,7 +6,7 @@
 
 import { McpElicitationConnector } from "@workglow/mcp/tasks";
 
-import { runHumanConnectorConformance } from "../../contract/human-connector/runHumanConnectorConformance";
+import { runHumanConnectorConformance } from "@workglow/test-contract/human-connector";
 import { createPairedMcpHarness } from "./mcpHarness";
 
 runHumanConnectorConformance({

@@ -12,7 +12,7 @@ import {
   isCreditExhaustedError,
   runWithCreditSkip,
   wrapTestBodyForCreditSkip,
-} from "../../contract/creditExhaustedSkip";
+} from "@workglow/test-contract/credit-exhausted-skip";
 
 afterEach(() => {
   vi.unstubAllEnvs();

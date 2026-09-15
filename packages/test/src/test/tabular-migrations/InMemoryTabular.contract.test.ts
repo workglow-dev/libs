@@ -6,7 +6,7 @@
 
 import type { AnyTabularStorage, ITabularMigration } from "@workglow/storage";
 import { InMemoryTabularStorage } from "@workglow/storage";
-import { runTabularMigrationContract } from "../../contract/tabular-migrations/runTabularMigrationContract";
+import { runTabularMigrationContract } from "@workglow/test-contract/tabular-migrations";
 
 runTabularMigrationContract({
   name: "InMemory",

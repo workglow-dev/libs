@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { runIBrowserContextConformance } from "../../contract/browser-context/runIBrowserContextConformance";
+import { runIBrowserContextConformance } from "@workglow/test-contract/browser-context";
 
 const RUN_ELECTRON = !!process.env.RUN_ELECTRON_TESTS;
 

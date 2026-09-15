@@ -17,6 +17,12 @@
  * `@workglow/test` disagreeing with the packages it tests about which release
  * they belong to.
  *
+ * `@workglow/test-contract` is the one that left that set. It carries the
+ * parameterized conformance suites and nothing else, so an adapter written
+ * outside this repo can inherit the same assertions its in-repo siblings run —
+ * which it cannot do from a workspace that 404s on npm. The 441 concrete tests
+ * stayed behind in `@workglow/test`, which is still private.
+ *
  * **What they ARE held out of is publishing, and the two spellings of that
  * have to agree.** `publish-workspaces.ts` keys on
  * `publishConfig.access === "public"`; anything keyed on a package being

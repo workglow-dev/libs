@@ -15,7 +15,7 @@ import { setTaskQueueRegistry } from "@workglow/task-graph";
 import { setLogger } from "@workglow/util";
 
 import { getTestingLogger } from "@workglow/util/test";
-import { runAiProviderConformance } from "../../contract/ai-provider/runAiProviderConformance";
+import { runAiProviderConformance } from "@workglow/test-contract/ai-provider";
 
 const RUN = !!process.env.OPENROUTER_API_KEY;
 // A cheap, tool- and json-capable model. OpenRouter ids are `vendor/model`.

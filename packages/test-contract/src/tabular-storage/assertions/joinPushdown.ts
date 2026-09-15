@@ -7,10 +7,7 @@
 import type { ITabularStorage } from "@workglow/storage";
 import { InMemoryTabularStorage } from "@workglow/storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  CompoundPrimaryKeyNames,
-  CompoundSchema,
-} from "../../../test/storage-tabular/genericTabularStorageTests";
+import { CompoundPrimaryKeyNames, CompoundSchema } from "../fixtures";
 import { itExpectFail } from "../../itExpectFail";
 import type { TabularStorageContractOpts } from "../types";
 

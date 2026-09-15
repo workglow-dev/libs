@@ -12,7 +12,7 @@ import { ImageEditTask, ImageGenerateTask } from "@workglow/ai";
 import { registerOpenAiInline } from "@workglow/openai/ai-runtime";
 import { beforeAll, describe, expect } from "vitest";
 
-import { it } from "../../contract/creditExhaustedSkip";
+import { it } from "@workglow/test-contract/credit-exhausted-skip";
 
 const RUN = !!process.env.OPENAI_API_KEY;
 

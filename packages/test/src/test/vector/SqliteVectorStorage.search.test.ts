@@ -6,12 +6,12 @@
 
 import type { AnyVectorStorage } from "@workglow/storage";
 import { Sqlite, SqliteVectorStorage } from "@workglow/sqlite/storage";
-import { runVectorStorageContract } from "../../contract/vector-storage/runVectorStorageContract";
+import { runVectorStorageContract } from "@workglow/test-contract/vector-storage";
 import {
   VECTOR_DIMENSIONS,
   VectorItemPrimaryKeyNames,
   VectorItemSchema,
-} from "../../contract/vector-storage/types";
+} from "@workglow/test-contract/vector-storage";
 
 const TABLE = "vec_search";
 

@@ -15,7 +15,7 @@ import { XAI } from "@workglow/xai/ai";
 import { registerXaiInline } from "@workglow/xai/ai-runtime";
 
 import { getTestingLogger } from "@workglow/util/test";
-import { runAiProviderConformance } from "../../contract/ai-provider/runAiProviderConformance";
+import { runAiProviderConformance } from "@workglow/test-contract/ai-provider";
 
 const RUN = !!process.env.XAI_API_KEY;
 const MODEL_ID = "xai:grok-3-mini";

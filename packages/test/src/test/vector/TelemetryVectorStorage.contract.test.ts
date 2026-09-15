@@ -6,12 +6,12 @@
 
 import type { AnyVectorStorage } from "@workglow/storage";
 import { InMemoryVectorStorage, TelemetryVectorStorage } from "@workglow/storage";
-import { runVectorStorageContract } from "../../contract/vector-storage/runVectorStorageContract";
+import { runVectorStorageContract } from "@workglow/test-contract/vector-storage";
 import {
   VECTOR_DIMENSIONS,
   VectorItemPrimaryKeyNames,
   VectorItemSchema,
-} from "../../contract/vector-storage/types";
+} from "@workglow/test-contract/vector-storage";
 
 /**
  * The measuring wrapper, against the contract it must not change.

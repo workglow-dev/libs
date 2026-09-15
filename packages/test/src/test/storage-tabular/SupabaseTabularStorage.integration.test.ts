@@ -9,7 +9,7 @@ import { SupabaseTabularStorage } from "@workglow/supabase/storage";
 import { setLogger, uuid4 } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { runTabularStorageContract } from "../../contract/tabular-storage/runTabularStorageContract";
+import { runTabularStorageContract } from "@workglow/test-contract/tabular-storage";
 import { createSupabaseMockClient } from "../helpers/SupabaseMockClient";
 import {
   AuthorPrimaryKeyNames,
