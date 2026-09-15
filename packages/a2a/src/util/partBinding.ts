@@ -13,7 +13,9 @@ export class PartBindingError extends Error {
 
   constructor(unboundPorts: readonly string[]) {
     super(
-      `cannot bind a text part: ${unboundPorts.length} required ports are unset (${unboundPorts.join(", ")})`
+      unboundPorts.length === 0
+        ? "cannot bind a text part: every port it could mean is already set"
+        : `cannot bind a text part: ${unboundPorts.length} ports could take it (${unboundPorts.join(", ")})`
     );
     this.name = "PartBindingError";
     this.unboundPorts = unboundPorts;
@@ -35,18 +37,45 @@ export function textOfParts(parts: readonly Part[]): string {
   return parts.map((part) => (part.content?.$case === "text" ? part.content.value : "")).join("");
 }
 
+/**
+ * Keys a caller may never set through a data part. They are not ports on any
+ * schema, and assigning `__proto__` swaps the port bag's prototype rather than
+ * landing as a property.
+ */
+const RESERVED_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+
 function requiredPorts(schema: DataPortSchemaObject | undefined): readonly string[] {
   const required = schema?.required;
   return Array.isArray(required) ? (required as readonly string[]) : [];
 }
 
+function declaredPorts(schema: DataPortSchemaObject | undefined): readonly string[] | undefined {
+  const properties = schema?.properties;
+  return properties && typeof properties === "object" ? Object.keys(properties) : undefined;
+}
+
+function isStringPort(schema: DataPortSchemaObject | undefined, name: string): boolean {
+  const property = (schema?.properties as Record<string, unknown> | undefined)?.[name];
+  return (
+    typeof property === "object" &&
+    property !== null &&
+    (property as { type?: unknown }).type === "string"
+  );
+}
+
 /**
  * Inbound: an ordered list of parts, onto named ports.
  *
- * A data part states its own port names, so it binds directly. Text does not,
- * and is bound only when the schema leaves exactly one required port for it to
- * mean — with two, guessing is how a caller's argument lands silently on the
- * wrong port, and the caller has a data part available to say which.
+ * A data part states its own port names, so it binds directly — but only the
+ * names the schema declares. A peer's keys are the caller's to choose, and a
+ * key the skill never declared is not a port: it is whatever the host merges
+ * this bag into, which is exactly what an opaque peer must not reach.
+ *
+ * Text names no port, and is bound only when exactly one port can take it:
+ * a required port still unset, or failing that a declared string port still
+ * unset. With two, guessing is how a caller's argument lands silently on the
+ * wrong port, and with none, dropping the text is how a caller's whole
+ * message vanishes — so both refuse, naming the ports involved.
  *
  * `raw` and `url` parts are carried by the protocol and bound to nothing: a
  * file has no port name to land on until a skill declares one.
@@ -55,36 +84,29 @@ export function partsToPorts(
   parts: readonly Part[],
   schema: DataPortSchemaObject | undefined
 ): Record<string, unknown> {
+  const declared = declaredPorts(schema);
   const ports: Record<string, unknown> = {};
   for (const part of parts) {
     const content = part.content;
     if (content?.$case !== "data") continue;
     const value: unknown = content.value;
-    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-      Object.assign(ports, value as Record<string, unknown>);
+    if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
+    for (const key of Object.keys(value)) {
+      if (RESERVED_KEYS.has(key)) continue;
+      if (declared !== undefined && !declared.includes(key)) continue;
+      ports[key] = (value as Record<string, unknown>)[key];
     }
   }
 
   const text = textOfParts(parts);
   if (text.length === 0) return ports;
 
-  const unbound = requiredPorts(schema).filter((name) => !(name in ports));
-  if (unbound.length === 1) {
-    ports[unbound[0]!] = text;
-    return ports;
+  const unset = (name: string): boolean => !(name in ports);
+  let candidates = requiredPorts(schema).filter(unset);
+  if (candidates.length === 0) {
+    candidates = (declared ?? []).filter((name) => unset(name) && isStringPort(schema, name));
   }
-  if (unbound.length === 0) return ports;
-  throw new PartBindingError(unbound);
-}
-
-/** Outbound: named ports as one structured part. */
-export function portsToParts(ports: Record<string, unknown>): Part[] {
-  return [
-    {
-      content: { $case: "data", value: ports },
-      metadata: undefined,
-      filename: "",
-      mediaType: "application/json",
-    },
-  ];
+  if (candidates.length !== 1) throw new PartBindingError(candidates);
+  ports[candidates[0]!] = text;
+  return ports;
 }

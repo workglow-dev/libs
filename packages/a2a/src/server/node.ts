@@ -6,5 +6,6 @@
 
 export * from "./A2AHttpServer";
 export * from "./AgentTaskExecutor";
+export * from "./BoundedTaskStore";
 export * from "./createA2AServer";
 export * from "./streamProjection";

@@ -25,24 +25,22 @@ export interface BuildAgentCardOptions {
   readonly authenticated: boolean;
 }
 
-function bearerScheme(): Record<string, SecurityScheme> {
-  return {
-    [BEARER_SCHEME_KEY]: {
-      scheme: {
-        $case: "httpAuthSecurityScheme",
-        value: {
-          description: "Bearer token issued by the host that started this server.",
-          scheme: "Bearer",
-          bearerFormat: "",
-        },
+const BEARER_SCHEMES: Readonly<Record<string, SecurityScheme>> = {
+  [BEARER_SCHEME_KEY]: {
+    scheme: {
+      $case: "httpAuthSecurityScheme",
+      value: {
+        description: "Bearer token issued by the host that started this server.",
+        scheme: "Bearer",
+        bearerFormat: "",
       },
     },
-  };
-}
+  },
+};
 
-function bearerRequirement(): SecurityRequirement[] {
-  return [{ schemes: { [BEARER_SCHEME_KEY]: { list: [] } } }];
-}
+const BEARER_REQUIREMENTS: readonly SecurityRequirement[] = [
+  { schemes: { [BEARER_SCHEME_KEY]: { list: [] } } },
+];
 
 /**
  * A descriptor, as the card a peer discovers.
@@ -77,8 +75,8 @@ export function buildAgentCard(
       extensions: [],
       extendedAgentCard: false,
     },
-    securitySchemes: opts.authenticated ? bearerScheme() : {},
-    securityRequirements: opts.authenticated ? bearerRequirement() : [],
+    securitySchemes: opts.authenticated ? { ...BEARER_SCHEMES } : {},
+    securityRequirements: opts.authenticated ? [...BEARER_REQUIREMENTS] : [],
     defaultInputModes: [...DEFAULT_MODES],
     defaultOutputModes: [...DEFAULT_MODES],
     skills: descriptor.skills.map((skill) => ({

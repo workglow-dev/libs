@@ -74,26 +74,51 @@ function partsOfTask(task: A2ATask): Part[] {
   return fromArtifacts.length > 0 ? fromArtifacts : (task.status?.message?.parts ?? []);
 }
 
+/** Where a card is fetched from: a base the well-known path hangs off, or the card itself. */
+export type CardLocation = { readonly baseUrl: string; readonly cardPath: string | undefined };
+
 /**
- * The URL the card is resolved against.
+ * Where to fetch the card, from what the caller gave.
  *
- * The SDK resolves `.well-known/agent-card.json` relative to what it is given,
- * so handing it the card's own URL — the one a server prints, and the one an
- * operator pastes — would look for the card underneath itself.
+ * The SDK resolves its well-known path *relative* to the base, so a base
+ * without a trailing slash loses its last segment — `https://h/agents/foo`
+ * would look under `/agents/`. A card URL — the one a server prints and an
+ * operator pastes — is handed over as-is, since the SDK takes one directly
+ * when told the path is empty.
  */
-export function agentBaseUrl(agentUrl: string): string {
+export function resolveCardLocation(agentUrl: string): CardLocation {
   const url = new URL(agentUrl);
-  const suffix = `/${AGENT_CARD_PATH}`;
-  if (url.pathname.endsWith(suffix)) {
-    url.pathname = url.pathname.slice(0, -suffix.length) || "/";
+  if (url.pathname.endsWith(`/${AGENT_CARD_PATH}`)) {
+    return { baseUrl: url.toString(), cardPath: "" };
   }
-  return url.toString();
+  if (!url.pathname.endsWith("/")) url.pathname = `${url.pathname}/`;
+  return { baseUrl: url.toString(), cardPath: undefined };
 }
 
-async function defaultCreateClient(agentUrl: string): Promise<A2AClientLike> {
+/**
+ * One client per agent, kept for the life of the process.
+ *
+ * Building a client fetches the card, and a fan-out over one agent would
+ * otherwise pay that fetch once per item before sending a single message. A
+ * failed build is forgotten, so a peer that was down is retried.
+ */
+const clients = new Map<string, Promise<A2AClientLike>>();
+
+function defaultCreateClient(agentUrl: string): Promise<A2AClientLike> {
+  const location = resolveCardLocation(agentUrl);
+  const key = `${location.baseUrl}\u0000${location.cardPath ?? ""}`;
+  const cached = clients.get(key);
+  if (cached) return cached;
+  const created = createClient(location);
+  clients.set(key, created);
+  created.catch(() => clients.delete(key));
+  return created;
+}
+
+async function createClient(location: CardLocation): Promise<A2AClientLike> {
   // The card is resolved first: it names the binding to speak and the URL to
   // speak it at, so a bare URL is not enough to build a client from.
-  const client = await new ClientFactory().createFromUrl(agentBaseUrl(agentUrl));
+  const client = await new ClientFactory().createFromUrl(location.baseUrl, location.cardPath);
   return {
     sendMessage: async (input, signal) => {
       const reply = await client.sendMessage(
@@ -159,7 +184,7 @@ export class A2AAgentTask extends Task<A2AAgentTaskInput, A2AAgentTaskOutput, A2
           title: "Agent URL",
           format: "uri",
           description:
-            "The agent's base URL, or its card URL; the card names the endpoint to speak to.",
+            "The agent's base URL (the card is looked up beneath it), or its card URL; the card names the endpoint to speak to.",
         },
         prompt: { type: "string", title: "Prompt" },
         contextId: {

@@ -16,10 +16,10 @@
   "scripts": {
     "watch": "concurrently -c 'auto' 'bun:watch-*'",
     "watch-js": "concurrently -c 'auto' -n 'tasks-br,tasks-n,server,util' 'bun run watch-tasks-browser' 'bun run watch-tasks-node' 'bun run watch-server' 'bun run watch-util'",
-    "watch-tasks-browser": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/tasks/browser.ts",
-    "watch-tasks-node": "bun build --watch --no-clear-screen --target=node --sourcemap=external --packages=external --outdir ./dist ./src/tasks/node.ts",
+    "watch-tasks-browser": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --outdir ./dist/tasks ./src/tasks/browser.ts",
+    "watch-tasks-node": "bun build --watch --no-clear-screen --target=node --sourcemap=external --packages=external --outdir ./dist/tasks ./src/tasks/node.ts",
     "watch-server": "bun build --watch --no-clear-screen --target=node --sourcemap=external --packages=external --outdir ./dist/server ./src/server/node.ts",
-    "watch-util": "bun build --watch --no-clear-screen --sourcemap=external --packages=external --outdir ./dist ./src/util/index.ts",
+    "watch-util": "bun build --watch --no-clear-screen --sourcemap=external --packages=external --outdir ./dist/util ./src/util/index.ts",
     "watch-types": "tsc --watch --preserveWatchOutput",
     "build-package": "bun run build-js && bun run build-types",
     "build-js": "concurrently -m 12 --timings -c 'auto' -n 'tasks-br,tasks-n,server,util' 'bun run build-tasks-browser' 'bun run build-tasks-node' 'bun run build-server' 'bun run build-util'",

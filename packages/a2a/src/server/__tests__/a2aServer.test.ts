@@ -203,6 +203,53 @@ describe("startA2AHttpServer", () => {
     expect(body.error?.message).toMatch(/version/i);
   });
 
+  it("also answers the card beneath the endpoint, for a client handed the endpoint URL", async () => {
+    const handle = await startA2AHttpServer({
+      port: 0,
+      host: "127.0.0.1",
+      token: null,
+      descriptor,
+      runTurn: async () => ({ text: "ok" }),
+    });
+    close = handle.close;
+    const res = await fetch(`${handle.url}/.well-known/agent-card.json`);
+    expect(res.status).toBe(200);
+    expect((await res.json()).name).toBe("Echo");
+  });
+
+  it("aborts the turn when the peer hangs up mid-stream", async () => {
+    // Without this the model keeps generating an answer nobody reads, on the
+    // host's quota, and every tool the agent asked for still runs.
+    let aborted = false;
+    const handle = await startA2AHttpServer({
+      port: 0,
+      host: "127.0.0.1",
+      token: null,
+      descriptor,
+      runTurn: (_input, signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            aborted = true;
+            reject(new Error("aborted"));
+          });
+        }),
+    });
+    close = handle.close;
+
+    const peer = new AbortController();
+    const res = await fetch(handle.url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "A2A-Version": "1.0" },
+      body: sendMessage("hi").replace('"SendMessage"', '"SendStreamingMessage"'),
+      signal: peer.signal,
+    });
+    // The first event (the task) has arrived, so the turn is running.
+    await res.body!.getReader().read();
+    peer.abort();
+    for (let i = 0; i < 50 && !aborted; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(aborted).toBe(true);
+  });
+
   it("streams a message's events as SSE", async () => {
     const handle = await startA2AHttpServer({
       port: 0,

@@ -76,8 +76,16 @@ literal gets wrong:
   client reads back as no scheme at all.
 - The SDK reads an absent `A2A-Version` header as `0.3`, which the card does not
   publish, so such a request is refused with the protocol's own error.
-- `InMemoryTaskStore` evicts nothing and `TaskStore` has no delete, so a
-  long-running host grows without bound.
+- `TaskStore` has no delete and the SDK's `InMemoryTaskStore` evicts nothing, so
+  the default store here is `BoundedTaskStore`, which keeps the most recently
+  touched thousand tasks. It also serves a continued `contextId`: the executor
+  replays the context's earlier completed exchanges to the model.
+- The executor's `AgentExecutor` seam carries no request signal, so the HTTP
+  server leaves one in `ServerCallContext.state` under `A2A_REQUEST_SIGNAL_KEY`;
+  a peer that hangs up aborts its turn through it.
+- A peer's data part binds only the ports the skill's schema declares, and the
+  host's `agentInput` is spread over it: the model, system prompt, tool list and
+  approval mode are never a caller's to set.
 
 ## License
 

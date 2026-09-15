@@ -4,20 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Part } from "@a2a-js/sdk";
 import { describe, expect, it } from "vitest";
 
+import { textPart } from "../../util/partBinding";
 import type { A2AClientLike } from "../A2AAgentTask";
-import { A2AAgentTask, agentBaseUrl } from "../A2AAgentTask";
-
-function textPart(value: string): Part {
-  return {
-    content: { $case: "text", value },
-    metadata: undefined,
-    filename: "",
-    mediaType: "text/plain",
-  };
-}
+import { A2AAgentTask, resolveCardLocation } from "../A2AAgentTask";
 
 function fakeClient(reply: { text: string; contextId: string; state: string }): A2AClientLike {
   return {
@@ -29,13 +20,31 @@ function fakeClient(reply: { text: string; contextId: string; state: string }): 
   };
 }
 
-describe("agentBaseUrl", () => {
-  it("accepts the card URL a server prints, as well as the base it hangs off", () => {
+describe("resolveCardLocation", () => {
+  it("hands a card URL over as-is, with no path for the SDK to append", () => {
     // The SDK resolves the well-known path relative to what it is handed, so
     // the card's own URL would otherwise look for the card underneath itself.
-    expect(agentBaseUrl("http://h:1/.well-known/agent-card.json")).toBe("http://h:1/");
-    expect(agentBaseUrl("http://h:1/x/.well-known/agent-card.json")).toBe("http://h:1/x");
-    expect(agentBaseUrl("http://h:1")).toBe("http://h:1/");
+    expect(resolveCardLocation("http://h:1/.well-known/agent-card.json")).toEqual({
+      baseUrl: "http://h:1/.well-known/agent-card.json",
+      cardPath: "",
+    });
+  });
+
+  it("keeps a path-mounted agent's path, by ending the base with a slash", () => {
+    // Relative resolution drops the last segment of a base without one, so
+    // `/agents/foo` would look under `/agents/`.
+    expect(resolveCardLocation("http://h:1/agents/foo")).toEqual({
+      baseUrl: "http://h:1/agents/foo/",
+      cardPath: undefined,
+    });
+    expect(resolveCardLocation("http://h:1")).toEqual({
+      baseUrl: "http://h:1/",
+      cardPath: undefined,
+    });
+    expect(resolveCardLocation("http://h:1/a2a/")).toEqual({
+      baseUrl: "http://h:1/a2a/",
+      cardPath: undefined,
+    });
   });
 });
 

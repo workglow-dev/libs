@@ -6,12 +6,13 @@
 
 import type { AgentCard } from "@a2a-js/sdk";
 import type { A2ARequestHandler, TaskStore } from "@a2a-js/sdk/server";
-import { DefaultRequestHandler, InMemoryTaskStore } from "@a2a-js/sdk/server";
+import { DefaultRequestHandler } from "@a2a-js/sdk/server";
 
 import type { IA2AAgentDescriptor } from "../util/AgentDescriptor";
 import { buildAgentCard } from "../util/agentCard";
 import type { RunAgentTurn } from "./AgentTaskExecutor";
 import { AgentTaskExecutor } from "./AgentTaskExecutor";
+import { BoundedTaskStore } from "./BoundedTaskStore";
 
 export interface CreateA2AServerOptions {
   readonly descriptor: IA2AAgentDescriptor;
@@ -20,9 +21,9 @@ export interface CreateA2AServerOptions {
   /** Whether the host enforces a bearer token, so the card can say so. */
   readonly authenticated: boolean;
   /**
-   * Where tasks live. Defaults to the SDK's in-memory store, which evicts
-   * nothing — `TaskStore` has no delete — so a long-running host that wants
-   * eviction supplies its own.
+   * Where tasks live. Defaults to a {@link BoundedTaskStore}, which keeps the
+   * most recently touched thousand: `TaskStore` has no delete, and a host that
+   * wants persistence across restarts supplies its own.
    */
   readonly taskStore?: TaskStore;
   readonly runTurn?: RunAgentTurn;
@@ -45,14 +46,12 @@ export function createA2AServer(opts: CreateA2AServerOptions): A2AServer {
     url: opts.url,
     authenticated: opts.authenticated,
   });
+  const taskStore = opts.taskStore ?? new BoundedTaskStore();
   const executor = new AgentTaskExecutor({
     descriptor: opts.descriptor,
-    ...(opts.runTurn === undefined ? {} : { runTurn: opts.runTurn }),
+    runTurn: opts.runTurn,
+    taskStore,
   });
-  const handler = new DefaultRequestHandler(
-    card,
-    opts.taskStore ?? new InMemoryTaskStore(),
-    executor
-  );
+  const handler = new DefaultRequestHandler(card, taskStore, executor);
   return { handler, card };
 }
