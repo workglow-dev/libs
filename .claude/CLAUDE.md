@@ -554,83 +554,22 @@ is unreachable by section+kind selection. Note `packages/test/src/test/task-grap
 section `graph` — `task-graph` selects that package's co-located `__tests__`.
 `--changed` delegates package selection to Turbo, so dependents run too.
 
-**`--shard i/N`** partitions whatever the rest of the selection resolves to, which is how
-the blocking workflow runs the unit slice as four parallel jobs instead of the one that
-took four times every other job on the board. What makes the split pay is that most of the
-cost is per FILE: vitest accounts the slice as ~51% setup (a fresh module registry per file,
-`vitest.setup.ts` bootstrapping the task registry into each), ~21% transform, ~5% import and
-~22% tests. Four shards measured 2.9x, not 4x, and transform is the shortfall — it is mostly
-the shared module graph, so a quarter of the files still transforms nearly all of it (43% of
-that shard's wall clock against 21% of the whole slice's). Sharding cannot divide that part,
-which is what **`fsModuleCache`** is for.
+**`--shard i/N`** partitions whatever the selection resolves to; the blocking workflow runs
+the unit slice as four parallel shards. `scripts/lib/testShards.ts` deals the partition from
+a **sorted** list — each shard runs on its own machine, so an order-dependent partition could
+put a file in two shards or in none. An empty shard passes.
 
-`scripts/lib/testShards.ts` holds the partition, dealt round-robin from a **sorted** list:
-each shard runs on its own machine off a discovery walk in `readdirSync` order, so an
-order-dependent partition would let a file land in two shards, or in none and never run with
-every job still green. An empty shard passes, which is what a `--changed` pull request
-narrowed to a handful of files produces.
+**`fsModuleCache` is on**, persisting transforms to `node_modules/.vitest-cache`. It is a
+per-project option and these projects set `extends: false`, so it lives in `shared`, with an
+explicit path because the default resolves against each project's own root. Nothing prunes
+it between whole-cache wipes (vitest clears it when `bun.lock` changes);
+`npx vitest --clearCache` resets it. CI does not carry it between runs; it is a local win.
 
-**`fsModuleCache` is on**, persisting transform results to `node_modules/.vitest-cache`.
-Measured on a 177-file shard: 111s cold (the same as without it — enabling it costs nothing
-on a miss), 75s warm, transform falling from 46% to 17% of the run. It is set in `shared`
-rather than at the root because it is a per-PROJECT option and these projects declare
-`extends: false`, and the path is given explicitly because the default resolves against each
-project's own root — which would scatter eighteen cache directories through `packages/*` and
-`providers/*` instead of one that CI can restore as a single entry.
-
-An entry is keyed on the module id and its content, plus a per-environment digest that
-covers the vitest version, the `resolve` config, the **plugin names**, and the **content of
-the config file itself** — and, separately, whether coverage instruments that file. Three
-things this repo does therefore cannot collide: a coverage run against a plain one, a
-`WORKGLOW_TEST_TARGET=dist` run against the default (the two resolver plugins are named
-`workglow:workspace-source` and `workglow:dist-bundle-guard`), and anything before an edit to
-`vitest.config.ts` against anything after. Content keying is verified rather than assumed:
-editing an imported module fails the test that depended on it and reverting passes it again.
-
-Nothing prunes it, though. Each distinct version of a file adds an entry and the old one
-stays — measured at +1 per edit, ~19KB each, on top of the 186MB / ~9900 entries one
-177-file shard leaves. `npx vitest --clearCache` is the reset, and `bun run clean` takes it
-too since it lives under `node_modules`.
-
-**CI does not carry it between runs, deliberately.** Each job is a fresh container, and
-within one run there is nothing for this cache to save: vitest transforms in the main process
-and serves workers from memory, so a given module is transformed at most once per project
-per run either way — cold-with-cache measured 111s against 110s with the option off. So the
-CI value would come entirely from an `actions/cache` entry, and at this repo's lockfile churn
-that does not pay. `bun.lock` moved in 29 of the last 80 commits, which is a 7-day span, and
-each move wipes the cache — so a third of runs are cold whatever is cached, the expected
-saving is ~22s on the critical path, and keeping one 61MB entry per shard per lockfile
-generation would be some 9GB in a 7-day window against a 10GB repo-wide cap, evicted LRU.
-The rag and provider jobs keep their HuggingFace and GGUF model caches in that same store,
-and a model re-download costs far more than 22s. If the churn ever drops, the entry to add is
-an exact-key restore on `hashFiles('bun.lock')` with **no** `restore-keys` prefix: a prefix
-fallback matches an entry from a different lockfile, which vitest then clears on startup, so
-it is a wasted download rather than a partial hit.
-
-**Test credentials are decrypted once per RUN, not once per test file.** Each credential in
-`.secrets` carries its own random salt, so opening the store derives a 600k-iteration PBKDF2
-key per credential (~290ms) plus one for the unlock sentinel — nine for a store of eight.
-`preload-credentials` runs from `vitest.setup.ts` and `bunfig.toml`, both of which fire per
-test file in a fresh process, so that was ~2.6s of key derivation per file: 53% of the wall
-clock on the unit slice, and 246s against 110s on a quarter of it.
-
-Three places call `hydrateTestCredentials` now, and only the first normally does any work:
-`vitest.globalSetup.ts` (the main process, before any worker is spawned — a worker inherits
-`process.env`), `spawnRunner` in `scripts/test.ts` (the one process both runners are spawned
-from, which is what covers `bun test`, since Bun has no global-setup hook), and the per-file
-preload, which stays wired so a single file run directly still gets its keys.
-
-What makes the repeat calls free is that `installAndHydrate` asks the STORE what is left to
-do — `kv.get` returns the stored ciphertext as-is, so "is this credential present" is a file
-read where reading its value is a derivation — and returns `nothing-to-do` without opening
-anything. Deliberately not a "already hydrated" marker in the environment: anyone can export
-one, and if it were wrong the keys would simply be absent, which every integration test reads
-as *skip* rather than as a failure. It also no longer unlocks unconditionally, so running the
-suite no longer writes a sentinel into `.secrets` as a side effect.
-
-Still **measure with the passphrase UNSET** (`env -u WORKGLOW_SECRETS_PASSPHRASE`) when the
-number is meant to describe the unit job, which configures no secret at all: one hydrate per
-run is cheap but not free, and the job it describes does not pay even that.
+**Test credentials are hydrated once per run**, not once per test file: `vitest.globalSetup.ts`
+and `spawnRunner` in `scripts/test.ts` (Bun has no global-setup hook) do it before any worker
+spawns, and the per-file preload then finds nothing to decrypt. It stays wired so a single
+file run directly still gets its keys. Do not put the work back in a per-file hook — opening
+the store is a 600k-iteration PBKDF2 derivation per credential.
 
 **Running the same files under Bun** — `bun test` resolves `import { vi } from "vitest"` to
 its own compatibility shim, which is missing `setSystemTime`, `stubGlobal`/`stubEnv` and

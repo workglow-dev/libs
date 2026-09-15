@@ -110,9 +110,15 @@ const shared = {
   // Transform is the cost sharding cannot divide: it is mostly the shared module
   // graph, so a quarter of the unit files still transforms nearly all of it.
   // Persisting the results turns that into a read on every run AFTER the first,
-  // which is why this is a local-development win and not a CI one — a CI job
-  // starts on a fresh container, and nothing carries the directory between
-  // runs (see the note in CLAUDE.md for the churn arithmetic behind that).
+  // which is why this is a local-development win and not a CI one: a CI job
+  // starts on a fresh container, and within one run there is nothing to save —
+  // vitest transforms in the main process and serves workers from memory, so a
+  // module is transformed at most once per project per run either way. Carrying
+  // the directory between runs through an `actions/cache` entry was measured
+  // and dropped: `bun.lock` moves often enough here that a third of runs would
+  // start cold regardless (vitest clears the cache when the lockfile hash
+  // changes), and one entry per shard per lockfile generation would crowd the
+  // repo-wide cache cap that the provider jobs' model caches live in.
   //
   // It belongs HERE rather than at the root, twice over. `fsModuleCache` is a
   // per-PROJECT option (vitest lists it among the project CLI overrides) and
