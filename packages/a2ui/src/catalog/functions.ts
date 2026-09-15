@@ -27,6 +27,9 @@ function num(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
+/** Characters of a value an agent-supplied pattern is run against. */
+const MAX_REGEX_SUBJECT = 4096;
+
 function truthy(value: unknown): boolean {
   return Boolean(value);
 }
@@ -40,7 +43,29 @@ function list(args: Record<string, unknown>): readonly unknown[] {
   return [args.a, args.b].filter((value) => value !== undefined);
 }
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** Any whitespace, anywhere. Anchored nowhere and quantified never, so linear. */
+const WHITESPACE = /\s/;
+
+/**
+ * A structural email check, deliberately not a regex.
+ *
+ * The obvious pattern — `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` — backtracks
+ * polynomially, because `.` is also matched by `[^\s@]` and the two can split a
+ * domain in many ways. The value here is whatever a person typed into a field
+ * an agent drew, so that is uncontrolled input on a renderer's own thread.
+ *
+ * Index arithmetic has no backtracking to do, and it is no less accurate: no
+ * regex short enough to read decides RFC 5322 anyway, so what either form
+ * really checks is "one @, something before it, a dotted domain after it".
+ */
+function looksLikeEmail(value: string): boolean {
+  if (WHITESPACE.test(value)) return false;
+  const at = value.indexOf("@");
+  if (at <= 0 || at !== value.lastIndexOf("@")) return false;
+  const domain = value.slice(at + 1);
+  const dot = domain.lastIndexOf(".");
+  return dot > 0 && dot < domain.length - 1;
+}
 
 /**
  * The basic catalog's client-side functions, in the forms that are pure.
@@ -66,8 +91,17 @@ export const A2UI_BASIC_FUNCTIONS: A2UIFunctions = Object.freeze({
   regex: (args) => {
     const pattern = str(args.pattern);
     if (pattern.length === 0) return true;
+    const value = str(args.value);
+    // The pattern is the agent's, so a catastrophic one is reachable. This
+    // package builds for the browser, where the repository's own conclusion
+    // already applies: a wall-clock budget needs a `vm`, so an unbounded match
+    // blocks that tab rather than a process hosting anything (see
+    // `BoundedRegexRunner` in `@workglow/tasks`). What is bounded here is the
+    // subject, which is what makes the ACCIDENTAL polynomial case — the common
+    // one — finish rather than crawl.
+    if (value.length > MAX_REGEX_SUBJECT) return false;
     try {
-      return new RegExp(pattern).test(str(args.value));
+      return new RegExp(pattern).test(value);
     } catch {
       // A pattern the agent wrote is model-controlled text, so a malformed one
       // is ordinary input rather than a fault: it fails the check it was asked
@@ -84,7 +118,7 @@ export const A2UI_BASIC_FUNCTIONS: A2UIFunctions = Object.freeze({
     return true;
   },
   numeric: (args) => Number.isFinite(num(args.value)),
-  email: (args) => EMAIL.test(str(args.value)),
+  email: (args) => looksLikeEmail(str(args.value)),
   formatString: (args) => {
     const template = str(args.template ?? args.format);
     const values = args.values;

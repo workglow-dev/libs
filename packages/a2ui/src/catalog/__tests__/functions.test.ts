@@ -52,6 +52,31 @@ describe("A2UI_BASIC_FUNCTIONS", () => {
     expect(call("numeric", { value: "4x" })).toBe(false);
     expect(call("email", { value: "a@b.co" })).toBe(true);
     expect(call("email", { value: "a@b" })).toBe(false);
+    expect(call("email", { value: "a@@b.co" })).toBe(false);
+    expect(call("email", { value: "@b.co" })).toBe(false);
+    expect(call("email", { value: "a@b.co." })).toBe(false);
+    expect(call("email", { value: "a b@c.co" })).toBe(false);
+  });
+
+  it("checks an email in linear time on the shape that backtracks", () => {
+    // `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` is quadratic on this input: `.` is also
+    // matched by `[^\s@]`, so the two runs can split the tail O(n) ways, and
+    // the trailing `@` makes every one of them fail. Measured at 2.1s for this
+    // length before the check became index arithmetic. The value is whatever a
+    // person typed into a field an agent drew, so it is uncontrolled input on
+    // the renderer's own thread.
+    const hostile = `a@${"a.".repeat(40_000)}@`;
+    const started = performance.now();
+    expect(call("email", { value: hostile })).toBe(false);
+    expect(performance.now() - started).toBeLessThan(100);
+  });
+
+  it("refuses to run an agent's pattern against an unbounded subject", () => {
+    // A catastrophic pattern is the agent's to write, and in a browser there is
+    // no budget that can interrupt one. Bounding the subject is what keeps the
+    // accidental polynomial case finishing.
+    expect(call("regex", { pattern: "^(a+)+$", value: "a".repeat(100_000) })).toBe(false);
+    expect(call("regex", { pattern: "^a+$", value: "aaa" })).toBe(true);
   });
 
   it("formatString fills named placeholders and leaves unknown ones alone", () => {
