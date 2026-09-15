@@ -5,8 +5,8 @@
  */
 
 /**
- * Conformance suite for `IWebSearchProvider` — that what a provider declares in
- * its capability record is what it refuses, what it attempts, and what it sends.
+ * Conformance suite for `IWebSearchProvider` — what a provider declares in its
+ * capability record is what it refuses, what it attempts, and what it sends.
  */
 
 export * from "./web-search/assertions/capabilityAgreement";

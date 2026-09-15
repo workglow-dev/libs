@@ -165,6 +165,32 @@ function buildSpecs(): Array<{ readonly label: string; readonly spec: Spec }> {
 
 const SPECS = buildSpecs();
 
+/**
+ * Rows of `part` that `whole` cannot account for, counting repeats.
+ *
+ * Membership alone is too weak: every element of `[p1, p1]` is a member of a
+ * `whole` holding one `p1`, so a strategy that returned a row twice where the
+ * join produces it once would pass a containment check while having invented a
+ * row.
+ */
+function multisetRemainder(part: readonly string[], whole: readonly string[]): string[] {
+  const available = new Map<string, number>();
+  for (const row of whole) available.set(row, (available.get(row) ?? 0) + 1);
+  const unaccounted: string[] = [];
+  for (const row of part) {
+    const left = available.get(row) ?? 0;
+    if (left === 0) unaccounted.push(row);
+    else available.set(row, left - 1);
+  }
+  return unaccounted;
+}
+
+/** How many rows `spec`'s window leaves of a join producing `total` of them. */
+function windowLength(total: number, spec: Spec): number {
+  const remaining = Math.max(0, total - (spec.offset ?? 0));
+  return spec.limit === undefined ? remaining : Math.min(spec.limit, remaining);
+}
+
 /** Rows reduced to what both strategies must agree on. */
 function shape(
   rows: ReadonlyArray<JoinedRow<JoinFixturePost, JoinFixtureAuthor, JoinType>>
@@ -294,16 +320,28 @@ export function joinStrategyParityBlock(
                 break;
               }
               case "window": {
-                // The count is determined even when the rows are not: it is the
-                // window applied to the joined rows, which is what would break
-                // if a strategy bounded its left read instead.
-                expect(pushedDown).toHaveLength(hashed.length);
                 const whole = shape(
                   await posts.join({ ...spec, limit: undefined, offset: undefined }, authors)
                 );
-                for (const row of [...shape(pushedDown), ...shape(hashed)]) {
-                  expect(whole).toContain(row);
-                }
+                // WHICH rows a window over an undefined order selects is not
+                // determined, so the two are not held to the same ones — that
+                // is what a columnar backend fails while behaving correctly.
+                // Two things are determined. How many rows come back, measured
+                // against the unwindowed join rather than against each other:
+                // agreeing on a wrong count is still wrong, and a strategy that
+                // bounded its left read instead of the joined rows gets it
+                // wrong. And that every row returned is one the unwindowed join
+                // produced, counted WITH its repeats, so a duplicated row is
+                // caught rather than passing as a member.
+                //
+                // That the two agree on the unwindowed rows at all is asserted
+                // by the "set" comparison, which the same axis sweep reaches
+                // with this spec's limit and offset dropped.
+                const expectedLength = windowLength(whole.length, spec);
+                expect(shape(pushedDown)).toHaveLength(expectedLength);
+                expect(shape(hashed)).toHaveLength(expectedLength);
+                expect(multisetRemainder(shape(pushedDown), whole)).toEqual([]);
+                expect(multisetRemainder(shape(hashed), whole)).toEqual([]);
                 break;
               }
             }

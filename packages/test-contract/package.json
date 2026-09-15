@@ -88,6 +88,15 @@
     "@workglow/browser-control": {
       "optional": true
     },
+    "@workglow/storage": {
+      "optional": true
+    },
+    "@workglow/task-graph": {
+      "optional": true
+    },
+    "@workglow/util": {
+      "optional": true
+    },
     "@workglow/web-search": {
       "optional": true
     }

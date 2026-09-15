@@ -39,11 +39,14 @@ export type LimiterScope = "process" | "cluster";
  * MUST use {@link tryAcquire}/{@link release} when correctness matters under
  * concurrency.
  *
- * **An implementer runs the limiter half of `runGenericJobQueueTests`**
- * (`packages/test/src/test/job-queue/genericJobQueueTests`), which is where
- * that atomicity is actually asserted — a `canProceed`-then-`recordJobStart`
- * pair passes every single-threaded test and admits two jobs into one slot the
- * moment anything runs concurrently.
+ * The limiter half of `runGenericJobQueueTests` is where that atomicity is
+ * actually asserted — a `canProceed`-then-`recordJobStart` pair passes every
+ * single-threaded test and admits two jobs into one slot the moment anything
+ * runs concurrently. It is an in-repo example rather than something an
+ * implementer can run: it lives in the private `@workglow/test`, and unlike the
+ * contracts in `@workglow/test-contract` it has not been published. An
+ * implementation outside this repository has to assert the property itself
+ * until it is.
  */
 export interface ILimiter {
   /**

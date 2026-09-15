@@ -142,8 +142,20 @@ export function capabilityAgreementBlock(opts: WebSearchProviderConformanceOpts)
             // whatever the vendor says rather than as the option that was wrong.
             expect(harness.sent()).toEqual([]);
           } else {
-            await expect(run).resolves.toBeDefined();
+            const output = await run;
             expect(harness.sent().length).toBeGreaterThan(0);
+            // Attempting it is not serving it. `answer` and `content` are the
+            // two options whose result is visible on the output, so a provider
+            // declaring either has to produce it from a payload that carries
+            // one — otherwise "supported" means the option was forwarded and
+            // the response quietly came back without it, which is the same
+            // silent drop over-declaring a domain filter produces.
+            if (probe.request.includeAnswer === true) {
+              expect(output.answer).toBeTruthy();
+            }
+            if (probe.request.includeContent === true) {
+              expect(output.results.some((result) => Boolean(result.content))).toBe(true);
+            }
           }
         },
         opts.timeout

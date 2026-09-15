@@ -11,6 +11,7 @@ import { httpHarness, sampleUrls } from "./harnesses";
 runWebSearchProviderConformance({
   name: "BraveWebSearchProvider",
   signalReachesTransport: false,
+  fillsOpenDateBounds: true,
   createHarness: async ({ resultCount }) =>
     httpHarness({
       provider: new BraveWebSearchProvider(),

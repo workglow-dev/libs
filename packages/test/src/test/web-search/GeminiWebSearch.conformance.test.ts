@@ -11,6 +11,7 @@ import { sampleUrls, sdkHarness } from "./harnesses";
 runWebSearchProviderConformance({
   name: "GeminiWebSearchProvider",
   signalReachesTransport: true,
+  fillsOpenDateBounds: true,
   createHarness: async ({ resultCount }) => {
     const sent: string[] = [];
     const signals: Array<AbortSignal | undefined> = [];

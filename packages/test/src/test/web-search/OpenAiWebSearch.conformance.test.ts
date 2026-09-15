@@ -11,6 +11,7 @@ import { sampleUrls, sdkHarness } from "./harnesses";
 runWebSearchProviderConformance({
   name: "OpenAiWebSearchProvider",
   signalReachesTransport: true,
+  fillsOpenDateBounds: false,
   createHarness: async ({ resultCount }) => {
     const sent: string[] = [];
     const signals: Array<AbortSignal | undefined> = [];

@@ -65,6 +65,19 @@ export interface WebSearchProviderConformanceOpts {
    */
   readonly signalReachesTransport: boolean;
   /**
+   * Whether this provider's date parameter is a CLOSED interval, so a half-open
+   * range has its missing end filled rather than sent half.
+   *
+   * Brave's `freshness` and Gemini's `timeRangeFilter` are closed and fill;
+   * Tavily sets `start_date` and `end_date` independently and correctly sends
+   * only the bound it was given. A flag rather than something the suite infers,
+   * because the two are indistinguishable from outside — and the failure it
+   * guards is a provider that drops the open end and reports the bound as
+   * honored on a search that ran unfiltered at that end. Meaningless, and
+   * ignored, when `dateFilter` is false.
+   */
+  readonly fillsOpenDateBounds: boolean;
+  /**
    * A domain this provider's canned results sit on, used where a request has to
    * name a real-looking host. Defaults to `example.com`.
    */

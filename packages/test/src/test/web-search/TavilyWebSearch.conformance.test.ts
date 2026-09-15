@@ -11,6 +11,7 @@ import { httpHarness, sampleUrls } from "./harnesses";
 runWebSearchProviderConformance({
   name: "TavilyWebSearchProvider",
   signalReachesTransport: false,
+  fillsOpenDateBounds: false,
   createHarness: async ({ resultCount }) =>
     httpHarness({
       provider: new TavilyWebSearchProvider(),

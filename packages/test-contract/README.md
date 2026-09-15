@@ -137,7 +137,7 @@ Capability flags:
 | `IVectorStorage`                        | `@workglow/test-contract/vector-storage`          | InMemory, SQLite, Postgres, IndexedDB, Scoped, Telemetry                                              |
 | `IEntitlementProfile`                   | `@workglow/test-contract/entitlement-profile`     | Browser, Desktop, Server, Custom                                                                      |
 | `IBrowserContext`                       | `@workglow/test-contract/browser-context`         | Mock, Playwright, BunWebView, Electron                                                                |
-| `IHumanConnector`                       | `@workglow/test-contract/human-connector`         | MockHumanConnector, McpElicitationConnector                                                           |
+| `IHumanConnector`                       | `@workglow/test-contract/human-connector`         | Mock, Mock (no followUp), McpElicitation, Prompt, Ink, RunEvent                                       |
 | `IWebSearchProvider`                    | `@workglow/test-contract/web-search`              | Brave, Tavily, SearXNG, Anthropic, OpenAI, OpenRouter, Gemini                                         |
 | Worker-proxy parity                     | `@workglow/test-contract/worker-proxy`            | _harness only — no adapters wired yet_                                                                |
 

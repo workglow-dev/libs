@@ -14,6 +14,7 @@ import { httpHarness, sampleUrls } from "./harnesses";
 runWebSearchProviderConformance({
   name: "SearxngWebSearchProvider",
   signalReachesTransport: false,
+  fillsOpenDateBounds: false,
   createHarness: async ({ resultCount }) =>
     httpHarness({
       provider: new SearxngWebSearchProvider("https://searxng.example"),

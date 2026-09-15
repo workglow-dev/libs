@@ -5,8 +5,8 @@
  */
 
 /**
- * Conformance suite for an AI provider adapter: that what it advertises it can
- * do is what it serves, over both the inline and worker registrations.
+ * Conformance suite for an AI provider adapter: what it advertises it can do
+ * is what it serves, over both the inline and worker registrations.
  */
 
 export * from "./ai-provider/fixtures";

@@ -9,6 +9,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PROBE_QUERY, registerOnly, sentText } from "../fixtures";
 import type { WebSearchConformanceHarness, WebSearchProviderConformanceOpts } from "../types";
 
+/**
+ * The distinct calendar dates one request carried, however the vendor spelled
+ * them — a bare `YYYY-MM-DD`, a slice of an RFC-3339 timestamp, or two of them
+ * run together in one parameter.
+ *
+ * Distinct, because `sentText` renders what went out twice (raw and decoded),
+ * and counting the bounds is the whole point.
+ */
+function datesIn(text: string): string[] {
+  return [...new Set(text.match(/\d{4}-\d{2}-\d{2}/g) ?? [])];
+}
+
 /** The three shapes `dateRange` arrives in: closed, open at the start, open at the end. */
 const RANGES = [
   { label: "a closed range", value: { start: "2024-01-01", end: "2024-06-30" } },
@@ -79,7 +91,7 @@ export function dateFilteringBlock(opts: WebSearchProviderConformanceOpts): void
     }
 
     it(
-      "sends the same thing for a half-open range as for the closed one it fills to",
+      "fills the open end of a half-open range rather than sending it half",
       async () => {
         harness = await opts.createHarness({ resultCount: 3 });
         registerOnly(harness);
@@ -90,24 +102,45 @@ export function dateFilteringBlock(opts: WebSearchProviderConformanceOpts): void
           provider: harness.provider.name,
           dateRange: { start: "2024-01-01" },
         });
-        const openEnded = sentText(harness);
-        harness.dispose();
+        const openEnded = datesIn(sentText(harness));
 
-        const closed = await opts.createHarness({ resultCount: 3 });
-        registerOnly(closed);
-        try {
-          await new WebSearchTask().run({
-            query: PROBE_QUERY,
-            provider: closed.provider.name,
-            dateRange: { start: "2024-01-01", end: "2999-12-31" },
-          });
-          // Not equality — the filled end is "today" for a provider that fills
-          // with one — but the start the caller named has to appear either way.
-          expect(openEnded).toContain("2024");
-          expect(sentText(closed)).toContain("2024");
-        } finally {
-          closed.dispose();
+        // The bound the caller actually named reaches the wire either way.
+        expect(openEnded).toContain("2024-01-01");
+
+        if (!opts.fillsOpenDateBounds) {
+          // An API taking each bound separately is honoring the request by
+          // sending the one it was given; there is no end to fill.
+          return;
         }
+        // A closed interval has to carry two. Sending one is the failure this
+        // whole block exists for: the request goes out unfiltered at the open
+        // end while `dateFilter: true` reports the bound as honored — and
+        // asserting only that the START appears cannot tell the two apart,
+        // because a provider that drops the end still sends the start.
+        expect(openEnded.length).toBeGreaterThanOrEqual(2);
+      },
+      opts.timeout
+    );
+
+    it(
+      "fills the open start of a half-open range too",
+      async () => {
+        harness = await opts.createHarness({ resultCount: 3 });
+        registerOnly(harness);
+        if (!harness.provider.capabilities.dateFilter) return;
+
+        await new WebSearchTask().run({
+          query: PROBE_QUERY,
+          provider: harness.provider.name,
+          dateRange: { end: "2024-06-30" },
+        });
+        const openStart = datesIn(sentText(harness));
+
+        expect(openStart).toContain("2024-06-30");
+        if (!opts.fillsOpenDateBounds) return;
+        // The other direction, which a provider can get wrong on its own: an
+        // adapter filling only the end reads as correct on the case above.
+        expect(openStart.length).toBeGreaterThanOrEqual(2);
       },
       opts.timeout
     );
