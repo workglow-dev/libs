@@ -8,7 +8,7 @@ import { PromptHumanConnector } from "@workglow/cli/human";
 import type { PromptHumanRenderers } from "@workglow/cli/human";
 import type { IHumanConnector, IHumanRequest, IHumanResponse } from "@workglow/util";
 
-import { runHumanConnectorConformance } from "../../contract/human-connector/runHumanConnectorConformance";
+import { runHumanConnectorConformance } from "@workglow/test-contract/human-connector";
 import { createCliHumanSurface } from "./cliHumanSurface";
 
 /**

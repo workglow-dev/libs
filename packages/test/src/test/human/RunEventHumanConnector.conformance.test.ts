@@ -9,7 +9,7 @@ import type { RunEvent, RunEventSink } from "@workglow/cli/human";
 import type { IHumanRequest } from "@workglow/util";
 import type { DataPortSchema } from "@workglow/util/schema";
 
-import { runHumanConnectorConformance } from "../../contract/human-connector/runHumanConnectorConformance";
+import { runHumanConnectorConformance } from "@workglow/test-contract/human-connector";
 import { createCliHumanSurface } from "./cliHumanSurface";
 
 /**

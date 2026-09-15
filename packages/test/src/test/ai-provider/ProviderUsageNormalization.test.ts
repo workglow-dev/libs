@@ -12,7 +12,7 @@ import { _testOnly as ollamaTestOnly } from "@workglow/ollama/ai";
 import { _testOnly as openrouterTestOnly } from "@workglow/openrouter/ai";
 import { describe, expect, it } from "vitest";
 
-import { usageNormalizationBlock } from "../../contract/ai-provider/assertions/usageNormalization";
+import { usageNormalizationBlock } from "@workglow/test-contract/ai-provider";
 
 const { createAnthropicUsageCollector } = anthropicTestOnly;
 const { mapDeepSeekUsage } = deepseekTestOnly;

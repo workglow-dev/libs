@@ -18,18 +18,16 @@ import type { DataPortSchemaObject } from "@workglow/util/schema";
 import { getTestingLogger } from "@workglow/util/test";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  runTabularStorageContract,
-  VectorItemPrimaryKeyNames,
-  VectorItemSchema,
-} from "../../contract/tabular-storage/runTabularStorageContract";
-import { runSqlBulkPutTests } from "./genericSqlBulkPutTests";
-import {
   AuthorPrimaryKeyNames,
   AuthorSchema,
   PostPrimaryKeyNames,
   PostSchema,
-  runGenericTabularJoinTests,
-} from "./genericTabularJoinTests";
+  runTabularJoinContract,
+  runTabularStorageContract,
+  VectorItemPrimaryKeyNames,
+  VectorItemSchema,
+} from "@workglow/test-contract/tabular-storage";
+import { runSqlBulkPutTests } from "./genericSqlBulkPutTests";
 import {
   AllTypesPrimaryKeyNames,
   AllTypesSchema,
@@ -1024,7 +1022,7 @@ describe("SqliteTabularStorage join", () => {
   });
 
   // Two tables on one handle: the join runs as a single statement.
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new SqliteTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         shared,
@@ -1044,7 +1042,7 @@ describe("SqliteTabularStorage join", () => {
 
   // A right side elsewhere: the hash join, with the in-list chunking it does
   // against a real SQLite left side.
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new SqliteTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         ":memory:",
@@ -1061,7 +1059,7 @@ describe("SqliteTabularStorage join", () => {
   );
 
   // The mirror image: a SQLite right side answering an InMemory left's in-list.
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new InMemoryTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         PostSchema,

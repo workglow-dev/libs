@@ -15,7 +15,7 @@ import { setTaskQueueRegistry } from "@workglow/task-graph";
 import { setLogger } from "@workglow/util";
 
 import { getTestingLogger } from "@workglow/util/test";
-import { runAiProviderConformance } from "../../contract/ai-provider/runAiProviderConformance";
+import { runAiProviderConformance } from "@workglow/test-contract/ai-provider";
 
 const RUN = !!process.env.OLLAMA_HOST || !!process.env.RUN_OLLAMA_TESTS;
 const MODEL_ID = "ollama:llama3.2:1b";

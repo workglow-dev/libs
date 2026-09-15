@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ConformanceMockContext } from "../../contract/browser-context/ConformanceMockContext";
-import { runIBrowserContextConformance } from "../../contract/browser-context/runIBrowserContextConformance";
+import { ConformanceMockContext } from "@workglow/test-contract/browser-context";
+import { runIBrowserContextConformance } from "@workglow/test-contract/browser-context";
 
 runIBrowserContextConformance({
   name: "Mock",

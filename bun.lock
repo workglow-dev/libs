@@ -367,9 +367,11 @@
         "@workglow/supabase": "workspace:*",
         "@workglow/task-graph": "workspace:*",
         "@workglow/tasks": "workspace:*",
+        "@workglow/test-contract": "workspace:*",
         "@workglow/tf-mediapipe": "workspace:*",
         "@workglow/triggers": "workspace:*",
         "@workglow/util": "workspace:*",
+        "@workglow/web-search": "workspace:*",
         "@workglow/xai": "workspace:*",
         "aws-sdk-client-mock": "catalog:",
         "fake-indexeddb": "catalog:",
@@ -379,6 +381,33 @@
         "playwright": "catalog:",
         "vitest": "catalog:",
       },
+    },
+    "packages/test-contract": {
+      "name": "@workglow/test-contract",
+      "version": "0.6.0",
+      "devDependencies": {
+        "@workglow/ai": "workspace:*",
+        "@workglow/browser-control": "workspace:*",
+        "@workglow/storage": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+        "@workglow/web-search": "workspace:*",
+        "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "@workglow/ai": "workspace:*",
+        "@workglow/browser-control": "workspace:*",
+        "@workglow/storage": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+        "@workglow/web-search": "workspace:*",
+        "vitest": "catalog:",
+      },
+      "optionalPeers": [
+        "@workglow/ai",
+        "@workglow/browser-control",
+        "@workglow/web-search",
+      ],
     },
     "packages/triggers": {
       "name": "@workglow/triggers",
@@ -1749,6 +1778,8 @@
     "@workglow/tasks": ["@workglow/tasks@workspace:packages/tasks"],
 
     "@workglow/test": ["@workglow/test@workspace:packages/test"],
+
+    "@workglow/test-contract": ["@workglow/test-contract@workspace:packages/test-contract"],
 
     "@workglow/tf-mediapipe": ["@workglow/tf-mediapipe@workspace:providers/tf-mediapipe"],
 

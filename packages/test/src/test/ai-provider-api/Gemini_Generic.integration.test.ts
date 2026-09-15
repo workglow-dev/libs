@@ -15,7 +15,7 @@ import { setTaskQueueRegistry } from "@workglow/task-graph";
 import { setLogger } from "@workglow/util";
 
 import { getTestingLogger } from "@workglow/util/test";
-import { runAiProviderConformance } from "../../contract/ai-provider/runAiProviderConformance";
+import { runAiProviderConformance } from "@workglow/test-contract/ai-provider";
 
 const RUN = !!process.env.GOOGLE_API_KEY || !!process.env.GEMINI_API_KEY;
 // gemini-2.5-flash was retired from the v1beta API. Exercise a current

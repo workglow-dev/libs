@@ -10,8 +10,8 @@ import { InMemoryVectorStorage } from "@workglow/storage";
 import type { DataPortSchemaObject } from "@workglow/util/schema";
 import { TypedArraySchema } from "@workglow/util/schema";
 import { describe, expect, it } from "vitest";
-import { runVectorStorageContract } from "../../contract/vector-storage/runVectorStorageContract";
-import { EAST, NORTH, VECTOR_DIMENSIONS } from "../../contract/vector-storage/types";
+import { runVectorStorageContract } from "@workglow/test-contract/vector-storage";
+import { EAST, NORTH, VECTOR_DIMENSIONS } from "@workglow/test-contract/vector-storage";
 
 /**
  * The inner schema, which carries the `kb_id` this class injects on write and

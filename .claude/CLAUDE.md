@@ -334,6 +334,14 @@ none, so the interface form is not assignable to the `DataPorts` constraint `Tas
 Only SearXNG needs no API key and has no quota, so it is the only one whose integration test
 runs unmocked (`.integration.test.ts`, skipped unless `WEB_SEARCH_SEARXNG_URL` is set).
 
+All seven run `runWebSearchProviderConformance` (`@workglow/test-contract/web-search`) over a
+mocked transport, in `packages/test/src/test/web-search/`. It reads the capability record and
+asserts the behaviour that record promises, rather than listing what each provider does — an
+option declared unservable is refused before the vendor is reached, one declared servable
+reaches the wire. Over-declaring is what it exists to catch, because that failure does not
+throw: the adapter has nowhere to put the option, drops it, and returns a search reporting
+the provider, the query and a plausible result set with the restriction gone.
+
 ### `providers/*`
 
 Standalone packages with optional peer deps, each exposing `./ai` (main thread) and
@@ -434,7 +442,7 @@ BETWEEN runs rather than during one: `InkHumanConnector` needs a mounted
 `HumanInteractionHost` and throws without one, while this draws its own prompt and gives the
 screen back. It has no `followUp` — a modal prompt settles the question it asked — and
 decides form-vs-approval through the same `humanPromptModel` the Ink panel and the console
-read.
+read, which is `@workglow/util`'s rather than this package's.
 
 **The same command serves the web console**, because a chat needs no channel the console did
 not already have: each turn runs through `withCli` so its rows and text report up the event
@@ -497,6 +505,15 @@ that cannot reach the CDN.
 `SchemaUtils`/`SchemaValidation`, `uuid4`, `sleep`, `WorkerManager`/`WorkerServer`, vector
 math, tensor types.
 
+`IHumanConnector` lives here, and so does `humanPromptModel` — the pure function deciding
+whether a request is drawn as an acknowledgement, a form or an approval. It shipped from
+`@workglow/cli` until a browser app needed it and could not take it: that package's
+dependencies include ink, react, commander, `@napi-rs/keyring`, `node-llama-cpp` and two
+model SDKs, which nobody installs for a hundred-line pure function. Builder wrote its own
+switch instead, and one of its two connectors answered a `confirm` with `action: "accept"`
+and a content payload — an approval reported as a form nobody filled in. `@workglow/cli`
+re-exports it from `./human`, so every existing caller is unchanged.
+
 `WorkerManager` is written against the web `Worker` interface, and `Worker.node.ts` presents
 `node:worker_threads` through it. Two mismatches there are silent rather than loud, so leave
 the adaptation in place: `worker_threads` rejects a **stringified** `file://` URL
@@ -515,6 +532,11 @@ under both runners.
 Register with `registerCommonTasks({ fileSystemTasks })` — the flag is required, and decides whether `FileGrepTask`/`FileLoaderTask`/`FileSedTask` are resolvable by type name (and so nameable by graph JSON the host did not author).
 
 ## Testing
+
+The parameterized conformance suites are a published package, `@workglow/test-contract`
+(`packages/test-contract/`), one subpath per contract — an adapter written outside this
+repository inherits the assertions instead of re-deriving them. `@workglow/test` stays
+private and holds the concrete tests. See `packages/test-contract/README.md`.
 
 Tests live mostly in `packages/test/src/test/`; both `bun test` and `vitest` run.
 Import from `vitest`. Generic suites are extracted to shared helpers

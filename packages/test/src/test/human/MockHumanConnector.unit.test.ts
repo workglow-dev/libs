@@ -7,7 +7,7 @@
 import type { IHumanRequest } from "@workglow/util";
 import { describe, expect, it } from "vitest";
 
-import { MockHumanConnector } from "../../contract/human-connector/MockHumanConnector";
+import { MockHumanConnector } from "@workglow/test-contract/human-connector";
 
 function elicitReq(requestId: string): IHumanRequest {
   return {

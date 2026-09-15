@@ -6,7 +6,7 @@
 
 import { InkHumanConnector, setCliHumanInteractionEnqueue } from "@workglow/cli/human";
 
-import { runHumanConnectorConformance } from "../../contract/human-connector/runHumanConnectorConformance";
+import { runHumanConnectorConformance } from "@workglow/test-contract/human-connector";
 import { createCliHumanSurface } from "./cliHumanSurface";
 
 /**

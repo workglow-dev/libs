@@ -22,14 +22,14 @@ import { _testOnly as tfmp } from "@workglow/tf-mediapipe/ai";
 import { _testOnly as xai } from "@workglow/xai/ai";
 import { describe, expect, it } from "vitest";
 
-import { assertInferAdvertisesRegistered } from "../../contract/ai-provider/assertions/inferAdvertisesRegistered";
-import type { InferredForModel } from "../../contract/ai-provider/assertions/inferServesInferred";
-import { assertInferServesInferred } from "../../contract/ai-provider/assertions/inferServesInferred";
-import type { PricedModel } from "../../contract/ai-provider/assertions/pricingMatchesModality";
+import { assertInferAdvertisesRegistered } from "@workglow/test-contract/ai-provider";
+import type { InferredForModel } from "@workglow/test-contract/ai-provider";
+import { assertInferServesInferred } from "@workglow/test-contract/ai-provider";
+import type { PricedModel } from "@workglow/test-contract/ai-provider";
 import {
   assertPricedGapDoesNotGrow,
   assertPricingMatchesModality,
-} from "../../contract/ai-provider/assertions/pricingMatchesModality";
+} from "@workglow/test-contract/ai-provider";
 
 function model(
   provider: string,

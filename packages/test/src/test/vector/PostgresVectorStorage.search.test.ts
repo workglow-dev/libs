@@ -11,12 +11,12 @@ import type { AnyVectorStorage } from "@workglow/storage";
 import { uuid4 } from "@workglow/util";
 import type { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
-import { runVectorStorageContract } from "../../contract/vector-storage/runVectorStorageContract";
+import { runVectorStorageContract } from "@workglow/test-contract/vector-storage";
 import {
   VECTOR_DIMENSIONS,
   VectorItemPrimaryKeyNames,
   VectorItemSchema,
-} from "../../contract/vector-storage/types";
+} from "@workglow/test-contract/vector-storage";
 
 // Its own instance rather than the validation suite's: that file closes its
 // handle in an `afterAll`, which fires before a second top-level describe in

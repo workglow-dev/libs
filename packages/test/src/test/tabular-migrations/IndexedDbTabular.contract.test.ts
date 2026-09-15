@@ -7,7 +7,7 @@
 import { IndexedDbTabularStorage } from "@workglow/indexeddb/storage";
 import type { AnyTabularStorage, ITabularMigration } from "@workglow/storage";
 import "fake-indexeddb/auto";
-import { runTabularMigrationContract } from "../../contract/tabular-migrations/runTabularMigrationContract";
+import { runTabularMigrationContract } from "@workglow/test-contract/tabular-migrations";
 
 let factoryCounter = 0;
 

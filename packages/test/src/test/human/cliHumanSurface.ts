@@ -8,8 +8,8 @@ import { humanPromptModel } from "@workglow/cli/human";
 import type { HumanPromptSource } from "@workglow/cli/human";
 import type { IHumanRequest, IHumanResponse } from "@workglow/util";
 
-import { MockHumanConnector } from "../../contract/human-connector/MockHumanConnector";
-import type { MockResponseScript } from "../../contract/human-connector/types";
+import { MockHumanConnector } from "@workglow/test-contract/human-connector";
+import type { MockResponseScript } from "@workglow/test-contract/human-connector";
 
 /**
  * A person sitting in front of what the CLI actually drew.

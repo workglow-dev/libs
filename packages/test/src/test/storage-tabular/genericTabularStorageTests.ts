@@ -8,6 +8,12 @@ import type { ITabularStorage, PageCursor } from "@workglow/storage";
 import { StorageUnsupportedError, StorageValidationError } from "@workglow/storage";
 import type { DataPortSchemaObject, FromSchema } from "@workglow/util/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+// The row shape the contract suites in `@workglow/test-contract` read, kept
+// there so an adapter outside this repo inherits the fixture along with the
+// assertions. Re-exported because this file's own suites use the same rows.
+import { CompoundPrimaryKeyNames, CompoundSchema } from "@workglow/test-contract/tabular-storage";
+
+export { CompoundPrimaryKeyNames, CompoundSchema };
 
 export const PAYLOADS = [
   "id); DROP TABLE x;--",
@@ -22,19 +28,6 @@ export const PAYLOADS = [
   "",
   " ",
 ];
-
-export const CompoundPrimaryKeyNames = ["name", "type"] as const;
-export const CompoundSchema = {
-  type: "object",
-  properties: {
-    name: { type: "string" },
-    type: { type: "string" },
-    option: { type: "string" },
-    success: { type: "boolean" },
-  },
-  required: ["name", "type", "option", "success"],
-  additionalProperties: false,
-} as const satisfies DataPortSchemaObject;
 
 export const SearchPrimaryKeyNames = ["id"] as const;
 export const SearchSchema = {

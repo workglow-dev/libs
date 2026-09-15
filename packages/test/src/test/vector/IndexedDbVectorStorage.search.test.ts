@@ -9,12 +9,12 @@ import "fake-indexeddb/auto";
 import { IndexedDbVectorStorage } from "@workglow/indexeddb/storage";
 import type { AnyVectorStorage } from "@workglow/storage";
 import { uuid4 } from "@workglow/util";
-import { runVectorStorageContract } from "../../contract/vector-storage/runVectorStorageContract";
+import { runVectorStorageContract } from "@workglow/test-contract/vector-storage";
 import {
   VECTOR_DIMENSIONS,
   VectorItemPrimaryKeyNames,
   VectorItemSchema,
-} from "../../contract/vector-storage/types";
+} from "@workglow/test-contract/vector-storage";
 
 /**
  * The shared contract on IndexedDB.

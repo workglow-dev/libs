@@ -15,7 +15,7 @@ import { setTaskQueueRegistry } from "@workglow/task-graph";
 import { setLogger } from "@workglow/util";
 
 import { getTestingLogger } from "@workglow/util/test";
-import { runAiProviderConformance } from "../../contract/ai-provider/runAiProviderConformance";
+import { runAiProviderConformance } from "@workglow/test-contract/ai-provider";
 
 const RUN = !!process.env.HF_TOKEN;
 // meta-llama/Llama-3.1-8B-Instruct is no longer routable via HF Inference

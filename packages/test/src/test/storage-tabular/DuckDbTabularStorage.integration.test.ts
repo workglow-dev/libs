@@ -18,18 +18,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  runTabularStorageContract,
-  VectorItemPrimaryKeyNames,
-  VectorItemSchema,
-} from "../../contract/tabular-storage/runTabularStorageContract";
-import { runSqlBulkPutTests } from "./genericSqlBulkPutTests";
-import {
   AuthorPrimaryKeyNames,
   AuthorSchema,
   PostPrimaryKeyNames,
   PostSchema,
-  runGenericTabularJoinTests,
-} from "./genericTabularJoinTests";
+  runTabularJoinContract,
+  runTabularStorageContract,
+  VectorItemPrimaryKeyNames,
+  VectorItemSchema,
+} from "@workglow/test-contract/tabular-storage";
+import { runSqlBulkPutTests } from "./genericSqlBulkPutTests";
 import {
   AllTypesPrimaryKeyNames,
   AllTypesSchema,
@@ -697,7 +695,7 @@ describe("DuckDbTabularStorage join", () => {
   });
 
   // Two tables on one database: the join runs as a single statement.
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new DuckDbTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         shared,
@@ -717,7 +715,7 @@ describe("DuckDbTabularStorage join", () => {
 
   // A right side elsewhere: the hash join, with expanded `$N` in-lists on the
   // DuckDB side.
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new InMemoryTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         PostSchema,

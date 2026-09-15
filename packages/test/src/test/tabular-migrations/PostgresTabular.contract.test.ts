@@ -8,7 +8,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { PostgresTabularStorage } from "@workglow/postgres/storage";
 import type { AnyTabularStorage, ITabularMigration } from "@workglow/storage";
 import type { Pool } from "pg";
-import { runTabularMigrationContract } from "../../contract/tabular-migrations/runTabularMigrationContract";
+import { runTabularMigrationContract } from "@workglow/test-contract/tabular-migrations";
 
 runTabularMigrationContract({
   name: "Postgres (PGlite)",

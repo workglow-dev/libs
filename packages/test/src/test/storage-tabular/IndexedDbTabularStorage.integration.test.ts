@@ -13,17 +13,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getTestingLogger } from "@workglow/util/test";
 import {
-  runTabularStorageContract,
-  VectorItemPrimaryKeyNames,
-  VectorItemSchema,
-} from "../../contract/tabular-storage/runTabularStorageContract";
-import {
   AuthorPrimaryKeyNames,
   AuthorSchema,
   PostPrimaryKeyNames,
   PostSchema,
-  runGenericTabularJoinTests,
-} from "./genericTabularJoinTests";
+  runTabularJoinContract,
+  runTabularStorageContract,
+  VectorItemPrimaryKeyNames,
+  VectorItemSchema,
+} from "@workglow/test-contract/tabular-storage";
 import { runGenericTabularStorageSubscriptionTests } from "./genericTabularStorageSubscriptionTests";
 import {
   AllTypesPrimaryKeyNames,
@@ -728,7 +726,7 @@ describe("IndexedDbTabularStorage", () => {
 
 describe("IndexedDbTabularStorage join", () => {
   const joinDb = `idx_join_${uuid4().replace(/-/g, "_")}`;
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new IndexedDbTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         `${joinDb}_posts`,

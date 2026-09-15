@@ -9,8 +9,8 @@ import { setLogger } from "@workglow/util";
 import { describe } from "vitest";
 
 import { getTestingLogger } from "@workglow/util/test";
-import type { BuildMigrationFn } from "../../contract/storage-migrations/runMigrationRunnerContract";
-import { runMigrationRunnerContract } from "../../contract/storage-migrations/runMigrationRunnerContract";
+import type { BuildMigrationFn } from "@workglow/test-contract/storage-migrations";
+import { runMigrationRunnerContract } from "@workglow/test-contract/storage-migrations";
 
 const buildMigration: BuildMigrationFn<Sqlite.Database> = (
   component,

@@ -13,17 +13,15 @@ import {
 import type { DataPortSchemaObject } from "@workglow/util/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  runTabularStorageContract,
-  VectorItemPrimaryKeyNames,
-  VectorItemSchema,
-} from "../../contract/tabular-storage/runTabularStorageContract";
-import {
   AuthorPrimaryKeyNames,
   AuthorSchema,
   PostPrimaryKeyNames,
   PostSchema,
-  runGenericTabularJoinTests,
-} from "./genericTabularJoinTests";
+  runTabularJoinContract,
+  runTabularStorageContract,
+  VectorItemPrimaryKeyNames,
+  VectorItemSchema,
+} from "@workglow/test-contract/tabular-storage";
 import { CompoundPrimaryKeyNames, CompoundSchema } from "./genericTabularStorageTests";
 
 const TestSchema = {
@@ -164,7 +162,7 @@ runTabularStorageContract({
 });
 
 describe("TelemetryTabularStorage join", () => {
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new TelemetryTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         "join-posts",
