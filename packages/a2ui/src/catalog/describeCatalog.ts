@@ -14,6 +14,7 @@ function describeComponent(component: A2UIComponentSpec): string {
     const marks: string[] = [];
     if (property.required) marks.push("required");
     if (property.values) marks.push(property.values.join(" | "));
+    if (property.default !== undefined) marks.push(`default ${JSON.stringify(property.default)}`);
     const suffix = marks.length > 0 ? ` (${marks.join("; ")})` : "";
     lines.push(`  - \`${property.name}\`${suffix}: ${property.description}`);
   }

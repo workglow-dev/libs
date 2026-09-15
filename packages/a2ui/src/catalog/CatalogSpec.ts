@@ -22,6 +22,15 @@ export type A2UIPropertySpec = {
   /** Allowed literal values, when the property is a closed set. */
   readonly values?: readonly string[];
   /**
+   * What the catalog says an omitted property means.
+   *
+   * Carried here rather than left to each renderer because a default is part of
+   * the agreement: a `Column` whose `align` is absent stretches its children,
+   * and a renderer that quietly centres them instead draws something the agent
+   * did not describe and has no way to see.
+   */
+  readonly default?: string | number | boolean;
+  /**
    * How this property names other components, if it does.
    *
    * - "id": the value is one component id.

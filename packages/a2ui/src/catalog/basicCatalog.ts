@@ -53,6 +53,7 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
         { name: "text", required: true, description: "The text to display" },
         {
           name: "variant",
+          default: "body",
           required: false,
           description: "Base text style",
           values: ["h1", "h2", "h3", "h4", "h5", "caption", "body"],
@@ -67,12 +68,14 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
         { name: "description", required: false, description: "Accessibility text" },
         {
           name: "fit",
+          default: "fill",
           required: false,
           description: "How the image is resized to its container",
           values: ["contain", "cover", "fill", "none", "scaleDown"],
         },
         {
           name: "variant",
+          default: "mediumFeature",
           required: false,
           description: "Size and style hint",
           values: ["icon", "avatar", "smallFeature", "mediumFeature", "largeFeature", "header"],
@@ -109,6 +112,7 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
         },
         {
           name: "justify",
+          default: "start",
           required: false,
           description: "Arrangement along the horizontal axis",
           values: [
@@ -123,6 +127,7 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
         },
         {
           name: "align",
+          default: "stretch",
           required: false,
           description: "Alignment along the vertical axis",
           values: ["start", "center", "end", "stretch"],
@@ -141,6 +146,7 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
         },
         {
           name: "justify",
+          default: "start",
           required: false,
           description: "Arrangement along the vertical axis",
           values: [
@@ -155,6 +161,7 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
         },
         {
           name: "align",
+          default: "stretch",
           required: false,
           description: "Alignment along the horizontal axis",
           values: ["start", "center", "end", "stretch"],
@@ -173,12 +180,14 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
         },
         {
           name: "direction",
+          default: "vertical",
           required: false,
           description: "Layout direction",
           values: ["vertical", "horizontal"],
         },
         {
           name: "align",
+          default: "stretch",
           required: false,
           description: "Alignment along the cross axis",
           values: ["start", "center", "end", "stretch"],
@@ -228,6 +237,7 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
       properties: [
         {
           name: "axis",
+          default: "horizontal",
           required: false,
           description: "Orientation",
           values: ["horizontal", "vertical"],
@@ -251,6 +261,7 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
         },
         {
           name: "variant",
+          default: "default",
           required: false,
           description: "Style hint",
           values: ["default", "primary", "borderless"],
@@ -265,6 +276,7 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
         { name: "value", required: false, description: "Bound value, normally { path }" },
         {
           name: "variant",
+          default: "shortText",
           required: false,
           description: "Input kind",
           values: ["shortText", "longText", "number", "obscured"],
@@ -297,17 +309,19 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
         { name: "label", required: false, description: "Label for the group" },
         {
           name: "variant",
+          default: "mutuallyExclusive",
           required: false,
           description: "Selection behaviour",
           values: ["mutuallyExclusive", "multipleSelection"],
         },
         {
           name: "displayStyle",
+          default: "checkbox",
           required: false,
           description: "How options are drawn",
           values: ["checkbox", "chips"],
         },
-        { name: "filterable", required: false, description: "Show a filter input" },
+        { name: "filterable", default: false, required: false, description: "Show a filter input" },
       ],
     },
     {
@@ -316,7 +330,7 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
       properties: [
         { name: "value", required: true, description: "Bound number, normally { path }" },
         { name: "max", required: true, description: "Maximum value" },
-        { name: "min", required: false, description: "Minimum value" },
+        { name: "min", default: 0, required: false, description: "Minimum value" },
         { name: "label", required: false, description: "Slider label" },
       ],
     },
@@ -325,8 +339,18 @@ export const A2UI_BASIC_CATALOG: A2UICatalogSpec = {
       description: "A date and/or time picker bound to an ISO 8601 string.",
       properties: [
         { name: "value", required: true, description: "Bound ISO 8601 string, normally { path }" },
-        { name: "enableDate", required: false, description: "Allow picking a date" },
-        { name: "enableTime", required: false, description: "Allow picking a time" },
+        {
+          name: "enableDate",
+          default: false,
+          required: false,
+          description: "Allow picking a date",
+        },
+        {
+          name: "enableTime",
+          default: false,
+          required: false,
+          description: "Allow picking a time",
+        },
         { name: "min", required: false, description: "Earliest allowed ISO 8601 value" },
         { name: "max", required: false, description: "Latest allowed ISO 8601 value" },
         { name: "label", required: false, description: "Field label" },

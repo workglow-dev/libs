@@ -27,6 +27,13 @@ describe("describeA2UICatalog", () => {
     }
   });
 
+  it("states what an omitted property means", () => {
+    // A default is part of the agreement rather than a renderer's private
+    // choice: a Column whose align is absent stretches its children.
+    expect(text).toContain('default "stretch"');
+    expect(text).toContain("default false");
+  });
+
   it("gives the catalog id an agent has to send", () => {
     expect(text).toContain(A2UI_BASIC_CATALOG.catalogId);
   });
