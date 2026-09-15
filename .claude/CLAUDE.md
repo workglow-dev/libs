@@ -533,7 +533,7 @@ section `graph` — `task-graph` selects that package's co-located `__tests__`.
 
 **Running the same files under Bun** — `bun test` resolves `import { vi } from "vitest"` to
 its own compatibility shim, which is missing `setSystemTime`, `stubGlobal`/`stubEnv` and
-their `unstubAll*` pairs, and the async timer variants. `scripts/lib/preload-vitest-compat.ts`
+their `unstubAll*` pairs, the async timer variants, and `waitFor`. `scripts/lib/preload-vitest-compat.ts`
 (wired in through `bunfig.toml`'s `[test].preload`) installs those on the shim's shared `vi`
 object, each guarded so a Bun release that ships its own wins. Two Bun timer quirks are
 baked into it: `advanceTimersByTime(0)` still advances a whole millisecond, so a "flush"

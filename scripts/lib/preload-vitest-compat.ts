@@ -10,10 +10,10 @@
  *
  * `bun test` resolves `import { vi } from "vitest"` to its own shim rather than
  * to the real package. That shim covers mocks, spies and fake timers, but not
- * `setSystemTime`, the global/env stubbing pair, or the async timer variants —
- * a test using any of those throws `vi.X is not a function` under Bun while
- * passing under Vitest. The shim exposes one shared `vi` object, so a preload
- * can install the missing members once for every test file.
+ * `setSystemTime`, the global/env stubbing pair, the async timer variants or
+ * `waitFor` — a test using any of those throws `vi.X is not a function` under
+ * Bun while passing under Vitest. The shim exposes one shared `vi` object, so a
+ * preload can install the missing members once for every test file.
  *
  * Only referenced from `bunfig.toml`'s `[test].preload`; Vitest keeps its real
  * implementations. Each addition is guarded so a future Bun release that ships
@@ -137,6 +137,74 @@ define("runOnlyPendingTimersAsync", async (): Promise<typeof vi> => {
   await drainPendingWork();
   return vi;
 });
+
+// ── Polling ───────────────────────────────────────────────────────────────────
+/**
+ * Retries `callback` until it stops throwing — or its promise stops rejecting —
+ * and resolves with whatever it returned. A timeout throws the LAST error the
+ * callback produced, so the report names the assertion that never held rather
+ * than the wait around it.
+ *
+ * Two properties are worth keeping, both Vitest's:
+ *
+ * - The deadline is armed on the timer captured at preload, before any test can
+ *   install a fake one, so a callback whose promise never settles still rejects
+ *   instead of hanging until the runner's own timeout.
+ * - Under fake timers the wait between attempts ADVANCES the clock rather than
+ *   sleeping. What is being waited for is driven by those timers, so a real
+ *   sleep would sit out the whole timeout without it ever progressing.
+ */
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+
+async function waitOneInterval(interval: number): Promise<void> {
+  if ((vi as unknown as { isFakeTimers: () => boolean }).isFakeTimers()) {
+    advanceTimersByTime(interval);
+    await drainPendingWork();
+    return;
+  }
+  await new Promise<void>((resolve) => realSetTimeout(resolve, interval));
+}
+
+define(
+  "waitFor",
+  <T>(
+    callback: () => T | Promise<T>,
+    options?: number | { readonly timeout?: number; readonly interval?: number }
+  ): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const { timeout = 1000, interval = 50 } =
+        typeof options === "number" ? { timeout: options } : (options ?? {});
+
+      let lastError: unknown;
+      let settled = false;
+      const deadline = realSetTimeout(() => {
+        settled = true;
+        reject(lastError ?? new Error(`Timed out in waitFor after ${timeout}ms`));
+      }, timeout);
+
+      void (async () => {
+        while (!settled) {
+          try {
+            const value = await callback();
+            if (settled) return;
+            settled = true;
+            realClearTimeout(deadline);
+            resolve(value);
+            return;
+          } catch (err) {
+            lastError = err;
+          }
+          if (settled) return;
+          await waitOneInterval(interval);
+        }
+        // Nothing here throws today, but an unhandled rejection from this
+        // detached loop would be reported against whatever test runs next.
+      })().catch((err: unknown) => {
+        lastError = err;
+      });
+    })
+);
 
 // ── Type-level helpers ────────────────────────────────────────────────────────
 // `vi.mocked` and `vi.hoisted` are identity functions at runtime in Vitest too.
