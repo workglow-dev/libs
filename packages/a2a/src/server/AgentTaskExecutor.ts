@@ -10,7 +10,7 @@ import type { AgentExecutor, ExecutionEventBus, RequestContext } from "@a2a-js/s
 import { AgentEvent } from "@a2a-js/sdk/server";
 import type { AgentTaskInput } from "@workglow/ai";
 import { AgentTask } from "@workglow/ai";
-import { uuid4 } from "@workglow/util";
+import { getLogger, uuid4 } from "@workglow/util";
 
 import type { IA2AAgentDescriptor } from "../util/AgentDescriptor";
 import { PartBindingError, partsToPorts, textOfParts, textPart } from "../util/partBinding";
@@ -136,10 +136,18 @@ export class AgentTaskExecutor implements AgentExecutor {
       this.publishFinal(eventBus, taskId, contextId, TaskState.TASK_STATE_COMPLETED);
     } catch (error) {
       // A bad bind is the caller's mistake and names the ports it could not
-      // fill; anything else is ours and stays on the server's own log. Both
-      // end the task — a caller left on `working` waits forever.
-      const message =
-        error instanceof PartBindingError ? error.message : "The agent failed to answer.";
+      // fill; anything else is ours and stays on the server's own log, since
+      // a model error can carry a key name or a path a peer must not see.
+      // Both end the task — a caller left on `working` waits forever.
+      const isCallerError = error instanceof PartBindingError;
+      if (!isCallerError) {
+        getLogger().error("a2a agent turn failed", {
+          agent: this.descriptor.id,
+          taskId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      const message = isCallerError ? error.message : "The agent failed to answer.";
       this.publishFinal(eventBus, taskId, contextId, TaskState.TASK_STATE_FAILED, message);
     } finally {
       this.running.delete(taskId);

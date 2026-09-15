@@ -334,6 +334,49 @@ none, so the interface form is not assignable to the `DataPorts` constraint `Tas
 Only SearXNG needs no API key and has no quota, so it is the only one whose integration test
 runs unmocked (`.integration.test.ts`, skipped unless `WEB_SEARCH_SEARXNG_URL` is set).
 
+### `@workglow/a2a`
+
+Agent2Agent, mirroring `@workglow/mcp`'s shape: `./tasks` (browser + node), `./server`
+(node), `./util` (pure). It is an **adapter**, not a protocol implementation: `@a2a-js/sdk`
+owns the wire, and this package plugs `AgentTask` into the SDK's `AgentExecutor` seam,
+derives an `AgentCard` from an `IA2AAgentDescriptor`, and binds A2A `Part[]` to named ports.
+The SDK is proto-derived, so `TaskState` and `Role` are numeric enums (use
+`taskStateToJSON` where a string crosses a port), a `Message` carries `parts`, and every
+proto field is required — build events with the `AgentEvent` factories and fill them all in.
+
+**One endpoint publishes one agent.** `A2ARequestHandler.getAgentCard()` returns a single
+card, so `createA2AServer` takes one descriptor; serving several means several endpoints.
+
+**Peers are opaque to each other.** `isOpaqueToPeer` drops `tool-call` and `snapshot`
+events before they reach a peer — the same events builder's chat cards are built on, which
+is why the filter is per-protocol and not a property of the event. The card never carries
+the system prompt or tool list, and `buildAgentCard` takes `authenticated` from the same
+value that arms the server so the card cannot claim an auth posture the server lacks.
+
+`AgentTaskExecutor` opens every stream with a `task` event (the SDK rejects one opening with
+an update) and reaches a terminal state on every path, a throw included; the real error is
+logged server-side and the peer is told only that the agent failed to answer. It **never
+publishes `INPUT_REQUIRED`** — parking is a later phase and a test pins its absence.
+
+`partsToPorts` binds a `data` part by its own keys and a text part only when the skill's
+schema leaves exactly one required port unset; two is a `PartBindingError` naming them,
+since guessing is how an argument lands silently on the wrong port.
+
+`A2AAgentTask` (`agentUrl`, `prompt`, `contextId` → `text`, `contextId`, `taskState`) takes
+the agent's base URL or its card URL, hands the run's signal to the SDK call, passes
+`INPUT_REQUIRED` through as a state rather than an answer, and throws on `FAILED` /
+`REJECTED`. Its optional `createClient` config exists so a test needs no socket; a task
+carrying one refuses to serialize.
+
+`startA2AHttpServer` serves the card **open** (a peer has to read it to learn which scheme to
+present) through `AgentCard.toJSON` — `JSON.stringify` of the in-memory card spells security
+schemes as `$case` unions the SDK's own client reads back as none — and the JSON-RPC
+endpoint behind the `Host` check, bearer token and body cap it shares with the MCP server
+via `@workglow/util`'s `serverGuards` (`node` entry only: they need `node:crypto`). A
+request without an `A2A-Version` header is refused with the protocol's own error, since the
+SDK reads absence as `0.3` and the card publishes `1.0` only. `InMemoryTaskStore` evicts
+nothing and `TaskStore` has no delete, so a long-running host grows without bound.
+
 ### `providers/*`
 
 Standalone packages with optional peer deps, each exposing `./ai` (main thread) and
@@ -474,6 +517,12 @@ has to write `null` — refused outright on a wildcard bind, where nothing else 
 may run a task. It is built on the SDK's low-level `Server` rather than
 `McpServer` because tasks describe themselves in JSON Schema and `registerTool` takes only
 Zod — going through it would mean converting a schema to Zod and back to publish it.
+
+`workglow a2a serve <id>` is the third: one saved agent — a graph holding a single
+`AgentTask`, in the agents folder — published to A2A peers, with the same token story as
+`mcp serve` (`WORKGLOW_A2A_TOKEN`, `--token`, `--no-auth`) and its own default port. The
+card's `description` is not the system prompt: the card is public. `@workglow/a2a/tasks` is
+imported from `registerCliTasks` so a saved workflow can name `A2AAgentTask`.
 
 **A downstream CLI reuses this, it does not copy it.** `runWorkglowCli()`
 (`src/bootstrap.ts`, exported from `lib.ts`) is the entire body of the `workglow` binary
