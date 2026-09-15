@@ -9,7 +9,8 @@ import type { Command } from "commander";
 import { Command as CommanderCommand } from "commander";
 import { describe, expect, it } from "vitest";
 import { registerMcpCommand } from "./mcp";
-import { DEFAULT_MCP_HOST, DEFAULT_MCP_PORT, MCP_TOKEN_ENV, resolveServeToken } from "./mcpServe";
+import { DEFAULT_MCP_HOST, DEFAULT_MCP_PORT, MCP_TOKEN_ENV } from "./mcpServe";
+import { resolveServeToken } from "./serve";
 
 function serveCommand(): Command {
   const program = new CommanderCommand("workglow");
@@ -58,26 +59,32 @@ describe("mcp serve", () => {
 
 describe("resolveServeToken", () => {
   it("generates a token when nothing pinned one", () => {
-    const token = resolveServeToken({ auth: true }, {});
+    const token = resolveServeToken({ auth: true }, MCP_TOKEN_ENV, {});
     expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(resolveServeToken({ auth: true }, {})).not.toBe(token);
+    expect(resolveServeToken({ auth: true }, MCP_TOKEN_ENV, {})).not.toBe(token);
   });
 
   it("prefers a pinned token, so a client config survives a restart", () => {
-    expect(resolveServeToken({ auth: true, token: "pinned" }, {})).toBe("pinned");
-    expect(resolveServeToken({ auth: true }, { [MCP_TOKEN_ENV]: "from-env" })).toBe("from-env");
+    expect(resolveServeToken({ auth: true, token: "pinned" }, MCP_TOKEN_ENV, {})).toBe("pinned");
+    expect(resolveServeToken({ auth: true }, MCP_TOKEN_ENV, { [MCP_TOKEN_ENV]: "from-env" })).toBe(
+      "from-env"
+    );
     expect(
-      resolveServeToken({ auth: true, token: "pinned" }, { [MCP_TOKEN_ENV]: "from-env" })
+      resolveServeToken({ auth: true, token: "pinned" }, MCP_TOKEN_ENV, {
+        [MCP_TOKEN_ENV]: "from-env",
+      })
     ).toBe("pinned");
   });
 
   it("generates rather than serving unauthenticated on an empty token", () => {
     // An empty flag or variable is a mistake, not a request to drop the gate.
-    expect(resolveServeToken({ auth: true, token: "" }, {})).toBeTruthy();
-    expect(resolveServeToken({ auth: true }, { [MCP_TOKEN_ENV]: "" })).toBeTruthy();
+    expect(resolveServeToken({ auth: true, token: "" }, MCP_TOKEN_ENV, {})).toBeTruthy();
+    expect(resolveServeToken({ auth: true }, MCP_TOKEN_ENV, { [MCP_TOKEN_ENV]: "" })).toBeTruthy();
   });
 
   it("serves without a token only when --no-auth said so", () => {
-    expect(resolveServeToken({ auth: false }, { [MCP_TOKEN_ENV]: "from-env" })).toBeNull();
+    expect(
+      resolveServeToken({ auth: false }, MCP_TOKEN_ENV, { [MCP_TOKEN_ENV]: "from-env" })
+    ).toBeNull();
   });
 });

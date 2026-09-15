@@ -9,11 +9,14 @@ import type { IA2AAgentDescriptor } from "@workglow/a2a/util";
 import type { AgentTaskInput } from "@workglow/ai";
 import { AgentTask } from "@workglow/ai";
 import type { TaskGraphJson } from "@workglow/task-graph";
+import { globalServiceRegistry, HUMAN_CONNECTOR } from "@workglow/util";
 import type { Command } from "commander";
 import { loadConfig } from "../config";
 import { ensureCredentialStoreUnlocked } from "../keyring";
 import { createAgentRepository } from "../storage";
-import { resolveServeToken } from "./mcpServe";
+import { HeadlessHumanConnector } from "../ui/HeadlessHumanConnector";
+import { formatError } from "../util";
+import { resolveServeToken, serveUntilSignal } from "./serve";
 
 /** Nothing standard sits here, and it is one along from the MCP server. */
 export const DEFAULT_A2A_PORT = 8789;
@@ -43,31 +46,42 @@ interface A2AServeOptions {
   /** Commander's `--no-auth` counterpart: true unless the flag was passed. */
   readonly auth: boolean;
   readonly token?: string;
+  /** Commander's `--no-approval` counterpart: true unless the flag was passed. */
+  readonly approval: boolean;
 }
 
 /**
- * A saved graph, as one servable agent — or nothing.
+ * A saved graph, as one servable agent — or the reason it is not one.
  *
  * Only a single `AgentTask` maps: A2A publishes one agent per card, and an
  * agent is a conversation a peer continues. A larger graph has no single
  * conversation, and the rest of the agents folder holds graphs that cannot
- * answer a message at all.
+ * answer a message at all. A node saved without a model is refused here too,
+ * at startup, rather than discovered by the first peer to write.
  */
-export function descriptorFromGraph(
-  id: string,
-  graph: TaskGraphJson
-): IA2AAgentDescriptor | undefined {
+export function descriptorFromGraph(id: string, graph: TaskGraphJson): IA2AAgentDescriptor {
   const tasks = graph.tasks ?? [];
-  if (tasks.length !== 1) return undefined;
-  const node = tasks[0];
-  if (!node || node.type !== AgentTask.type) return undefined;
+  if (tasks.length !== 1) {
+    throw new Error(
+      `Agent "${id}" holds ${tasks.length} tasks; only a single AgentTask can be served.`
+    );
+  }
+  const node = tasks[0]!;
+  if (node.type !== AgentTask.type) {
+    throw new Error(
+      `Agent "${id}" is a ${node.type}, not an AgentTask, so it cannot answer a message.`
+    );
+  }
 
   // The prompt is the one field a peer supplies; everything else saved on the
   // node is the host's, and a graph saved without a tool list holds none.
   const { prompt: _prompt, ...saved } = (node.defaults ?? {}) as Partial<AgentTaskInput>;
+  if (!saved.model) {
+    throw new Error(`Agent "${id}" names no model, so it cannot be served.`);
+  }
   const agentInput: IA2AAgentDescriptor["agentInput"] = {
     ...saved,
-    model: saved.model ?? "",
+    model: saved.model,
     tools: saved.tools ?? [],
   };
   return {
@@ -117,6 +131,10 @@ export function registerA2AServeCommand(a2a: Command): void {
       "--token <token>",
       `Use this bearer token instead of a generated one (or set ${A2A_TOKEN_ENV})`
     )
+    .option(
+      "--no-approval",
+      "Run every tool without asking. The default declines anything reaching past the model, since no person is here to approve it."
+    )
     .action(async (id: string, opts: A2AServeOptions) => {
       const config = await loadConfig();
       const repo = createAgentRepository(config);
@@ -127,10 +145,27 @@ export function registerA2AServeCommand(a2a: Command): void {
         console.error(`Agent "${id}" not found.`);
         process.exit(1);
       }
-      const descriptor = descriptorFromGraph(id, graph.toJSON());
-      if (!descriptor) {
-        console.error(`Agent "${id}" is not a single AgentTask, so it cannot be served.`);
+      let described: IA2AAgentDescriptor;
+      try {
+        described = descriptorFromGraph(id, graph.toJSON());
+      } catch (error) {
+        console.error(formatError(error));
         process.exit(1);
+      }
+      // A served agent has no person to ask. `--no-approval` runs its tools
+      // regardless; the default declines each request in words the model can
+      // act on, instead of leaving the process's own terminal prompt to throw.
+      const descriptor: IA2AAgentDescriptor = opts.approval
+        ? described
+        : { ...described, agentInput: { ...described.agentInput, approval: "never" } };
+      if (opts.approval) {
+        globalServiceRegistry.registerInstance(
+          HUMAN_CONNECTOR,
+          new HeadlessHumanConnector(
+            `The "${id}" agent is served to other programs and nobody is here to approve this. ` +
+              "Start it with --no-approval to run tools unasked."
+          )
+        );
       }
 
       // The agent's model needs its key before the first peer arrives, not
@@ -138,7 +173,7 @@ export function registerA2AServeCommand(a2a: Command): void {
       // is one nobody is there to answer.
       await ensureCredentialStoreUnlocked();
 
-      const token = resolveServeToken(opts, process.env, A2A_TOKEN_ENV);
+      const token = resolveServeToken(opts, A2A_TOKEN_ENV);
       const handle = await startA2AHttpServer({
         port: opts.port,
         host: opts.host,
@@ -164,17 +199,6 @@ export function registerA2AServeCommand(a2a: Command): void {
         );
       }
       console.log("Press Ctrl-C to stop.");
-
-      // The action deliberately never resolves: the CLI tears down once an
-      // action returns, and the server needs the runtime for as long as it is
-      // serving. Ctrl-C unblocks it, and teardown then runs once.
-      await new Promise<void>((resolve) => {
-        const shutdown = (): void => {
-          console.log("shutting down");
-          void handle.close().then(() => resolve());
-        };
-        process.once("SIGINT", shutdown);
-        process.once("SIGTERM", shutdown);
-      });
+      await serveUntilSignal(handle.close);
     });
 }

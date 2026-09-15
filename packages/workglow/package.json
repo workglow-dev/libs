@@ -223,6 +223,7 @@
     "@workglow/browser-control": "workspace:*",
     "@workglow/javascript": "workspace:*",
     "@workglow/mcp": "workspace:*",
+    "@workglow/a2a": "workspace:*",
     "@workglow/tasks": "workspace:*",
     "@workglow/util": "workspace:*",
     "tslog": "^5.2.0"

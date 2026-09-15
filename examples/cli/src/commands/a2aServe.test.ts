@@ -11,7 +11,7 @@ import { Command as CommanderCommand } from "commander";
 import { describe, expect, it } from "vitest";
 import { registerA2ACommand } from "./a2a";
 import { A2A_TOKEN_ENV, DEFAULT_A2A_HOST, DEFAULT_A2A_PORT, descriptorFromGraph } from "./a2aServe";
-import { resolveServeToken } from "./mcpServe";
+import { resolveServeToken } from "./serve";
 
 const agentGraph = {
   tasks: [{ id: "a", type: "AgentTask", defaults: { model: "m", systemPrompt: "sys" } }],
@@ -31,37 +31,46 @@ const twoNodes = {
   dataflows: [],
 } as unknown as TaskGraphJson;
 
+const noModel = {
+  tasks: [{ id: "a", type: "AgentTask", defaults: { systemPrompt: "sys" } }],
+  dataflows: [],
+} as unknown as TaskGraphJson;
+
 describe("descriptorFromGraph", () => {
   it("publishes a saved graph rooted at an AgentTask", () => {
     const found = descriptorFromGraph("researcher", agentGraph);
-    expect(found?.id).toBe("researcher");
-    expect(found?.skills).toHaveLength(1);
+    expect(found.id).toBe("researcher");
+    expect(found.skills).toHaveLength(1);
   });
 
   it("carries the saved defaults as the agent's input", () => {
     const found = descriptorFromGraph("researcher", agentGraph);
-    expect(found?.agentInput.systemPrompt).toBe("sys");
+    expect(found.agentInput.systemPrompt).toBe("sys");
     // A graph saved with no tool list holds none, and the turn loop wants a list.
-    expect(found?.agentInput.tools).toEqual([]);
+    expect(found.agentInput.tools).toEqual([]);
   });
 
-  it("skips a saved graph that is not an agent", () => {
+  it("refuses a saved graph that is not an agent, saying why", () => {
     // The agents folder holds task graphs, and only the ones that can hold a
     // conversation are servable. Publishing the rest offers a peer something
     // that cannot answer a message.
-    expect(descriptorFromGraph("delayer", notAnAgent)).toBeUndefined();
+    expect(() => descriptorFromGraph("delayer", notAnAgent)).toThrow(/DelayTask/);
   });
 
-  it("skips a multi-node graph", () => {
+  it("refuses a multi-node graph", () => {
     // One AgentTask is what this maps onto. A larger graph has no single
     // conversation to continue, and guessing which node is the agent is how a
     // peer ends up talking to a delay.
-    expect(descriptorFromGraph("mixed", twoNodes)).toBeUndefined();
+    expect(() => descriptorFromGraph("mixed", twoNodes)).toThrow(/2 tasks/);
+  });
+
+  it("refuses an agent saved without a model, at startup rather than at the first peer", () => {
+    expect(() => descriptorFromGraph("blank", noModel)).toThrow(/no model/);
   });
 
   it("does not put the system prompt in the published description", () => {
     const found = descriptorFromGraph("researcher", agentGraph);
-    expect(JSON.stringify({ d: found?.description, s: found?.skills })).not.toContain("sys");
+    expect(JSON.stringify({ d: found.description, s: found.skills })).not.toContain("sys");
   });
 });
 
@@ -90,6 +99,7 @@ describe("a2a serve", () => {
         "--path <path>",
         "--no-auth",
         "--token <token>",
+        "--no-approval",
       ])
     );
   });
@@ -105,7 +115,7 @@ describe("a2a serve", () => {
     // Two servers, two tokens: a token issued for one endpoint reaching the
     // other is a credential the operator never meant to share.
     const env = { WORKGLOW_MCP_TOKEN: "mcp", [A2A_TOKEN_ENV]: "a2a" };
-    expect(resolveServeToken({ auth: true }, env, A2A_TOKEN_ENV)).toBe("a2a");
-    expect(resolveServeToken({ auth: false }, env, A2A_TOKEN_ENV)).toBeNull();
+    expect(resolveServeToken({ auth: true }, A2A_TOKEN_ENV, env)).toBe("a2a");
+    expect(resolveServeToken({ auth: false }, A2A_TOKEN_ENV, env)).toBeNull();
   });
 });

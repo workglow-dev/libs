@@ -7,6 +7,7 @@
 import type { ModelRecord } from "@workglow/ai";
 import { getGlobalModelRepository } from "@workglow/ai";
 import type { Command } from "commander";
+import { serveUntilSignal } from "./serve";
 import { join } from "node:path";
 import { loadConfig } from "../config";
 import { ensureRunReporting } from "../run-events/runReporting";
@@ -134,16 +135,8 @@ export function registerWebCommand(
       }
       console.log("Press Ctrl-C to stop.");
 
-      // The action deliberately never resolves: the CLI's teardown runs when an
-      // action returns, and the server needs the database and job queue for as
-      // long as it is serving. Ctrl-C unblocks it, and teardown then runs once.
-      await new Promise<void>((resolve) => {
-        const shutdown = (): void => {
-          console.log("shutting down");
-          void handle.close().then(() => resolve());
-        };
-        process.once("SIGINT", shutdown);
-        process.once("SIGTERM", shutdown);
-      });
+      // The server needs the database and job queue for as long as it is
+      // serving, so the action returns only once a signal has closed it.
+      await serveUntilSignal(handle.close);
     });
 }
