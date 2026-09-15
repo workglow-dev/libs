@@ -176,3 +176,36 @@ describe("resolveActionContext", () => {
     expect(resolveActionContext("nope", ctx())).toEqual({});
   });
 });
+
+describe("reads that must not throw or reach beyond the model", () => {
+  it("answers undefined for a reserved segment rather than throwing", () => {
+    // A write refuses these loudly, because it has a caller to tell. A read
+    // happens while a renderer draws, on a path an agent wrote, so throwing
+    // turns a bad binding into a crashed card.
+    expect(resolveValue({ path: "/__proto__" }, ctx())).toBeUndefined();
+    expect(resolveValue({ path: "/__proto__/polluted" }, ctx())).toBeUndefined();
+    expect(resolveValue({ path: "constructor" }, ctx({ basePath: "/user" }))).toBeUndefined();
+    expect(readPointer(MODEL, "/prototype")).toBeUndefined();
+  });
+
+  it("answers undefined for a relative pointer, rather than guessing a root", () => {
+    expect(readPointer(MODEL, "user/name")).toBeUndefined();
+  });
+
+  it("reads own properties only, so no host built-in reaches a label", () => {
+    expect(readPointer(MODEL, "/toString")).toBeUndefined();
+    expect(readPointer(MODEL, "/hasOwnProperty")).toBeUndefined();
+    expect(readPointer(MODEL, "/user/valueOf")).toBeUndefined();
+  });
+
+  it("refuses to hand back a write target a write would refuse", () => {
+    // Otherwise the refusal only moves: it arrives as a throw out of the host's
+    // write path, mid-keystroke, instead of a field that does not collect.
+    expect(writeTargetOf({ path: "/__proto__" }, ctx())).toBeUndefined();
+    expect(writeTargetOf({ path: "/user/name" }, ctx())).toBe("/user/name");
+  });
+
+  it("expands nothing for a template whose path is unreadable", () => {
+    expect(expandChildren({ path: "/__proto__", componentId: "row" }, ctx())).toEqual([]);
+  });
+});

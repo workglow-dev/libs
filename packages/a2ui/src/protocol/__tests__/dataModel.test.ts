@@ -87,3 +87,32 @@ describe("applyDataModelPatch", () => {
     );
   });
 });
+
+describe("bounds a patch cannot exceed", () => {
+  it("refuses an array index that would report a billion entries", () => {
+    // An index is also a length: anything that then walks the array — a
+    // repeated template most obviously — hangs the renderer over one message.
+    expect(() => applyDataModelPatch({}, "/items/4294967294", "x", true)).toThrow(/beyond/);
+  });
+
+  it("still writes an ordinary index", () => {
+    // Sparse, because the agent wrote index 2 and said nothing about 0 or 1.
+    const next = applyDataModelPatch({}, "/items/2", "x", true);
+    expect(next.items).toHaveLength(3);
+    expect((next.items as unknown[])[2]).toBe("x");
+  });
+
+  it("does not build the path a delete walks", () => {
+    // Creating `{ user: {} }` on the way to removing `/user/name` turns a
+    // binding on `/user` from undefined into an object — a write nobody asked
+    // for, and one a surface can see.
+    expect(applyDataModelPatch({}, "/user/name", undefined, false)).toEqual({});
+    expect(applyDataModelPatch({ a: 1 }, "/x/y/z", undefined, false)).toEqual({ a: 1 });
+  });
+
+  it("still deletes something that is there", () => {
+    expect(
+      applyDataModelPatch({ user: { name: "Ada", age: 36 } }, "/user/name", undefined, false)
+    ).toEqual({ user: { age: 36 } });
+  });
+});

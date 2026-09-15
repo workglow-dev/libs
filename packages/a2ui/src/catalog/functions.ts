@@ -30,6 +30,22 @@ function num(value: unknown): number {
 /** Characters of a value an agent-supplied pattern is run against. */
 const MAX_REGEX_SUBJECT = 4096;
 
+/** Characters of pattern, past which nothing here is worth reasoning about. */
+const MAX_REGEX_PATTERN = 200;
+
+/**
+ * A quantifier applied to a group that is itself quantified — `(a+)+`, `(a*)*`,
+ * `(a|aa)+` — which is the shape that backtracks exponentially.
+ *
+ * A heuristic, and named as one: `^(a?b?)*$` passes it and still blows up. The
+ * repository reached this conclusion already, in `regexSafety.ts`, and its
+ * answer is a wall-clock budget at match time — which needs a `vm` and so
+ * cannot exist in a browser build. What is left here is refusing the shapes
+ * that are recognisable and bounding the subject, which together cover the
+ * accidental cases without claiming to cover a determined one.
+ */
+const NESTED_QUANTIFIER = /\([^()]*[+*][^()]*\)\s*[+*{]|\([^()]*\|[^()]*\)\s*[+*{]/;
+
 function truthy(value: unknown): boolean {
   return Boolean(value);
 }
@@ -92,13 +108,12 @@ export const A2UI_BASIC_FUNCTIONS: A2UIFunctions = Object.freeze({
     const pattern = str(args.pattern);
     if (pattern.length === 0) return true;
     const value = str(args.value);
-    // The pattern is the agent's, so a catastrophic one is reachable. This
-    // package builds for the browser, where the repository's own conclusion
-    // already applies: a wall-clock budget needs a `vm`, so an unbounded match
-    // blocks that tab rather than a process hosting anything (see
-    // `BoundedRegexRunner` in `@workglow/tasks`). What is bounded here is the
-    // subject, which is what makes the ACCIDENTAL polynomial case — the common
-    // one — finish rather than crawl.
+    // The pattern is the agent's, so a catastrophic one is reachable and a
+    // subject cap is not a time bound: `^(a+)+$` is exponential on 4,096
+    // characters just as surely as on a million. So the shape is screened as
+    // well — see NESTED_QUANTIFIER for what that does and does not cover.
+    if (pattern.length > MAX_REGEX_PATTERN) return false;
+    if (NESTED_QUANTIFIER.test(pattern)) return false;
     if (value.length > MAX_REGEX_SUBJECT) return false;
     try {
       return new RegExp(pattern).test(value);
@@ -131,7 +146,14 @@ export const A2UI_BASIC_FUNCTIONS: A2UIFunctions = Object.freeze({
   formatNumber: (args) => {
     const value = num(args.value);
     if (!Number.isFinite(value)) return "";
-    const digits = args.decimals === undefined ? undefined : num(args.decimals);
+    // Intl throws a RangeError outside 0..20, and that error escapes resolution
+    // and takes the render with it. The count is the agent's, so it is clamped
+    // rather than trusted.
+    const requested = args.decimals === undefined ? undefined : num(args.decimals);
+    const digits =
+      requested === undefined || !Number.isFinite(requested)
+        ? undefined
+        : Math.min(20, Math.max(0, Math.trunc(requested)));
     return new Intl.NumberFormat(undefined, {
       minimumFractionDigits: digits,
       maximumFractionDigits: digits,

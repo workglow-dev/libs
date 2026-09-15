@@ -116,3 +116,27 @@ describe("A2UI_BASIC_FUNCTIONS", () => {
     expect(call("not", { value: false })).toBe(true);
   });
 });
+
+describe("input an agent controls, reaching a runtime that throws on it", () => {
+  it("clamps a fraction-digit count Intl would reject", () => {
+    // A RangeError here escapes resolution and takes the render with it.
+    expect(() => call("formatNumber", { value: 1.5, decimals: 101 })).not.toThrow();
+    expect(() => call("formatNumber", { value: 1.5, decimals: -5 })).not.toThrow();
+    expect(call("formatNumber", { value: 1.23456, decimals: 2 })).toBe("1.23");
+  });
+
+  it("refuses a pattern shaped like a catastrophic one", () => {
+    // A subject cap is not a time bound: `^(a+)+$` is exponential on 4,096
+    // characters as surely as on a million. The shape screen is a heuristic and
+    // says so; it covers the recognisable cases, not a determined one.
+    const started = performance.now();
+    expect(call("regex", { pattern: "^(a+)+$", value: `${"a".repeat(4000)}b` })).toBe(false);
+    expect(performance.now() - started).toBeLessThan(100);
+    expect(call("regex", { pattern: "(a|aa)+", value: "aaaa" })).toBe(false);
+  });
+
+  it("still runs an ordinary pattern", () => {
+    expect(call("regex", { pattern: "^[a-z]+$", value: "abc" })).toBe(true);
+    expect(call("regex", { pattern: "^\\d{3}$", value: "123" })).toBe(true);
+  });
+});

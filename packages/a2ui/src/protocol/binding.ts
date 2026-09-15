@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { parsePointer } from "./dataModel";
 import type { A2UIComponent, A2UIFunctionCall } from "./messages";
 import { isChildrenTemplate, isDataBinding, isFunctionCall } from "./messages";
 
@@ -47,27 +46,56 @@ export function resolvePath(path: string, basePath: string): string {
   return basePath.length === 0 ? `/${path}` : `${basePath}/${path}`;
 }
 
+/** Segments that never name data, however a pointer spells them. */
+const RESERVED_SEGMENTS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * A pointer's segments, or `undefined` when it names something unreadable.
+ *
+ * Deliberately not {@link parsePointer}, which throws. A write has a caller to
+ * report the error to; a READ happens while a renderer is drawing, on a path an
+ * agent wrote, so throwing turns a bad binding into a blank card — or a crashed
+ * one. Unreadable and absent answer the same way, because to a surface they are
+ * the same thing.
+ */
+function readSegments(pointer: string): readonly string[] | undefined {
+  if (pointer === "" || pointer === "/") return [];
+  if (!pointer.startsWith("/")) return undefined;
+  const segments = pointer
+    .slice(1)
+    .split("/")
+    .map((segment) => segment.replace(/~1/g, "/").replace(/~0/g, "~"));
+  return segments.some((segment) => RESERVED_SEGMENTS.has(segment)) ? undefined : segments;
+}
+
 /**
  * Reads whatever sits at a pointer, or `undefined`.
  *
  * Undefined rather than throwing: a surface routinely names a path before the
  * message that fills it arrives, and a renderer that threw would blank the
  * whole card on an ordering the protocol explicitly allows.
+ *
+ * Own properties only. Without that check `/toString` answers a function off
+ * `Object.prototype` — a key the data model never held — and a host built-in
+ * lands in a label, or in the context an action reports back to the agent.
  */
 export function readPointer(
   dataModel: Readonly<Record<string, unknown>>,
   pointer: string
 ): unknown {
+  const segments = readSegments(pointer);
+  if (segments === undefined) return undefined;
   let cursor: unknown = dataModel;
-  for (const segment of parsePointer(pointer)) {
+  for (const segment of segments) {
     if (cursor === null || cursor === undefined) return undefined;
     if (Array.isArray(cursor)) {
       const index = Number(segment);
-      if (!Number.isInteger(index)) return undefined;
+      if (!Number.isInteger(index) || index < 0) return undefined;
       cursor = cursor[index];
       continue;
     }
     if (typeof cursor !== "object") return undefined;
+    if (!Object.hasOwn(cursor, segment)) return undefined;
     cursor = (cursor as Record<string, unknown>)[segment];
   }
   return cursor;
@@ -187,7 +215,12 @@ export function expandChildren(
  */
 export function writeTargetOf(value: unknown, context: A2UIResolveContext): string | undefined {
   if (!isDataBinding(value)) return undefined;
-  return resolvePath(value.path, context.basePath);
+  const pointer = resolvePath(value.path, context.basePath);
+  // A control bound to an unwritable pointer has nowhere to go either: handing
+  // one back would move the refusal into the host's write path, where it
+  // arrives as a throw mid-keystroke rather than as a field that does not
+  // collect.
+  return readSegments(pointer) === undefined ? undefined : pointer;
 }
 
 /** An action's context with its bindings resolved, ready to report to the agent. */

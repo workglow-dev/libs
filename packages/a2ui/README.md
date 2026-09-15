@@ -39,8 +39,8 @@ a resolution one.
 ## Drawing a surface
 
 ```typescript
-import { A2UI_CONNECTOR } from "@workglow/a2ui/tasks";
-import { A2UISurfaceTask } from "@workglow/a2ui/tasks";
+import { A2UI_BASIC_CATALOG_ID } from "@workglow/a2ui/catalog";
+import { A2UI_CONNECTOR, A2UISurfaceTask } from "@workglow/a2ui/tasks";
 
 registry.registerInstance(A2UI_CONNECTOR, myRenderer);
 

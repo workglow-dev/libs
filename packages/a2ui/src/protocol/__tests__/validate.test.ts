@@ -189,3 +189,72 @@ describe("validateClientMessage", () => {
     expect(reasonOf(result)).toMatch(/context must be an object/);
   });
 });
+
+describe("refusals that would otherwise escape as a throw", () => {
+  it("refuses a non-object root value, which the fold cannot apply", () => {
+    // Left to the fold this is an A2UIPointerError thrown from inside whoever
+    // folds the batch, rather than the refusal every other malformed message
+    // gets.
+    const result = validateServerMessages([
+      create,
+      { version: "v0.9", updateDataModel: { surfaceId: "s1", path: "/", value: [] } },
+    ]);
+    expect(reasonOf(result)).toMatch(/root must carry an object/);
+  });
+
+  it("accepts an object root, and a non-object below it", () => {
+    const result = validateServerMessages([
+      create,
+      { version: "v0.9", updateDataModel: { surfaceId: "s1", path: "/", value: { rows: [] } } },
+      { version: "v0.9", updateDataModel: { surfaceId: "s1", path: "/rows", value: [1, 2] } },
+    ]);
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("the component budget counts what is live", () => {
+  it("lets a surface update the same components indefinitely", () => {
+    // The fold replaces a definition by id, so counting every definition sent
+    // rejects the protocol's own idiom: a surface that re-sends a handful of
+    // components as a person interacts with it hits a "too many" refusal while
+    // holding a handful.
+    const five = Array.from({ length: 5 }, (_, i) => ({
+      id: `c${i}`,
+      component: "Text",
+      text: "x",
+    }));
+    const messages: unknown[] = [create];
+    for (let round = 0; round < 60; round++) {
+      messages.push({ version: "v0.9", updateComponents: { surfaceId: "s1", components: five } });
+    }
+    expect(validateServerMessages(messages).ok).toBe(true);
+  });
+
+  it("still refuses a surface that really does hold too many", () => {
+    const many = (prefix: string) =>
+      Array.from({ length: DEFAULT_A2UI_VALIDATION_LIMITS.maxComponents }, (_, i) => ({
+        id: `${prefix}${i}`,
+        component: "Text",
+        text: "x",
+      }));
+    const result = validateServerMessages([
+      create,
+      { version: "v0.9", updateComponents: { surfaceId: "s1", components: many("a") } },
+      { version: "v0.9", updateComponents: { surfaceId: "s1", components: many("b") } },
+    ]);
+    expect(reasonOf(result)).toMatch(/more than/);
+  });
+});
+
+describe("validateClientMessage is a closed shape", () => {
+  it("refuses an unknown top-level key, as the server side does", () => {
+    // A caller that cannot rely on the shape re-checks every field it reads,
+    // and the field nobody re-checks is the one an extra payload rides in on.
+    const result = validateClientMessage({
+      version: "v0.9",
+      action: { name: "a", surfaceId: "s", sourceComponentId: "c", timestamp: "t", context: {} },
+      payload: { anything: true },
+    });
+    expect(reasonOf(result)).toMatch(/unknown keys/);
+  });
+});

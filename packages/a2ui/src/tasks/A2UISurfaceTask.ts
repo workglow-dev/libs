@@ -9,6 +9,7 @@ import {
   CreateWorkflow,
   Task,
   TaskAbortedError,
+  TaskConfigSchema,
   TaskConfigurationError,
   Workflow,
 } from "@workglow/task-graph";
@@ -93,6 +94,28 @@ export type A2UISurfaceTaskOutput = {
   surfaceId: string;
 };
 
+/**
+ * The base task config plus this task's own field.
+ *
+ * Required, not decorative: `Task` validates config against this schema with
+ * `additionalProperties: false`, so without declaring `catalog` here the
+ * documented per-run catalog throws during construction and can never be used.
+ */
+const configSchema = {
+  type: "object",
+  properties: {
+    ...TaskConfigSchema["properties"],
+    catalog: {
+      type: "object",
+      additionalProperties: true,
+      title: "Catalog",
+      description: "Component allowlist this run enforces; defaults to the A2UI basic catalog",
+      "x-ui-hidden": true,
+    },
+  },
+  additionalProperties: false,
+} as const satisfies DataPortSchema;
+
 export type A2UISurfaceTaskConfig = TaskConfig & {
   /** The catalog this run enforces; defaults to the A2UI basic catalog. */
   catalog?: A2UICatalogSpec;
@@ -123,6 +146,10 @@ export class A2UISurfaceTask extends Task<
     "Draws an agent-authored A2UI surface for a person and reports the action they took";
   public static override cachePolicy: CachePolicy = { kind: "none" };
 
+  public static override configSchema(): DataPortSchema {
+    return configSchema;
+  }
+
   static override inputSchema(): DataPortSchema {
     return inputSchema;
   }
@@ -146,7 +173,17 @@ export class A2UISurfaceTask extends Task<
       );
     }
 
-    const created = parsed.value.find((message) => "createSurface" in message);
+    // One surface per batch. The protocol allows several and this task's output
+    // models one — `surfaceId`, one `eventName`, one `context` — so a two-surface
+    // batch would report an action without saying which surface produced it, and
+    // hand the connector one `catalogId` for both.
+    const creations = parsed.value.filter((message) => "createSurface" in message);
+    if (creations.length > 1) {
+      throw new TaskConfigurationError(
+        `A2UI batch refused: it creates ${creations.length} surfaces, and this task presents one`
+      );
+    }
+    const created = creations[0];
     // `validateServerMessages` refuses any message naming a surface it did not
     // see created, so a batch with no `createSurface` has no messages at all —
     // which it also refuses. Stated rather than assumed, since this is the one

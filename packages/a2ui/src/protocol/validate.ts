@@ -213,6 +213,14 @@ export function validateServerMessage(
       if ("value" in body) {
         const reason = checkValue(body.value, "updateDataModel/value", 1, limits);
         if (reason) return fail(reason);
+        // A data model's root is an object. Left to the fold this is an
+        // `A2UIPointerError` thrown from inside whoever folds the batch, rather
+        // than the refusal every other malformed message gets.
+        const atRoot = body.path === undefined || body.path === "/" || body.path === "";
+        const value = body.value;
+        if (atRoot && (typeof value !== "object" || value === null || Array.isArray(value))) {
+          return fail("updateDataModel at the root must carry an object");
+        }
       }
       break;
     }
@@ -246,7 +254,12 @@ export function validateServerMessages(
 
   const messages: A2UIServerMessage[] = [];
   const open = new Set<string>();
-  const componentCount = new Map<string, number>();
+  // Live ids, not definitions sent. The fold treats a later definition of an id
+  // as a replacement, so counting every definition rejects the protocol's own
+  // idiom — a surface that updates the same handful of components as a person
+  // interacts with it hits a "too many components" refusal while holding a
+  // handful.
+  const liveIds = new Map<string, Set<string>>();
   let created = 0;
   for (let i = 0; i < list.length; i++) {
     const result = validateServerMessage(list[i], limits);
@@ -259,7 +272,7 @@ export function validateServerMessages(
         return fail(`a batch creates more than ${limits.maxSurfaces} surfaces`);
       }
       open.add(id);
-      componentCount.set(id, 0);
+      liveIds.set(id, new Set());
     } else {
       const id =
         "updateComponents" in message
@@ -269,11 +282,12 @@ export function validateServerMessages(
             : message.deleteSurface.surfaceId;
       if (!open.has(id)) return fail(`message ${i}: surface "${id}" was never created`);
       if ("updateComponents" in message) {
-        const total = (componentCount.get(id) ?? 0) + message.updateComponents.components.length;
-        if (total > limits.maxComponents) {
+        const live = liveIds.get(id) ?? new Set<string>();
+        for (const component of message.updateComponents.components) live.add(component.id);
+        if (live.size > limits.maxComponents) {
           return fail(`surface "${id}" holds more than ${limits.maxComponents} components`);
         }
-        componentCount.set(id, total);
+        liveIds.set(id, live);
       }
       if ("deleteSurface" in message) open.delete(id);
     }
@@ -294,6 +308,13 @@ export function validateClientMessage(
   const hasAction = "action" in value;
   const hasError = "error" in value;
   if (hasAction === hasError) return fail("a message must carry exactly one of action, error");
+  // Closed for the same reason the server side is: a caller that cannot rely on
+  // the shape has to re-check every field it reads, and the one field nobody
+  // re-checks is the one an extra payload rides in on.
+  const extra = Object.keys(value).filter(
+    (key) => key !== "version" && key !== "action" && key !== "error"
+  );
+  if (extra.length > 0) return fail(`a message carries unknown keys: ${extra.join(", ")}`);
 
   if (hasAction) {
     const action = value.action;

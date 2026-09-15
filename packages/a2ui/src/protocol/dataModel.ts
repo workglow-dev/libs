@@ -50,8 +50,21 @@ export function parsePointer(pointer: string): readonly string[] {
     });
 }
 
+/**
+ * Highest array index a patch may write.
+ *
+ * An index is also a length: writing `/items/4294967294` leaves an array
+ * reporting 4,294,967,295 entries, and anything that then walks it — a repeated
+ * template, most obviously — hangs the renderer over one message. The batch
+ * limits bound how much an agent may SEND, and say nothing about what one small
+ * message can make.
+ */
+const MAX_ARRAY_INDEX = 10_000;
+
+const NUMERIC_SEGMENT = /^(?:0|[1-9][0-9]*)$/;
+
 function isIndex(segment: string): boolean {
-  return /^(?:0|[1-9][0-9]*)$/.test(segment);
+  return NUMERIC_SEGMENT.test(segment);
 }
 
 function emptyContainerFor(segment: string): Record<string, unknown> | unknown[] {
@@ -122,6 +135,29 @@ export function applyDataModelPatch(
     }
     (container as Record<string, unknown>)[segment] = entry;
   };
+
+  // Refused rather than quietly written as an object key: an agent that wrote
+  // `/items/4294967294` meant an array, and answering with a shape its own
+  // bindings cannot read is a failure it has no way to see.
+  for (const segment of segments) {
+    if (NUMERIC_SEGMENT.test(segment) && Number(segment) > MAX_ARRAY_INDEX) {
+      throw new A2UIPointerError(path ?? "/", `index ${segment} is beyond ${MAX_ARRAY_INDEX}`);
+    }
+  }
+
+  // A delete only removes, so it must not build the path it walks: creating
+  // `{ user: {} }` on the way to removing `/user/name` turns a binding on
+  // `/user` from undefined into an object, which is a write nobody asked for.
+  if (!hasValue) {
+    let probe: unknown = model;
+    for (const segment of segments.slice(0, -1)) {
+      if (typeof probe !== "object" || probe === null) return { ...model };
+      probe = Array.isArray(probe)
+        ? probe[Number(segment)]
+        : (probe as Record<string, unknown>)[segment];
+    }
+    if (typeof probe !== "object" || probe === null) return { ...model };
+  }
 
   const next: Record<string, unknown> = { ...model };
   let cursor: Container = next;

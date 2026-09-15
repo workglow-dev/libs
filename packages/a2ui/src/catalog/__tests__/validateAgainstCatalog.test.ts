@@ -243,3 +243,141 @@ describe("the fold and the catalog check together", () => {
     expect(batchCatalogIssues(messages, { catalog })).toEqual([]);
   });
 });
+
+describe("a URL the agent bound rather than wrote", () => {
+  const withModel = (model: Record<string, unknown>, ...components: Record<string, unknown>[]) =>
+    batchCatalogIssues(
+      [
+        { version: "v0.9", createSurface: { surfaceId: "s1", catalogId: A2UI_BASIC_CATALOG_ID } },
+        { version: "v0.9", updateDataModel: { surfaceId: "s1", path: "/", value: model } },
+        {
+          version: "v0.9",
+          updateComponents: {
+            surfaceId: "s1",
+            components: components as { id: string; component: string }[],
+          },
+        },
+      ],
+      { catalog }
+    ).map((issue) => issue.code);
+
+  it("refuses a javascript: URL reached through an absolute binding", () => {
+    // Nothing scheme-checks the data model, so exempting bindings carried the
+    // exact value this check exists to stop straight to the renderer.
+    expect(
+      withModel(
+        { src: "javascript:alert(1)" },
+        { id: "root", component: "Image", url: { path: "/src" } }
+      )
+    ).toContain("BAD_URL");
+  });
+
+  it("refuses one reached through a relative binding inside a repeat", () => {
+    // The base path is decided while drawing, so there is no single value to
+    // resolve — the model is swept instead.
+    expect(
+      withModel(
+        { rows: [{ u: "javascript:alert(1)" }] },
+        { id: "root", component: "Column", children: { path: "/rows", componentId: "r" } },
+        { id: "r", component: "Image", url: { path: "u" } }
+      )
+    ).toContain("BAD_URL");
+  });
+
+  it("leaves a surface that binds no URL alone", () => {
+    expect(
+      withModel(
+        { note: "javascript:not-a-url-here" },
+        { id: "root", component: "Text", text: { path: "/note" } }
+      )
+    ).toEqual([]);
+  });
+
+  it("accepts an ordinary bound image URL", () => {
+    expect(
+      withModel(
+        { src: "https://example.test/a.png" },
+        { id: "root", component: "Image", url: { path: "/src" } }
+      )
+    ).toEqual([]);
+  });
+});
+
+describe("a component graph that closes on itself", () => {
+  it("refuses a cycle, which no value-depth limit can see", () => {
+    // References are flat ids, so the cycle is in the graph rather than in any
+    // one value. A renderer resolving children recursively follows it until the
+    // stack runs out — a frozen tab rather than an error anyone can read.
+    expect(
+      codes(
+        batch(
+          { id: "root", component: "Column", children: ["loop"] },
+          { id: "loop", component: "Column", children: ["root"] }
+        )
+      )
+    ).toContain("CYCLIC_CHILD");
+  });
+
+  it("refuses a component that is its own child", () => {
+    expect(codes(batch({ id: "root", component: "Card", child: "root" }))).toContain(
+      "CYCLIC_CHILD"
+    );
+  });
+
+  it("allows one component reused down two branches", () => {
+    // Reuse is not a cycle: only a repeat along ONE path is.
+    expect(
+      codes(
+        batch(
+          { id: "root", component: "Column", children: ["a", "b"] },
+          { id: "a", component: "Card", child: "shared" },
+          { id: "b", component: "Card", child: "shared" },
+          { id: "shared", component: "Text", text: "hi" }
+        )
+      )
+    ).toEqual([]);
+  });
+});
+
+describe("the state a connector actually applies", () => {
+  it("refuses a component that is unsafe before a later message replaces it", () => {
+    // A connector applies messages in order, so a check reading only the final
+    // fold would pass a batch whose second message is the only safe thing in it.
+    const messages: A2UIServerMessage[] = [
+      { version: "v0.9", createSurface: { surfaceId: "s1", catalogId: A2UI_BASIC_CATALOG_ID } },
+      {
+        version: "v0.9",
+        updateComponents: {
+          surfaceId: "s1",
+          components: [{ id: "root", component: "RawHtml", html: "<script>x</script>" }],
+        },
+      },
+      {
+        version: "v0.9",
+        updateComponents: {
+          surfaceId: "s1",
+          components: [{ id: "root", component: "Text", text: "innocent" }],
+        },
+      },
+    ];
+    expect(batchCatalogIssues(messages, { catalog }).map((issue) => issue.code)).toContain(
+      "UNKNOWN_COMPONENT"
+    );
+  });
+
+  it("reports a fault once, however many messages redefine it", () => {
+    const messages: A2UIServerMessage[] = [
+      { version: "v0.9", createSurface: { surfaceId: "s1", catalogId: A2UI_BASIC_CATALOG_ID } },
+      ...[1, 2, 3].map((n) => ({
+        version: "v0.9" as const,
+        updateComponents: {
+          surfaceId: "s1",
+          components: [{ id: "root", component: "Text", text: `v${n}`, bogus: n }],
+        },
+      })),
+    ];
+    expect(batchCatalogIssues(messages, { catalog }).map((issue) => issue.code)).toEqual([
+      "UNKNOWN_PROPERTY",
+    ]);
+  });
+});

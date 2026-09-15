@@ -8,7 +8,7 @@ import { TaskRegistry } from "@workglow/task-graph";
 import type { IExecuteContext } from "@workglow/task-graph";
 import { Container, ServiceRegistry } from "@workglow/util";
 import { describe, expect, it } from "vitest";
-import { A2UI_BASIC_CATALOG_ID } from "../../catalog/basicCatalog";
+import { A2UI_BASIC_CATALOG, A2UI_BASIC_CATALOG_ID } from "../../catalog/basicCatalog";
 import type { A2UIServerMessage } from "../../protocol/messages";
 import type { A2UIPresentRequest, A2UIPresentResult, IA2UIConnector } from "../A2UIConnector";
 import { A2UI_CONNECTOR } from "../A2UIConnector";
@@ -137,5 +137,44 @@ describe("A2UISurfaceTask", () => {
 
   it("refuses rather than degrading the surface when no host can draw one", async () => {
     await expect(run(undefined, { messages: ok })).rejects.toThrow(/A2UI_CONNECTOR/);
+  });
+});
+
+describe("configuration and batch shape", () => {
+  it("accepts the catalog it documents as configurable", async () => {
+    // `Task` validates config with `additionalProperties: false`, so without a
+    // config schema naming it this threw during construction and the documented
+    // per-run catalog could never be used.
+    const narrowed = {
+      ...A2UI_BASIC_CATALOG,
+      components: A2UI_BASIC_CATALOG.components.filter((c) => c.name === "Text"),
+    };
+    const task = new A2UISurfaceTask({ catalog: narrowed });
+    const connector = new RecordingConnector("presented");
+    await expect(
+      task.execute({ messages: ok, expectsAction: false }, mkContext(connector))
+    ).rejects.toThrow(/Column|Button/);
+  });
+
+  it("refuses a batch creating more than one surface", async () => {
+    // The output models one surface, so a two-surface batch would report an
+    // action without saying which surface produced it.
+    const connector = new RecordingConnector("presented");
+    await expect(
+      run(connector, {
+        messages: [
+          ...ok,
+          { version: "v0.9", createSurface: { surfaceId: "s2", catalogId: A2UI_BASIC_CATALOG_ID } },
+          {
+            version: "v0.9",
+            updateComponents: {
+              surfaceId: "s2",
+              components: [{ id: "root", component: "Text", text: "second" }],
+            },
+          },
+        ],
+      })
+    ).rejects.toThrow(/creates 2 surfaces/);
+    expect(connector.seen).toHaveLength(0);
   });
 });

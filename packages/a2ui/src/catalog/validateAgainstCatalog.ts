@@ -6,6 +6,7 @@
 
 import type { A2UIComponent, A2UIServerMessage } from "../protocol/messages";
 import { isChildrenTemplate, isFunctionCall } from "../protocol/messages";
+import { resolveValue } from "../protocol/binding";
 import type { A2UISurfaceState } from "../protocol/surfaces";
 import { A2UI_ROOT_COMPONENT_ID, foldSurfaces } from "../protocol/surfaces";
 import type { A2UICatalogSpec, A2UIComponentSpec, A2UIPropertySpec } from "./CatalogSpec";
@@ -37,7 +38,8 @@ export type A2UICatalogIssue = {
     | "BAD_URL"
     | "UNKNOWN_FUNCTION"
     | "MISSING_ROOT"
-    | "DANGLING_CHILD";
+    | "DANGLING_CHILD"
+    | "CYCLIC_CHILD";
   readonly message: string;
 };
 
@@ -92,12 +94,14 @@ export function referencedComponentIds(
 
 /**
  * Whether a URL property is one a renderer may fetch.
- *
- * A binding is let through: its value comes out of the data model, which the
- * same batch wrote and the same checks covered, and refusing it here would ban
- * the one idiom the protocol recommends for images in a repeated list.
  */
 function urlIssue(value: unknown, schemes: readonly string[]): string | undefined {
+  // Anything that is not a string after resolution is not a URL a renderer can
+  // fetch, so there is nothing to check. A BINDING is resolved before it gets
+  // here — see `checkComponent` — because letting one through unexamined was
+  // exactly the hole this check exists to close: the data model is written by
+  // the same agent and nothing else scheme-checks it, so `{ "path": "/src" }`
+  // carried a `javascript:` URL straight to the renderer.
   if (typeof value !== "string") return undefined;
   let parsed: URL;
   try {
@@ -143,7 +147,8 @@ function checkComponent(
   surfaceId: string,
   spec: A2UIComponentSpec,
   schemes: readonly string[],
-  functions: readonly string[]
+  functions: readonly string[],
+  dataModel: Readonly<Record<string, unknown>>
 ): readonly A2UICatalogIssue[] {
   const issues: A2UICatalogIssue[] = [];
   const at = { surfaceId, componentId: component.id };
@@ -192,7 +197,11 @@ function checkComponent(
       });
     }
     if (property.url) {
-      const reason = urlIssue(value, schemes);
+      // An absolute binding resolves here; a relative one inside a repeated
+      // template reads a base path this check does not know, which is why
+      // `dataModelUrlIssues` sweeps the model as well.
+      const resolved = resolveValue(value, { dataModel, basePath: "" });
+      const reason = urlIssue(resolved, schemes) ?? urlIssue(value, schemes);
       if (reason) {
         issues.push({
           ...at,
@@ -214,6 +223,104 @@ function checkComponent(
  * refuses the ones it does not. A renderer that silently skips an unknown
  * component makes an over-reaching agent look like a quiet one.
  */
+/** Every string anywhere in a value, however deeply nested. */
+function stringsIn(value: unknown, into: string[]): void {
+  if (typeof value === "string") {
+    into.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) stringsIn(entry, into);
+    return;
+  }
+  if (typeof value === "object" && value !== null) {
+    for (const entry of Object.values(value as Record<string, unknown>)) stringsIn(entry, into);
+  }
+}
+
+/**
+ * Refuses a fetchable scheme anywhere in the data model of a surface that binds
+ * a URL property.
+ *
+ * Blunt on purpose. A relative binding inside a repeated template reads a base
+ * path decided while drawing, so there is no single value to resolve and check
+ * — but every candidate it could read is somewhere in this model. Sweeping it
+ * costs one walk and closes the case that per-property resolution cannot.
+ *
+ * It only runs for a surface that actually binds a URL somewhere, so a surface
+ * that merely stores a string an agent never points a renderer at is untouched.
+ */
+function dataModelUrlIssues(
+  surface: A2UISurfaceState,
+  catalog: A2UICatalogSpec,
+  schemes: readonly string[]
+): readonly A2UICatalogIssue[] {
+  const bindsAUrl = [...surface.components.values()].some((component) => {
+    const spec = componentSpec(catalog, component.component);
+    return spec?.properties.some(
+      (property) => property.url && typeof component[property.name] === "object"
+    );
+  });
+  if (!bindsAUrl) return [];
+
+  const strings: string[] = [];
+  stringsIn(surface.dataModel, strings);
+  const issues: A2UICatalogIssue[] = [];
+  for (const candidate of strings) {
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(candidate)) continue;
+    const reason = urlIssue(candidate, schemes);
+    if (!reason) continue;
+    issues.push({
+      surfaceId: surface.surfaceId,
+      componentId: undefined,
+      code: "BAD_URL",
+      message: `surface "${surface.surfaceId}" binds a URL and its data model holds ${reason}`,
+    });
+  }
+  return issues;
+}
+
+/**
+ * A child reference that leads back to a component already being drawn.
+ *
+ * Nothing in the wire format forbids it — references are flat ids — and the
+ * value-depth limit does not see it, because the cycle is in the graph rather
+ * than in any one value. A renderer resolving children recursively follows it
+ * until the stack runs out, which on a page is a frozen tab rather than an
+ * error anyone can read.
+ */
+function cycleIssues(
+  surface: A2UISurfaceState,
+  catalog: A2UICatalogSpec
+): readonly A2UICatalogIssue[] {
+  const issues: A2UICatalogIssue[] = [];
+  const done = new Set<string>();
+
+  const walk = (id: string, ancestors: readonly string[]): void => {
+    if (ancestors.includes(id)) {
+      issues.push({
+        surfaceId: surface.surfaceId,
+        componentId: id,
+        code: "CYCLIC_CHILD",
+        message: `"${id}" is its own descendant, through ${[...ancestors.slice(ancestors.indexOf(id)), id].join(" → ")}`,
+      });
+      return;
+    }
+    // Revisiting a component by two different paths is ordinary reuse; only a
+    // repeat along ONE path is a cycle, which is why `ancestors` is a path and
+    // `done` merely stops the walk being exponential over a shared subtree.
+    if (done.has(id)) return;
+    done.add(id);
+    const component = surface.components.get(id);
+    if (!component) return;
+    const next = [...ancestors, id];
+    for (const child of referencedComponentIds(component, catalog)) walk(child, next);
+  };
+
+  walk(A2UI_ROOT_COMPONENT_ID, []);
+  return issues;
+}
+
 export function surfaceCatalogIssues(
   surface: A2UISurfaceState,
   options: A2UICatalogCheckOptions
@@ -242,6 +349,10 @@ export function surfaceCatalogIssues(
     });
   }
 
+  issues.push(...dataModelUrlIssues(surface, catalog, schemes));
+
+  issues.push(...cycleIssues(surface, catalog));
+
   for (const component of surface.components.values()) {
     const spec = componentSpec(catalog, component.component);
     if (!spec) {
@@ -253,7 +364,16 @@ export function surfaceCatalogIssues(
       });
       continue;
     }
-    issues.push(...checkComponent(component, surface.surfaceId, spec, schemes, catalog.functions));
+    issues.push(
+      ...checkComponent(
+        component,
+        surface.surfaceId,
+        spec,
+        schemes,
+        catalog.functions,
+        surface.dataModel
+      )
+    );
     for (const id of referencedComponentIds(component, catalog)) {
       if (surface.components.has(id)) continue;
       issues.push({
@@ -268,20 +388,74 @@ export function surfaceCatalogIssues(
 }
 
 /**
- * Folds a whole batch and checks every surface it leaves behind.
+ * Folds a whole batch and checks it, message by message and as a whole.
  *
- * Batch-wide rather than per surface because the protocol's incremental idiom
- * defines a container before the children it names, and a delete may retire a
- * surface an earlier message created — so the only state worth checking is the
- * one the batch ends in.
+ * Both passes are needed and neither subsumes the other.
+ *
+ * Per message, because a connector applies messages in order: a batch can name
+ * an unknown component and then replace it with a valid one, and a check that
+ * only read the final fold would pass a batch whose second message is the only
+ * safe thing in it.
+ *
+ * On the final fold, because the protocol's incremental idiom defines a
+ * container before the children it names and patches a data model at a path
+ * nothing has written yet — so root, dangling references, cycles and bound URLs
+ * are only answerable once the batch has finished arriving.
  */
 export function batchCatalogIssues(
   messages: Iterable<A2UIServerMessage>,
   options: A2UICatalogCheckOptions
 ): readonly A2UICatalogIssue[] {
+  const { catalog } = options;
+  const schemes = options.urlSchemes ?? DEFAULT_A2UI_URL_SCHEMES;
   const issues: A2UICatalogIssue[] = [];
-  for (const surface of foldSurfaces(messages).values()) {
-    issues.push(...surfaceCatalogIssues(surface, options));
+  const seen = new Set<string>();
+
+  let state: ReadonlyMap<string, A2UISurfaceState> = new Map();
+  for (const message of messages) {
+    state = foldSurfaces([message], state.values());
+    if (!("updateComponents" in message)) continue;
+    const surface = state.get(message.updateComponents.surfaceId);
+    if (!surface) continue;
+    for (const component of message.updateComponents.components) {
+      const spec = componentSpec(catalog, component.component);
+      if (!spec) {
+        // Deduplicated by id and kind: a component redefined across several
+        // messages would otherwise report the same fault once per definition.
+        const key = `UNKNOWN_COMPONENT:${component.id}:${component.component}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        issues.push({
+          surfaceId: surface.surfaceId,
+          componentId: component.id,
+          code: "UNKNOWN_COMPONENT",
+          message: `"${component.id}" is a ${component.component}, which this catalog has no component for`,
+        });
+        continue;
+      }
+      for (const issue of checkComponent(
+        component,
+        surface.surfaceId,
+        spec,
+        schemes,
+        catalog.functions,
+        surface.dataModel
+      )) {
+        const key = `${issue.code}:${issue.componentId}:${issue.message}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        issues.push(issue);
+      }
+    }
+  }
+
+  for (const surface of state.values()) {
+    for (const issue of surfaceCatalogIssues(surface, options)) {
+      const key = `${issue.code}:${issue.componentId}:${issue.message}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      issues.push(issue);
+    }
   }
   return issues;
 }
