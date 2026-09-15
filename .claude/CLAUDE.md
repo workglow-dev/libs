@@ -592,14 +592,20 @@ stays — measured at +1 per edit, ~19KB each, on top of the 186MB / ~9900 entri
 177-file shard leaves. `npx vitest --clearCache` is the reset, and `bun run clean` takes it
 too since it lives under `node_modules`.
 
-In CI it is **restored on every run and saved only on a push to main**, keyed on `bun.lock`.
-A per-run key would hold the hit rate higher, but it also uploads ~61MB compressed per shard
-per run into a store that is capped repo-wide and evicted LRU — and the rag/provider jobs
-keep multi-GB HuggingFace model caches in that same store. The lockfile in the key is not
-about correctness: vitest hashes the lockfile itself and clears the whole cache when it
-moves, so an entry keyed without it would be downloaded and then immediately deleted. Between
-those changes the entry goes stale only by the files that changed, and those are invalidated
-individually, so a stale entry costs a miss rather than correctness.
+**CI does not carry it between runs, deliberately.** Each job is a fresh container, and
+within one run there is nothing for this cache to save: vitest transforms in the main process
+and serves workers from memory, so a given module is transformed at most once per project
+per run either way — cold-with-cache measured 111s against 110s with the option off. So the
+CI value would come entirely from an `actions/cache` entry, and at this repo's lockfile churn
+that does not pay. `bun.lock` moved in 29 of the last 80 commits, which is a 7-day span, and
+each move wipes the cache — so a third of runs are cold whatever is cached, the expected
+saving is ~22s on the critical path, and keeping one 61MB entry per shard per lockfile
+generation would be some 9GB in a 7-day window against a 10GB repo-wide cap, evicted LRU.
+The rag and provider jobs keep their HuggingFace and GGUF model caches in that same store,
+and a model re-download costs far more than 22s. If the churn ever drops, the entry to add is
+an exact-key restore on `hashFiles('bun.lock')` with **no** `restore-keys` prefix: a prefix
+fallback matches an entry from a different lockfile, which vitest then clears on startup, so
+it is a wasted download rather than a partial hit.
 
 **Test credentials are decrypted once per RUN, not once per test file.** Each credential in
 `.secrets` carries its own random salt, so opening the store derives a 600k-iteration PBKDF2
