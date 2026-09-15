@@ -69,6 +69,15 @@ describe("A2UI_BASIC_FUNCTIONS", () => {
     expect(String(call("formatDate", { value: "2026-09-15T00:00:00.000Z" }))).not.toBe("");
   });
 
+  it("never renders an object as [object Object]", () => {
+    // A binding lands on a container when the agent points a label at one, and
+    // the stringification artefact says nothing to anybody.
+    const rendered = String(call("formatString", { template: "{v}", values: { v: { a: 1 } } }));
+    expect(rendered).not.toContain("[object Object]");
+    expect(rendered).toBe('{"a":1}');
+    expect(call("pluralize", { count: 2, one: {}, other: [1, 2] })).toBe("[1,2]");
+  });
+
   it("pluralize picks by count", () => {
     expect(call("pluralize", { count: 1, one: "item", other: "items" })).toBe("item");
     expect(call("pluralize", { count: 2, one: "item", other: "items" })).toBe("items");

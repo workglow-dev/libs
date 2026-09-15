@@ -6,9 +6,19 @@
 
 import type { A2UIFunctions } from "../protocol/binding";
 
+/**
+ * A value as text a person reads.
+ *
+ * An object never reaches a label as `[object Object]`. These functions format
+ * data an agent bound into a surface, so an object arriving where text was
+ * expected is the agent's mistake — and showing it the data is more use than
+ * showing everyone a stringification artefact.
+ */
 function str(value: unknown): string {
   if (value === null || value === undefined) return "";
-  return typeof value === "string" ? value : String(value);
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value) ?? "";
 }
 
 function num(value: unknown): number {
