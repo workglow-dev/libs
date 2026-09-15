@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import "@workglow/a2a/tasks";
 import { registerAiTasks } from "@workglow/ai";
 import { registerBaseTasks, registerBuiltInTransforms } from "@workglow/task-graph";
 import { registerCommonTasks } from "@workglow/tasks";
@@ -18,6 +19,9 @@ import { registerCommonTasks } from "@workglow/tasks";
  * saved workflow naming `FileLoaderTask` has to keep loading. An embedder that
  * runs graphs it did not author registers a narrower set instead of calling
  * this.
+ *
+ * `@workglow/a2a/tasks` registers on import, which is why it is imported here
+ * rather than called: a remote A2A agent is a node a saved workflow can name.
  *
  * Its own module rather than a few lines inside the boot sequence so the set is
  * assertable without standing up a program, a config directory and a model

@@ -1,0 +1,88 @@
+{
+  "name": "@workglow/a2a",
+  "type": "module",
+  "version": "0.6.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/workglow-dev/libs.git",
+    "directory": "packages/a2a"
+  },
+  "bugs": {
+    "url": "https://github.com/workglow-dev/libs/issues"
+  },
+  "description": "Agent2Agent protocol tasks and plumbing for Workglow.",
+  "homepage": "https://workglow.dev",
+  "scripts": {
+    "watch": "concurrently -c 'auto' 'bun:watch-*'",
+    "watch-js": "concurrently -c 'auto' -n 'tasks-br,tasks-n,server,util' 'bun run watch-tasks-browser' 'bun run watch-tasks-node' 'bun run watch-server' 'bun run watch-util'",
+    "watch-tasks-browser": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --outdir ./dist/tasks ./src/tasks/browser.ts",
+    "watch-tasks-node": "bun build --watch --no-clear-screen --target=node --sourcemap=external --packages=external --outdir ./dist/tasks ./src/tasks/node.ts",
+    "watch-server": "bun build --watch --no-clear-screen --target=node --sourcemap=external --packages=external --outdir ./dist/server ./src/server/node.ts",
+    "watch-util": "bun build --watch --no-clear-screen --sourcemap=external --packages=external --outdir ./dist/util ./src/util/index.ts",
+    "watch-types": "tsc --watch --preserveWatchOutput",
+    "build-package": "bun run build-js && bun run build-types",
+    "build-js": "concurrently -m 12 --timings -c 'auto' -n 'tasks-br,tasks-n,server,util' 'bun run build-tasks-browser' 'bun run build-tasks-node' 'bun run build-server' 'bun run build-util'",
+    "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
+    "build-tasks-browser": "bun build --target=browser --sourcemap=external --packages=external --outdir ./dist/tasks ./src/tasks/browser.ts",
+    "build-tasks-node": "bun build --target=node --sourcemap=external --packages=external --outdir ./dist/tasks ./src/tasks/node.ts",
+    "build-server": "bun build --target=node --sourcemap=external --packages=external --outdir ./dist/server ./src/server/node.ts",
+    "build-util": "bun build --sourcemap=external --packages=external --outdir ./dist/util ./src/util/index.ts",
+    "build-types": "rm -f tsconfig.tsbuildinfo && tsc",
+    "test": "vitest run --config ../../vitest.config.ts --project a2a"
+  },
+  "exports": {
+    "./tasks": {
+      "browser": {
+        "types": "./dist/tasks/browser.d.ts",
+        "import": "./dist/tasks/browser.js"
+      },
+      "types": "./dist/tasks/node.d.ts",
+      "import": "./dist/tasks/node.js"
+    },
+    "./server": {
+      "types": "./dist/server/node.d.ts",
+      "import": "./dist/server/node.js"
+    },
+    "./util": {
+      "types": "./dist/util/index.d.ts",
+      "import": "./dist/util/index.js"
+    }
+  },
+  "dependencies": {
+    "@a2a-js/sdk": "catalog:"
+  },
+  "peerDependencies": {
+    "@workglow/ai": "workspace:*",
+    "@workglow/storage": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@workglow/ai": {
+      "optional": false
+    },
+    "@workglow/storage": {
+      "optional": false
+    },
+    "@workglow/task-graph": {
+      "optional": false
+    },
+    "@workglow/util": {
+      "optional": false
+    }
+  },
+  "devDependencies": {
+    "@workglow/ai": "workspace:*",
+    "@workglow/storage": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*"
+  },
+  "files": [
+    "dist",
+    "src/**/*.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

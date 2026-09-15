@@ -20,6 +20,7 @@
     { "path": "../ai" },
     { "path": "../javascript" },
     { "path": "../mcp" },
+    { "path": "../a2a" },
     { "path": "../browser-control" },
     { "path": "../../providers/anthropic" },
     { "path": "../../providers/chrome-ai" },

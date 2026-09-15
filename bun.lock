@@ -45,6 +45,7 @@
         "@huggingface/transformers": "catalog:",
         "@inkjs/ui": "^2.0.0",
         "@napi-rs/keyring": "^1.3.0",
+        "@workglow/a2a": "workspace:*",
         "@workglow/ai": "workspace:*",
         "@workglow/anthropic": "workspace:*",
         "@workglow/browser-control": "workspace:*",
@@ -151,6 +152,25 @@
         "tailwindcss": "^4.3.3",
         "vite": "^8.3.0",
         "vite-plugin-wasm": "^3.6.0",
+      },
+    },
+    "packages/a2a": {
+      "name": "@workglow/a2a",
+      "version": "0.6.0",
+      "dependencies": {
+        "@a2a-js/sdk": "catalog:",
+      },
+      "devDependencies": {
+        "@workglow/ai": "workspace:*",
+        "@workglow/storage": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+      },
+      "peerDependencies": {
+        "@workglow/ai": "workspace:*",
+        "@workglow/storage": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
       },
     },
     "packages/ai": {
@@ -403,6 +423,7 @@
       "name": "workglow",
       "version": "0.6.0",
       "dependencies": {
+        "@workglow/a2a": "workspace:*",
         "@workglow/ai": "workspace:*",
         "@workglow/anthropic": "workspace:*",
         "@workglow/browser-control": "workspace:*",
@@ -935,6 +956,7 @@
     "sharp": "0.35.4",
   },
   "catalog": {
+    "@a2a-js/sdk": "^1.1.0",
     "@anthropic-ai/sdk": "^0.125.0",
     "@aws-sdk/client-sqs": "^3.1131.0",
     "@cloudflare/workers-types": "^5.20260911.1",
@@ -972,6 +994,8 @@
     "vitest": "^5.0.0",
   },
   "packages": {
+    "@a2a-js/sdk": ["@a2a-js/sdk@1.1.0", "", { "dependencies": { "jose": "^6.2.3" }, "peerDependencies": { "@bufbuild/protobuf": "^2.10.2", "@grpc/grpc-js": "^1.11.0", "express": "^4.21.2 || ^5.1.0" }, "optionalPeers": ["@bufbuild/protobuf", "@grpc/grpc-js", "express"] }, "sha512-/Mhzw9C6VW7pFbY2Rq0pnrjT0Fy9PV0c46A7Gx1ppRlYq2u/6OV/bNRIoVBKChb8UZ8bE0WzzCc0pIr2CdmG+w=="],
+
     "@alcalzone/ansi-tokenize": ["@alcalzone/ansi-tokenize@0.3.0", "", { "dependencies": { "ansi-styles": "^6.2.1", "is-fullwidth-code-point": "^5.0.0" } }, "sha512-p+CMKJ93HFmLkjXKlXiVGlMQEuRb6H0MokBSwUsX+S6BRX8eV5naFZpQJFfJHjRZY0Hmnqy1/r6UWl3x+19zYA=="],
 
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.125.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1", "standardwebhooks": "^1.0.0" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-Hq5wYlXupzJ9M1Fzqjqa3hObcuigEXVZJqSYDgeZGM3wF4qrNERM5Z1OOAeoT9rlod8awJ3uYyJjbQXp1ckIGg=="],
@@ -1651,6 +1675,8 @@
     "@vitest/ui": ["@vitest/ui@5.0.0", "", { "dependencies": { "@vitest/utils": "5.0.0", "fflate": "^0.8.3", "flatted": "^3.4.4", "pathe": "^2.0.3", "sirv": "^3.0.2", "tinyrainbow": "^3.1.1" }, "peerDependencies": { "vitest": "5.0.0" } }, "sha512-h2FIFwggCY2GxUd2UdQoYNVQkOIqEQLPhNREcl3FUiRsdzQep7NWwYbSmhGEA9nFLPDq5pXzRMcBZQU8Py83sg=="],
 
     "@vitest/utils": ["@vitest/utils@5.0.0", "", { "dependencies": { "@vitest/pretty-format": "5.0.0", "convert-source-map": "^2.0.0", "tinyrainbow": "^3.1.1" } }, "sha512-dO++xL3vDfvhTAVimfkuQUA3k+JClIF1i1vAkPqpcGAthRmeWnXmHB7YPViPvgCwviX8u7Y5W1u2N//AaQr3fw=="],
+
+    "@workglow/a2a": ["@workglow/a2a@workspace:packages/a2a"],
 
     "@workglow/ai": ["@workglow/ai@workspace:packages/ai"],
 

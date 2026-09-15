@@ -7,15 +7,30 @@
 import type { Server as McpServerInstance } from "@modelcontextprotocol/sdk/server";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { getLogger } from "@workglow/util";
+import {
+  assertAuthChoice,
+  authorizeBearer,
+  closeHttpServer,
+  displayHostFor,
+  guardedRequestListener,
+  hostWithoutPort,
+  listenHttp,
+  readJsonRpcBody,
+  resolveAllowedHosts,
+  sendJsonRpcError as sendError,
+} from "@workglow/util";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
   type Server as HttpServer,
   type ServerResponse,
 } from "node:http";
-import { authorizeBearer } from "./bearerAuth";
 import { McpSessionRouter } from "./McpSessionRouter";
+
+// Re-exported for the callers that reach these by this path. The predicates
+// themselves live in `@workglow/util`, shared with every server the monorepo
+// binds to `node:http`.
+export { hostWithoutPort, resolveAllowedHosts };
 
 /** Where a client posts unless the host says otherwise. */
 export const DEFAULT_MCP_PATH = "/mcp";
@@ -74,113 +89,6 @@ interface RequestContext {
   readonly router: McpSessionRouter<StreamableHTTPServerTransport>;
 }
 
-/** A bind address that names no reachable host, so no allow-list follows from it. */
-function isWildcardHost(host: string): boolean {
-  return host === "" || host === "0.0.0.0" || host === "::" || host === "[::]";
-}
-
-/**
- * Refuses a server that would run tasks for whoever reaches the port.
- *
- * `undefined` cannot be spelled through the types and is checked anyway: an
- * untyped caller still arrives here with the field omitted, and that used to
- * mean "serve unauthenticated".
- *
- * A wildcard bind additionally refuses `null` outright. It is reachable under
- * every name and address the machine answers to, and {@link resolveAllowedHosts}
- * can derive no `Host` allow-list from it either, so nothing at all would be
- * left deciding who gets in. Naming the interface to bind is how an
- * unauthenticated server on a reachable address is asked for.
- */
-function assertAuthChoice(token: string | null | undefined, host: string): void {
-  if (token === undefined) {
-    throw new Error(
-      "startMcpHttpServer requires `token`: a bearer token every request must present, " +
-        "or `null` to serve task execution without authentication."
-    );
-  }
-  if (token === null && isWildcardHost(host.toLowerCase())) {
-    throw new Error(
-      `startMcpHttpServer refuses to serve unauthenticated on the wildcard bind "${host}": ` +
-        "every tool it offers runs a task. Pass a token, or bind the one interface it should answer on."
-    );
-  }
-}
-
-/**
- * The `Host` values to answer to, or `undefined` for "do not check".
- *
- * The check exists to stop DNS rebinding pointing a page on another site at a
- * loopback server, and a loopback bind is the case it can actually decide. A
- * wildcard bind is reachable under every name the machine answers to — its own
- * hostname, a LAN address, whatever a reverse proxy passes through — and none
- * of those are derivable from `0.0.0.0`. Deriving the list from the bind
- * address anyway refused every real client of the exposure the operator had
- * just asked for, so a wildcard bind checks nothing unless the host names the
- * values itself.
- */
-export function resolveAllowedHosts(
-  host: string,
-  extra: Iterable<string> | undefined
-): ReadonlySet<string> | undefined {
-  const named = [...(extra ?? [])].map((value) => value.toLowerCase());
-  if (isWildcardHost(host.toLowerCase()) && named.length === 0) return undefined;
-  return new Set([host.toLowerCase(), "localhost", "127.0.0.1", "[::1]", "::1", ...named]);
-}
-
-/**
- * The host a `Host:` header names, without its port.
- *
- * An IPv6 literal is bracketed and full of colons, so splitting on the first
- * one yields `"["` — which matches no allow-list, and refuses every request
- * from `http://[::1]:8788/` while naming a host nobody typed.
- */
-export function hostWithoutPort(header: string | undefined): string {
-  const value = (header ?? "").trim();
-  if (value.startsWith("[")) {
-    const close = value.indexOf("]");
-    return close === -1 ? value.toLowerCase() : value.slice(0, close + 1).toLowerCase();
-  }
-  const colon = value.indexOf(":");
-  return (colon === -1 ? value : value.slice(0, colon)).toLowerCase();
-}
-
-/** A JSON-RPC error body, which is what an MCP client can actually read. */
-function sendError(
-  res: ServerResponse,
-  status: number,
-  code: number,
-  message: string,
-  headers: Record<string, string> = {}
-): void {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
-  res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
-}
-
-/** Thrown only by the size cap, so a dropped connection is not reported as one. */
-class BodyTooLargeError extends Error {
-  constructor(limit: number) {
-    super(`request body exceeds ${limit} bytes`);
-    this.name = "BodyTooLargeError";
-  }
-}
-
-async function readBody(req: IncomingMessage, limit: number): Promise<string> {
-  // A declared length over the cap is refused before a byte is buffered.
-  const declared = Number(req.headers["content-length"]);
-  if (Number.isFinite(declared) && declared > limit) throw new BodyTooLargeError(limit);
-
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = chunk as Buffer;
-    size += buffer.length;
-    if (size > limit) throw new BodyTooLargeError(limit);
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks, size).toString("utf8");
-}
-
 async function serve(
   req: IncomingMessage,
   res: ServerResponse,
@@ -237,28 +145,9 @@ async function serve(
   // The body is read and parsed here rather than inside the transport because
   // the decision it drives — is this an initialize, and so may it open a
   // session — has to be made before there is a transport to hand it to.
-  let body: string;
-  try {
-    body = await readBody(req, ctx.maxBodyBytes);
-  } catch (error) {
-    // Only the size cap is a 413. `for await` over the request also rejects when
-    // the client simply went away, and answering that with "request body too
-    // large" tells an operator the wrong thing about their own traffic.
-    if (error instanceof BodyTooLargeError) {
-      // Ours, and it names only the limit the operator configured.
-      sendError(res, 413, -32000, error.message);
-    } else if (!res.headersSent) {
-      sendError(res, 400, -32000, "could not read request body");
-    }
-    return;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    sendError(res, 400, -32700, "malformed JSON in request body");
-    return;
-  }
+  const body = await readJsonRpcBody(req, res, ctx.maxBodyBytes);
+  if (!body.ok) return;
+  const parsed = body.value;
 
   if (existing) {
     await existing.handleRequest(req, res, parsed);
@@ -292,7 +181,10 @@ async function serve(
 export async function startMcpHttpServer(
   args: StartMcpHttpServerArgs
 ): Promise<McpHttpServerHandle> {
-  assertAuthChoice(args.token, args.host);
+  assertAuthChoice(args.token, args.host, {
+    name: "startMcpHttpServer",
+    consequence: "every tool it offers runs a task",
+  });
   const token = args.token ?? undefined;
   const path = args.path ?? DEFAULT_MCP_PATH;
   const router = new McpSessionRouter({
@@ -307,41 +199,18 @@ export async function startMcpHttpServer(
     router,
   };
 
-  const server = createHttpServer((req, res) => {
-    serve(req, res, ctx).catch((error: unknown) => {
-      // The caller learns only that it failed. An unexpected throw here
-      // carries whatever the thrower put in it — a filesystem path, a
-      // connection string — and this endpoint answers anyone who reaches the
-      // port. The operator gets the detail on the server's own log instead.
-      getLogger().error("mcp server request failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      if (!res.headersSent) sendError(res, 500, -32603, "internal server error");
-      else res.destroy();
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(args.port, args.host, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-
-  const address = server.address();
-  const port = typeof address === "object" && address !== null ? address.port : args.port;
-  // A bare wildcard is not something a client config can connect to.
-  const displayHost = args.host === "0.0.0.0" || args.host === "::" ? "localhost" : args.host;
+  const server = createHttpServer(
+    guardedRequestListener("mcp server", (req, res) => serve(req, res, ctx))
+  );
+  const port = await listenHttp(server, args.port, args.host);
   return {
     server,
-    url: `http://${displayHost}:${port}${path}`,
+    url: `http://${displayHostFor(args.host)}:${port}${path}`,
     token,
     sessionCount: () => router.size,
     close: async () => {
       await router.closeAll();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await closeHttpServer(server);
     },
   };
 }

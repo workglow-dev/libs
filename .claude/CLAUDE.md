@@ -475,6 +475,12 @@ may run a task. It is built on the SDK's low-level `Server` rather than
 `McpServer` because tasks describe themselves in JSON Schema and `registerTool` takes only
 Zod — going through it would mean converting a schema to Zod and back to publish it.
 
+`workglow a2a serve <id>` is the third: one saved agent — a graph holding a single
+`AgentTask`, in the agents folder — published to A2A peers, with the same token story as
+`mcp serve` (`WORKGLOW_A2A_TOKEN`, `--token`, `--no-auth`) and its own default port. The
+card's `description` is not the system prompt: the card is public. `@workglow/a2a/tasks` is
+imported from `registerCliTasks` so a saved workflow can name `A2AAgentTask`.
+
 **A downstream CLI reuses this, it does not copy it.** `runWorkglowCli()`
 (`src/bootstrap.ts`, exported from `lib.ts`) is the entire body of the `workglow` binary
 behind `registerTasks` / `registerCommands` hooks — `workglow.ts` is just a call to it, and
