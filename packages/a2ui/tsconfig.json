@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "tsBuildInfoFile": "tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*"],
+  "references": [
+    {
+      "path": "../util"
+    },
+    {
+      "path": "../task-graph"
+    }
+  ],
+  "exclude": ["dist", "node_modules", "src/**/__tests__/**", "src/**/*.test.ts"]
+}
