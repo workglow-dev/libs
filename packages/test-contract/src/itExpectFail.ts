@@ -16,9 +16,23 @@ type ItFn = (name: string, fn: () => Promise<void> | void, timeout?: number) => 
  * expectedFailures").
  */
 export const itExpectFail: ItFn = (name, fn, timeout) => {
-  const native = (it as unknown as { fails?: ItFn }).fails;
+  const native = (
+    it as unknown as {
+      fails?: (
+        name: string,
+        options: { readonly retry?: number; readonly timeout?: number },
+        fn: () => Promise<void> | void
+      ) => void;
+    }
+  ).fails;
   if (typeof native === "function") {
-    native(name, fn, timeout);
+    // `retry: 0` because retrying a test that is SUPPOSED to fail is
+    // meaningless, and vitest counts the intended failure as a retry — which
+    // puts every expected-fail test in the run summary's "Flaky Tests" section
+    // under "passed only after one or more retries". A real flake then hides
+    // among permanent false entries, which is worse than no report at all.
+    // Options go SECOND: `test(name, fn, {...})` was removed in Vitest 4.
+    native(name, { retry: 0, timeout }, fn);
     return;
   }
   it(
