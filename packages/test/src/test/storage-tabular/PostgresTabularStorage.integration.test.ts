@@ -19,18 +19,16 @@ import { getTestingLogger } from "@workglow/util/test";
 import type { Pool } from "pg";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
+  AuthorPrimaryKeyNames,
+  AuthorSchema,
+  PostPrimaryKeyNames,
+  PostSchema,
+  runTabularJoinContract,
   runTabularStorageContract,
   VectorItemPrimaryKeyNames,
   VectorItemSchema,
 } from "@workglow/test-contract/tabular-storage";
 import { runSqlBulkPutTests } from "./genericSqlBulkPutTests";
-import {
-  AuthorPrimaryKeyNames,
-  AuthorSchema,
-  PostPrimaryKeyNames,
-  PostSchema,
-  runGenericTabularJoinTests,
-} from "./genericTabularJoinTests";
 import {
   AllTypesPrimaryKeyNames,
   AllTypesSchema,
@@ -926,7 +924,7 @@ describe("PostgresTabularStorage join", () => {
   });
 
   // Two tables on one session: the join runs as a single statement.
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new PostgresTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         joinDb,
@@ -946,7 +944,7 @@ describe("PostgresTabularStorage join", () => {
 
   // A right side elsewhere: the hash join, with `= ANY($n)` array binding on
   // the Postgres side.
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new InMemoryTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         PostSchema,

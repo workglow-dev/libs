@@ -10,6 +10,11 @@ import type { DataPortSchemaObject } from "@workglow/util/schema";
 import { getTestingLogger } from "@workglow/util/test";
 import { describe, expect, it } from "vitest";
 import {
+  AuthorPrimaryKeyNames,
+  AuthorSchema,
+  PostPrimaryKeyNames,
+  PostSchema,
+  runTabularJoinContract,
   runTabularStorageContract,
   VectorItemPrimaryKeyNames,
   VectorItemSchema,
@@ -107,3 +112,22 @@ runTabularStorageContract({
       VectorItemPrimaryKeyNames
     ),
 });
+
+// Every other in-memory backend rides the join contract; this one did not, and
+// it is the one that routes its reads through a BroadcastChannel-backed peer
+// map, so nothing else here would notice a join reading past it.
+runTabularJoinContract(
+  async () =>
+    new SharedInMemoryTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
+      `shared_join_posts_${uuid4().replace(/-/g, "_")}`,
+      PostSchema,
+      PostPrimaryKeyNames
+    ),
+  async () =>
+    new SharedInMemoryTabularStorage<typeof AuthorSchema, typeof AuthorPrimaryKeyNames>(
+      `shared_join_authors_${uuid4().replace(/-/g, "_")}`,
+      AuthorSchema,
+      AuthorPrimaryKeyNames
+    ),
+  { expectSqlPushdown: false }
+);

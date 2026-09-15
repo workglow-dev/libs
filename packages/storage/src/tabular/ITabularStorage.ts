@@ -792,6 +792,11 @@ export interface ITabularStorage<
    * Over a remote backend (HTTP proxy, Supabase) that is the whole table on
    * the wire, so prefer a `where.left` that narrows it, or an `orderBy` the
    * left side can serve.
+   *
+   * **An implementer runs `runTabularJoinContract`**
+   * (`@workglow/test-contract/tabular-storage`), which supplies the two fixture
+   * tables and inherits every assertion above — including, where both
+   * strategies are reachable, that they return the same rows for the same spec.
    */
   join<R, T extends JoinType>(
     spec: JoinSpec<Entity, R, T>,

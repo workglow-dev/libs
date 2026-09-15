@@ -15,17 +15,15 @@ import type { FromSchema } from "@workglow/util/schema";
 import { getTestingLogger } from "@workglow/util/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  runTabularStorageContract,
-  VectorItemPrimaryKeyNames,
-  VectorItemSchema,
-} from "@workglow/test-contract/tabular-storage";
-import {
   AuthorPrimaryKeyNames,
   AuthorSchema,
   PostPrimaryKeyNames,
   PostSchema,
-  runGenericTabularJoinTests,
-} from "./genericTabularJoinTests";
+  runTabularJoinContract,
+  runTabularStorageContract,
+  VectorItemPrimaryKeyNames,
+  VectorItemSchema,
+} from "@workglow/test-contract/tabular-storage";
 import { runGenericTabularStorageSubscriptionTests } from "./genericTabularStorageSubscriptionTests";
 import {
   AllTypesPrimaryKeyNames,
@@ -425,7 +423,7 @@ describe("updateWhere (InMemory)", () => {
 });
 
 describe("InMemoryTabularStorage join", () => {
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new InMemoryTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         PostSchema,

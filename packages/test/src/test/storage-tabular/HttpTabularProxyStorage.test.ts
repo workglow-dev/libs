@@ -17,8 +17,8 @@ import {
   AuthorSchema,
   PostPrimaryKeyNames,
   PostSchema,
-  runGenericTabularJoinTests,
-} from "./genericTabularJoinTests";
+  runTabularJoinContract,
+} from "@workglow/test-contract/tabular-storage";
 
 const TestSchema = {
   type: "object",
@@ -662,7 +662,7 @@ describe("HttpTabularProxyStorage — generic contract (CompoundSchema/SearchSch
 describe("HttpTabularProxyStorage join", () => {
   // Both sides behind the proxy: the hash join runs over the wire with the
   // existing `getAll` / `query` ops, and needs no op of its own.
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () => {
       const backing = new InMemoryTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         PostSchema,

@@ -4,42 +4,37 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ITabularStorage, JoinedRow } from "@workglow/storage";
+import type { JoinedRow } from "@workglow/storage";
 import { StorageInvalidColumnError, StorageValidationError } from "@workglow/storage";
-import type { DataPortSchemaObject, FromSchema } from "@workglow/util/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { joinBoundedLeftReadBlock } from "./assertions/joinBoundedLeftRead";
+import { joinStrategyParityBlock } from "./assertions/strategyParity";
+import type {
+  AuthorStorage,
+  JoinFixtureAuthor,
+  JoinFixturePost,
+  PostStorage,
+} from "./joinFixtures";
+import { JOIN_FIXTURE_AUTHORS, JOIN_FIXTURE_POSTS, seedJoinFixtures } from "./joinFixtures";
 
-export const AuthorPrimaryKeyNames = ["id"] as const;
-export const AuthorSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string" },
-    tenant: { type: "string" },
-    name: { type: "string" },
-    country: { anyOf: [{ type: "string" }, { type: "null" }] },
-  },
-  required: ["id", "tenant", "name", "country"],
-  additionalProperties: false,
-} as const satisfies DataPortSchemaObject;
+export {
+  AuthorPrimaryKeyNames,
+  AuthorSchema,
+  JOIN_FIXTURE_AUTHORS,
+  JOIN_FIXTURE_POSTS,
+  PostPrimaryKeyNames,
+  PostSchema,
+  seedJoinFixtures,
+} from "./joinFixtures";
+export type {
+  AuthorStorage,
+  JoinFixtureAuthor,
+  JoinFixturePost,
+  PostStorage,
+} from "./joinFixtures";
 
-export const PostPrimaryKeyNames = ["id"] as const;
-export const PostSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string" },
-    tenant: { type: "string" },
-    author_id: { anyOf: [{ type: "string" }, { type: "null" }] },
-    title: { type: "string" },
-    views: { type: "number" },
-  },
-  required: ["id", "tenant", "author_id", "title", "views"],
-  additionalProperties: false,
-} as const satisfies DataPortSchemaObject;
-
-export type AuthorStorage = ITabularStorage<typeof AuthorSchema, typeof AuthorPrimaryKeyNames>;
-export type PostStorage = ITabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>;
-type Author = FromSchema<typeof AuthorSchema>;
-type Post = FromSchema<typeof PostSchema>;
+type Author = JoinFixtureAuthor;
+type Post = JoinFixturePost;
 
 export interface JoinTestOptions {
   /**
@@ -53,20 +48,6 @@ export interface JoinTestOptions {
   readonly timeout?: number;
 }
 
-const AUTHORS: Author[] = [
-  { id: "a1", tenant: "t1", name: "Ann", country: "US" },
-  { id: "a2", tenant: "t1", name: "Bob", country: null },
-  { id: "a3", tenant: "t2", name: "Cid", country: "FR" },
-];
-const POSTS: Post[] = [
-  { id: "p1", tenant: "t1", author_id: "a1", title: "one", views: 10 },
-  { id: "p2", tenant: "t1", author_id: "a1", title: "two", views: 5 },
-  { id: "p3", tenant: "t1", author_id: "a2", title: "three", views: 7 },
-  { id: "p4", tenant: "t1", author_id: "zz", title: "orphan", views: 1 },
-  { id: "p5", tenant: "t1", author_id: null, title: "anon", views: 3 },
-  { id: "p6", tenant: "t2", author_id: "a1", title: "cross", views: 9 },
-];
-
 const pairs = (rows: ReadonlyArray<JoinedRow<Post, Author, any>>): string[] =>
   rows.map((r) => `${r.left.id}:${r.right?.id ?? "-"}`);
 
@@ -74,7 +55,7 @@ const pairs = (rows: ReadonlyArray<JoinedRow<Post, Author, any>>): string[] =>
  * Shared join behaviour, run per backend pair. `createPosts` is the left
  * side; `createAuthors` the right. Both are created fresh for every test.
  */
-export function runGenericTabularJoinTests(
+export function runTabularJoinContract(
   createPosts: () => Promise<PostStorage>,
   createAuthors: () => Promise<AuthorStorage>,
   opts: JoinTestOptions = {}
@@ -90,8 +71,7 @@ export function runGenericTabularJoinTests(
       authors = await createAuthors();
       await posts.setupDatabase?.();
       await authors.setupDatabase?.();
-      await authors.putBulk(AUTHORS);
-      await posts.putBulk(POSTS);
+      await seedJoinFixtures(posts, authors);
     });
 
     afterEach(async () => {
@@ -122,8 +102,8 @@ export function runGenericTabularJoinTests(
         const rows = await posts.join({ type: "inner", on }, authors);
         expect(pairs(rows).sort()).toEqual(["p1:a1", "p2:a1", "p3:a2", "p6:a1"]);
         const row = rows.find((r) => r.left.id === "p1");
-        expect(row?.left).toEqual(POSTS[0]);
-        expect(row?.right).toEqual(AUTHORS[0]);
+        expect(row?.left).toEqual(JOIN_FIXTURE_POSTS[0]);
+        expect(row?.right).toEqual(JOIN_FIXTURE_AUTHORS[0]);
       },
       opts.timeout
     );
@@ -387,4 +367,7 @@ export function runGenericTabularJoinTests(
       opts.timeout
     );
   });
+
+  joinBoundedLeftReadBlock(createPosts, createAuthors, seedJoinFixtures, opts);
+  joinStrategyParityBlock(createPosts, createAuthors, seedJoinFixtures, opts);
 }

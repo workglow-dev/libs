@@ -9,15 +9,15 @@ import { SupabaseTabularStorage } from "@workglow/supabase/storage";
 import { setLogger, uuid4 } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { runTabularStorageContract } from "@workglow/test-contract/tabular-storage";
-import { createSupabaseMockClient } from "../helpers/SupabaseMockClient";
 import {
   AuthorPrimaryKeyNames,
   AuthorSchema,
   PostPrimaryKeyNames,
   PostSchema,
-  runGenericTabularJoinTests,
-} from "./genericTabularJoinTests";
+  runTabularJoinContract,
+  runTabularStorageContract,
+} from "@workglow/test-contract/tabular-storage";
+import { createSupabaseMockClient } from "../helpers/SupabaseMockClient";
 import {
   AllTypesPrimaryKeyNames,
   AllTypesSchema,
@@ -41,7 +41,7 @@ describe("SupabaseTabularStorage", () => {
 
   // PostgREST has no raw-SQL path, so a Supabase pair always takes the hash
   // join; what this pins is the `in` filter and the null handling on it.
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new SupabaseTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         client,

@@ -9,17 +9,15 @@ import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  runTabularStorageContract,
-  VectorItemPrimaryKeyNames,
-  VectorItemSchema,
-} from "@workglow/test-contract/tabular-storage";
-import {
   AuthorPrimaryKeyNames,
   AuthorSchema,
   PostPrimaryKeyNames,
   PostSchema,
-  runGenericTabularJoinTests,
-} from "./genericTabularJoinTests";
+  runTabularJoinContract,
+  runTabularStorageContract,
+  VectorItemPrimaryKeyNames,
+  VectorItemSchema,
+} from "@workglow/test-contract/tabular-storage";
 import { runGenericTabularStorageSubscriptionTests } from "./genericTabularStorageSubscriptionTests";
 import {
   CompoundPrimaryKeyNames,
@@ -753,7 +751,7 @@ runTabularStorageContract({
 });
 
 describe("CachedTabularStorage join", () => {
-  runGenericTabularJoinTests(
+  runTabularJoinContract(
     async () =>
       new CachedTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(
         new InMemoryTabularStorage<typeof PostSchema, typeof PostPrimaryKeyNames>(

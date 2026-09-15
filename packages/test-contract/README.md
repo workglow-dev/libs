@@ -125,19 +125,20 @@ Capability flags:
 
 ## Available suites
 
-| Contract                                | Suite                                             | Adapters                                                                                             |
-| --------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `AiProvider`                            | `@workglow/test-contract/ai-provider`             | Anthropic, OpenAI, Gemini, Ollama, HF Inference, HF Transformers, LlamaCpp                           |
-| `IMigrationRunner`                      | `@workglow/test-contract/storage-migrations`      | Postgres, SQLite, IndexedDB                                                                          |
-| Tabular schema migrations               | `@workglow/test-contract/tabular-migrations`      | InMemory, IndexedDB, Postgres, SQLite, FsFolder                                                      |
-| `ITabularStorage`                       | `@workglow/test-contract/tabular-storage`         | InMemory, SharedInMemory, IndexedDB, Postgres, SQLite, DuckDB, Supabase, Cached, Telemetry, FsFolder |
-| `ITabularStorage` (rest of the surface) | `test/storage-tabular/genericTabularStorageTests` | InMemory, IndexedDB, Postgres, SQLite, Supabase, FsFolder, HuggingFace                               |
-| `IQueueStorage` + `IRateLimiterStorage` | `test/job-queue/genericJobQueueTests`             | InMemory, IndexedDB, Postgres, SQLite, Supabase                                                      |
-| `IVectorStorage`                        | `@workglow/test-contract/vector-storage`          | InMemory, SQLite, Postgres, IndexedDB, Scoped, Telemetry                                             |
-| `IEntitlementProfile`                   | `@workglow/test-contract/entitlement-profile`     | Browser, Desktop, Server, Custom                                                                     |
-| `IBrowserContext`                       | `@workglow/test-contract/browser-context`         | Mock, Playwright, BunWebView, Electron                                                               |
-| `IHumanConnector`                       | `@workglow/test-contract/human-connector`         | MockHumanConnector, McpElicitationConnector                                                          |
-| Worker-proxy parity                     | `@workglow/test-contract/worker-proxy`            | _harness only — no adapters wired yet_                                                               |
+| Contract                                | Suite                                             | Adapters                                                                                              |
+| --------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `AiProvider`                            | `@workglow/test-contract/ai-provider`             | Anthropic, OpenAI, Gemini, Ollama, HF Inference, HF Transformers, LlamaCpp                            |
+| `IMigrationRunner`                      | `@workglow/test-contract/storage-migrations`      | Postgres, SQLite, IndexedDB                                                                           |
+| Tabular schema migrations               | `@workglow/test-contract/tabular-migrations`      | InMemory, IndexedDB, Postgres, SQLite, FsFolder                                                       |
+| `ITabularStorage`                       | `@workglow/test-contract/tabular-storage`         | InMemory, SharedInMemory, IndexedDB, Postgres, SQLite, DuckDB, Supabase, Cached, Telemetry, FsFolder  |
+| `ITabularStorage.join`                  | `@workglow/test-contract/tabular-storage`         | InMemory, SharedInMemory, IndexedDB, Postgres, SQLite, DuckDB, Supabase, Cached, Telemetry, HttpProxy |
+| `ITabularStorage` (rest of the surface) | `test/storage-tabular/genericTabularStorageTests` | InMemory, IndexedDB, Postgres, SQLite, Supabase, FsFolder, HuggingFace                                |
+| `IQueueStorage` + `IRateLimiterStorage` | `test/job-queue/genericJobQueueTests`             | InMemory, IndexedDB, Postgres, SQLite, Supabase                                                       |
+| `IVectorStorage`                        | `@workglow/test-contract/vector-storage`          | InMemory, SQLite, Postgres, IndexedDB, Scoped, Telemetry                                              |
+| `IEntitlementProfile`                   | `@workglow/test-contract/entitlement-profile`     | Browser, Desktop, Server, Custom                                                                      |
+| `IBrowserContext`                       | `@workglow/test-contract/browser-context`         | Mock, Playwright, BunWebView, Electron                                                                |
+| `IHumanConnector`                       | `@workglow/test-contract/human-connector`         | MockHumanConnector, McpElicitationConnector                                                           |
+| Worker-proxy parity                     | `@workglow/test-contract/worker-proxy`            | _harness only — no adapters wired yet_                                                                |
 
 ## Billing failures: skipped on CI, failed locally
 
@@ -187,6 +188,32 @@ transient and the retry policy handles them.
 6. Write one shim caller per adapter under
    `packages/test/src/test/<contract-name>/<Adapter>_Generic.integration.test.ts`.
 7. Add a row to the table above.
+
+## Two strategies, one contract
+
+`runTabularJoinContract` is the one suite here whose subject has two
+implementations of a single semantics — a pushed-down `JOIN` statement when
+both tables share a connection, an application-side hash join otherwise — with
+the planner, not the caller, choosing between them. That makes a disagreement
+between them a wrong answer nothing reports, which changes with where the
+right-hand storage happens to live.
+
+So it runs three blocks rather than one. The behavioural cases run on whichever
+path the pair takes. `join bounded left read` runs only on the hash path and
+asserts the half of the docstring the pushdown gets from the database for free:
+that a bounded join stops reading the left side early, and only when the joined
+rows are already in their final order. `join strategy parity` runs only where
+both paths are reachable, runs the same spec through each, and asserts they
+agree — over specs derived from the fields of `JoinSpec`, so an option added
+there fails to compile until it declares what the two strategies owe each
+other.
+
+What the two are held to depends on what the spec asked for, because `join`
+promises `orderBy`, `limit` and `offset` apply to the joined rows and never what
+order an unordered join arrives in. An unordered join is compared as a set; an
+unordered join that is also windowed is compared by row count and membership.
+Holding either to a shared order would assert the storage engine's row layout,
+which SQLite and Postgres happen to share and DuckDB, being columnar, does not.
 
 ## Roadmap
 
