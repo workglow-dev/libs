@@ -84,6 +84,7 @@
     "tiktoken": "^1.0.22",
     "js-tiktoken": "^1.0.21",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@a2a-js/sdk": "^1.1.0",
     "pg": "^8.23.0",
     "playwright": "^1.63.0",
     "@electric-sql/pglite": "^0.5.8",
