@@ -103,12 +103,19 @@ export function humanPromptModel(source: HumanPromptSource): HumanPromptModel {
       carriesContent: false,
     };
   }
+  // A form offers all three for the same reason an approval does. Submitting
+  // values, refusing to supply any, and walking away without deciding are
+  // three different answers, and only the middle one tells a caller the person
+  // considered the request and said no — which `HumanResponseAction` already
+  // defines `decline` as. A rendering reads this list to decide what to draw,
+  // so leaving `decline` out of it is what left every form with no way to
+  // refuse.
   return {
     shape: "form",
     title: "Input required",
     message: source.message,
     details: [],
-    actions: ["accept", "cancel"],
+    actions: ["accept", "decline", "cancel"],
     carriesContent: true,
   };
 }

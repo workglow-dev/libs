@@ -66,6 +66,18 @@ describe("humanPromptModel", () => {
     expect(model.carriesContent).toBe(true);
   });
 
+  it("lets a form be refused, not only submitted or abandoned", () => {
+    // A rendering draws what this list names, so omitting "decline" is what
+    // left every form with submit and walk-away and no way to say no.
+    const model = humanPromptModel({
+      kind: "elicit",
+      message: "Name?",
+      schema: confirmSchema,
+      data: undefined,
+    });
+    expect(model.actions).toEqual(["accept", "decline", "cancel"]);
+  });
+
   it("asks nothing for a one-way kind", () => {
     const model = humanPromptModel({
       kind: "notify",

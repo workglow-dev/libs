@@ -40,8 +40,11 @@ function connectorFor(
     },
     form: async () => {
       const wanted = await answer();
-      if (wanted.action !== "accept") return undefined;
-      return wanted.content ?? {};
+      // The row the form now draws offers all three, so the stub reports which
+      // one was chosen rather than collapsing a refusal into a missing value.
+      if (wanted.action === "decline") return { status: "declined" };
+      if (wanted.action === "cancel") return { status: "cancelled" };
+      return { status: "submitted", values: wanted.content ?? {} };
     },
     notice: () => {},
   };
@@ -69,8 +72,4 @@ runHumanConnectorConformance({
     concurrent: true,
     abortMidElicit: true,
   },
-  // The form offers submit and Esc, so a person can walk away from an elicit
-  // but cannot refuse it — the same gap the Ink panel has, and for the same
-  // reason: nothing yet turns on the difference for an elicit's caller.
-  expectedFailures: ["roundtrip.decline"],
 });

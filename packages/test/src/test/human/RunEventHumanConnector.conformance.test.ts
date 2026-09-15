@@ -81,9 +81,5 @@ runHumanConnectorConformance({
     // is. `abort.beforeSend` states the opposite, so it is declared failing.
     abortMidElicit: false,
   },
-  // "roundtrip.decline": the console's form offers Send and Cancel, so a person
-  // can walk away from an elicit but cannot refuse it — recorded rather than
-  // papered over, since an elicit's caller wanted a value and gets none either
-  // way. A confirm is the case where the difference matters, and it is covered.
-  expectedFailures: ["abort.beforeSend", "roundtrip.decline"],
+  expectedFailures: ["abort.beforeSend"],
 });

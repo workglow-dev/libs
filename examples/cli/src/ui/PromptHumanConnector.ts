@@ -8,7 +8,8 @@ import type { IHumanConnector, IHumanRequest, IHumanResponse } from "@workglow/u
 import { prepareSchemaFormFields, type PromptFieldDescriptor } from "../input/prompt";
 import { asDataPortSchemaObject } from "./humanSchema";
 import { humanPromptModel } from "@workglow/util";
-import { renderSchemaPrompt, renderSelectPrompt } from "./render";
+import type { RefusableFormOutcome } from "./render";
+import { renderRefusableSchemaPrompt, renderSelectPrompt } from "./render";
 
 /**
  * The prompts this connector draws, injectable so the mapping can be exercised
@@ -20,16 +21,22 @@ export interface PromptHumanRenderers {
     message: string | undefined,
     signal: AbortSignal
   ) => Promise<string | undefined>;
+  /**
+   * A form that can also be refused. The three outcomes are distinct answers —
+   * see {@link RefusableFormOutcome} — so a host supplying its own prompt stack
+   * has to say which one happened rather than collapsing a refusal into a
+   * missing value.
+   */
   readonly form: (
     fields: readonly PromptFieldDescriptor[],
     signal: AbortSignal
-  ) => Promise<Record<string, unknown> | undefined>;
+  ) => Promise<RefusableFormOutcome>;
   readonly notice: (lines: readonly string[]) => void;
 }
 
 const defaultRenderers: PromptHumanRenderers = {
   select: (options, message, signal) => renderSelectPrompt([...options], message, signal),
-  form: (fields, signal) => renderSchemaPrompt(fields, undefined, signal),
+  form: (fields, signal) => renderRefusableSchemaPrompt(fields, undefined, signal),
   notice: (lines) => {
     for (const line of lines) console.log(line);
   },
@@ -146,8 +153,12 @@ export class PromptHumanConnector implements IHumanConnector {
       (request.contentData as Record<string, unknown> | undefined) ?? {},
       schema
     );
-    const values = await untilAborted(this.renderers.form(fields, signal), signal);
-    if (values === undefined) return settle("cancel");
-    return settle("accept", values);
+    const outcome = await untilAborted(this.renderers.form(fields, signal), signal);
+    // A refusal carries no content, like an approval's decline: anything under
+    // the schema would land on the task's output ports as if it had been
+    // written by the person who just refused to write it.
+    if (outcome.status === "declined") return settle("decline");
+    if (outcome.status === "cancelled") return settle("cancel");
+    return settle("accept", outcome.values);
   }
 }

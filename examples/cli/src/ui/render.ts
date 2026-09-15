@@ -132,12 +132,54 @@ export interface SchemaPromptRenderOptions {
   readonly initialFocusedFieldKey?: string;
 }
 
+/**
+ * How a form that can also be refused came back. A refusal is not an empty
+ * submission and not an abandonment, so it cannot be squeezed into
+ * `values | undefined` — see {@link renderRefusableSchemaPrompt}.
+ */
+export type RefusableFormOutcome =
+  | { readonly status: "submitted"; readonly values: Record<string, unknown> }
+  | { readonly status: "declined" }
+  | { readonly status: "cancelled" };
+
+/**
+ * The form, with the action row that lets a person refuse it.
+ *
+ * Separate from {@link renderSchemaPrompt} rather than a flag on it: the two
+ * other callers offer no refusal, and widening their return type would make
+ * them handle a case they cannot produce.
+ */
+export async function renderRefusableSchemaPrompt(
+  fields: readonly PromptFieldDescriptor[],
+  options?: SchemaPromptRenderOptions,
+  signal?: AbortSignal
+): Promise<RefusableFormOutcome> {
+  const values = await renderForm(fields, options, signal, true);
+  if (values === DECLINED) return { status: "declined" };
+  return values === undefined ? { status: "cancelled" } : { status: "submitted", values };
+}
+
 export async function renderSchemaPrompt(
   fields: readonly PromptFieldDescriptor[],
   options?: SchemaPromptRenderOptions,
   signal?: AbortSignal
 ): Promise<Record<string, unknown> | undefined> {
-  return new Promise<Record<string, unknown> | undefined>((resolve) => {
+  const values = await renderForm(fields, options, signal, false);
+  // Unreachable without `offerDecline`, and narrowed rather than cast so this
+  // stops compiling if that ever stops being true.
+  return values === DECLINED ? undefined : values;
+}
+
+/** Distinguishes a refusal from an abandonment inside {@link renderForm}. */
+const DECLINED = Symbol("declined");
+
+function renderForm(
+  fields: readonly PromptFieldDescriptor[],
+  options: SchemaPromptRenderOptions | undefined,
+  signal: AbortSignal | undefined,
+  offerDecline: boolean
+): Promise<Record<string, unknown> | typeof DECLINED | undefined> {
+  return new Promise<Record<string, unknown> | typeof DECLINED | undefined>((resolve) => {
     let detachAbort = (): void => {};
     const onComplete = (values: Record<string, unknown>) => {
       detachAbort();
@@ -154,12 +196,23 @@ export async function renderSchemaPrompt(
       resolve(undefined);
     };
 
+    const onDecline = () => {
+      detachAbort();
+      instance.clear();
+      instance.unmount();
+      console.log("Declined.");
+      resolve(DECLINED);
+    };
+
     const instance = render(
       wrapWithCliTheme(
         React.createElement(SchemaPromptApp, {
           fields,
           onComplete,
           onCancel,
+          // Absent unless asked for, which is what keeps the action row off the
+          // forms whose callers have no refusal to report.
+          onDecline: offerDecline ? onDecline : undefined,
           initialFocusedFieldKey: options?.initialFocusedFieldKey,
         })
       )

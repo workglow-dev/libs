@@ -16,6 +16,14 @@ interface SchemaPromptAppProps {
   readonly fields: readonly PromptFieldDescriptor[];
   readonly onComplete: (values: Record<string, unknown>) => void;
   readonly onCancel: () => void;
+  /**
+   * Offered as a third choice when present, and the reason the action row
+   * below exists at all: submitting values, refusing to supply any, and walking
+   * away undecided are three different answers. Callers that pass nothing here
+   * keep the form exactly as it was — fields only, Enter and Esc — so the row
+   * appears for the prompts that can actually be refused.
+   */
+  readonly onDecline?: () => void;
   /** When set, initial keyboard focus starts on this field key (e.g. `"value"` after a CLI pre-filled key). */
   readonly initialFocusedFieldKey?: string;
 }
@@ -122,10 +130,22 @@ function formatCompletedFieldValue(
   return rawValue ?? "";
 }
 
+/**
+ * What the action row offers, in the order it draws them. No enum, per the
+ * repo's TypeScript rules; the labels live beside the row that renders it.
+ */
+const ACTION_ROW_ITEMS = ["accept", "decline", "cancel"] as const;
+const ACTION_ROW_LABELS: Readonly<Record<(typeof ACTION_ROW_ITEMS)[number], string>> = {
+  accept: "Submit",
+  decline: "Decline",
+  cancel: "Cancel",
+};
+
 export function SchemaPromptApp({
   fields,
   onComplete,
   onCancel,
+  onDecline,
   initialFocusedFieldKey,
 }: SchemaPromptAppProps): React.ReactElement {
   // Seed refs with pre-populated defaultValues so untouched fields are included in output
@@ -153,6 +173,11 @@ export function SchemaPromptApp({
   const [rawValues, setRawValues] = useState<Record<string, string>>(initialRaw);
   const pendingTextRef = useRef("");
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
+  // Which of the row's actions is highlighted. Only meaningful while
+  // `onActionRow`, and reset to Submit each time the row is entered so a
+  // previous visit cannot leave Decline under the next Enter.
+  const [actionIndex, setActionIndex] = useState(0);
+  const onActionRow = onDecline !== undefined && focusedIndex === fields.length;
 
   useLayoutEffect(() => {
     const field = fields[focusedIndex];
@@ -222,26 +247,61 @@ export function SchemaPromptApp({
   const navigateBy = useCallback(
     (direction: number) => {
       const currentField = fields[focusedIndex];
-      if (!currentField) return;
 
-      // Save pending text value when leaving a text field
-      if (isTextField(currentField) && pendingTextRef.current) {
+      // Save pending text value when leaving a text field. Guarded on the field
+      // rather than returning early, because `focusedIndex` also addresses the
+      // action row, which is one past the last field and has no value to save.
+      if (currentField && isTextField(currentField) && pendingTextRef.current) {
         const coerced = coercePromptValue(pendingTextRef.current, currentField);
         setNestedValue(valuesRef.current, currentField.key, coerced);
         saveRawValue(currentField.key, pendingTextRef.current);
       }
 
+      const lastIndex = onDecline ? fields.length : fields.length - 1;
       const newIndex = focusedIndex + direction;
-      if (newIndex >= 0 && newIndex < fields.length) {
+      if (newIndex >= 0 && newIndex <= lastIndex) {
         setFieldError(undefined);
-        pendingTextRef.current = rawValuesRef.current[fields[newIndex].key] ?? "";
+        const nextField = fields[newIndex];
+        pendingTextRef.current = nextField ? (rawValuesRef.current[nextField.key] ?? "") : "";
+        if (nextField === undefined) setActionIndex(0);
         setFocusedIndex(newIndex);
       }
     },
-    [focusedIndex, fields, saveRawValue]
+    [focusedIndex, fields, onDecline, saveRawValue]
   );
 
   useInput((_input, key) => {
+    // The action row sits one past the last field. Handled before the field
+    // guard below, which would otherwise return early and leave the row inert.
+    if (onActionRow) {
+      if (key.escape) {
+        onCancel();
+        return;
+      }
+      if (key.return) {
+        const chosen = ACTION_ROW_ITEMS[actionIndex];
+        if (chosen === "accept") submitForm();
+        else if (chosen === "decline") onDecline?.();
+        else onCancel();
+        return;
+      }
+      if (key.rightArrow || (key.tab && !key.shift)) {
+        setActionIndex((i) => Math.min(i + 1, ACTION_ROW_ITEMS.length - 1));
+        return;
+      }
+      if (key.leftArrow) {
+        setActionIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      // Back to the fields: from the first action, or on Shift+Tab / Up from
+      // anywhere in the row, since the row is a dead end otherwise.
+      if (key.upArrow || (key.tab && key.shift)) {
+        navigateBy(-1);
+        return;
+      }
+      return;
+    }
+
     const currentField = fields[focusedIndex];
     if (!currentField) return;
 
@@ -280,7 +340,11 @@ export function SchemaPromptApp({
         <Text bold color="cyan">
           Fill in the fields below
         </Text>
-        <Text dimColor> {"\u2014"} Tab/arrows to navigate, Enter to submit, Esc to cancel</Text>
+        <Text dimColor>
+          {" "}
+          {"\u2014"} Tab/arrows to navigate, Enter to submit, Esc to cancel
+          {onDecline ? ", Tab past the last field to decline" : ""}
+        </Text>
       </Box>
 
       {fields.map((field, index) => {
@@ -339,9 +403,27 @@ export function SchemaPromptApp({
         );
       })}
 
+      {onDecline ? (
+        <Box marginTop={1}>
+          {ACTION_ROW_ITEMS.map((item, index) => {
+            const selected = onActionRow && index === actionIndex;
+            return (
+              <Box key={item} marginRight={2}>
+                <Text color={selected ? "cyan" : undefined} bold={selected} dimColor={!onActionRow}>
+                  {selected ? "\u25B8 " : "  "}
+                  {ACTION_ROW_LABELS[item]}
+                </Text>
+              </Box>
+            );
+          })}
+        </Box>
+      ) : null}
+
       <Box marginTop={1}>
         <Text dimColor>
-          Field {focusedIndex + 1} of {fields.length}
+          {onActionRow
+            ? "Left/right to choose, Enter to confirm, Esc to cancel"
+            : `Field ${focusedIndex + 1} of ${fields.length}`}
         </Text>
       </Box>
     </Box>
