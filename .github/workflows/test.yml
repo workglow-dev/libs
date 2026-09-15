@@ -163,9 +163,12 @@ jobs:
       # evicted LRU — and the other jobs in this workflow keep multi-GB
       # HuggingFace model caches in that same store, which is not a thing to
       # evict for a 35s saving. Keyed on the lockfile instead: one entry per
-      # shard, refreshed whenever dependencies move. Between those refreshes it
-      # goes stale only by the files that changed, and vitest invalidates those
-      # individually by content hash — a stale entry is a miss, never wrong code.
+      # shard, refreshed whenever dependencies move. That key is not about
+      # correctness — vitest hashes the lockfile itself and clears the whole
+      # cache when it moves, so an entry keyed without it would be downloaded
+      # and then immediately deleted. Between those refreshes it goes stale only
+      # by the files that changed, and vitest invalidates those individually by
+      # content hash, so a stale entry is a miss and never wrong code.
       #
       # After `bun i`, which creates the `node_modules` this lives under.
       - name: Restore vitest transform cache
