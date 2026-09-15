@@ -10,8 +10,10 @@ lockstep = true
 # scope = "changed" used to sit here, inert only because that flag overrode it.
 scope = "all"
 
-# Derived per release from the commits themselves: a break takes the break slot
-# (the minor on this 0.x line), a feat the minor, anything else the patch.
+# Derived per release from the commits themselves. On this 0.x line "^0.6.0"
+# already admits only 0.6.x, so the minor is the break slot: a break takes it,
+# and a feat takes the patch alongside everything else — which is what keeps an
+# addition and a break distinguishable in the number.
 bump = "auto"
 
 # Commit the changes to the repository. 
