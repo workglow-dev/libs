@@ -8,6 +8,12 @@ import { BaseError } from "@workglow/util";
 
 export class JobError extends BaseError {
   public static override type: string = "JobError";
+  /**
+   * Whether the queue should try this job again. Read through
+   * {@link isRetryableError} rather than by testing for
+   * {@link RetryableJobError}: the class is lost whenever the error crosses a
+   * worker boundary, and this field is what is carried across it.
+   */
   public retryable = false;
   /**
    * Machine-readable error code persisted as `error_code` on queued jobs.

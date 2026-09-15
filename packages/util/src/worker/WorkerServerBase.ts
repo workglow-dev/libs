@@ -5,7 +5,7 @@
  */
 
 import { createServiceToken } from "../di";
-import { scrubStack, stackScrubRoots } from "./scrubStack";
+import { stackScrubRoots, workerErrorPayload } from "./scrubStack";
 
 /** Service token for the platform-specific WorkerServer instance. */
 export const WORKER_SERVER = createServiceToken<WorkerServerBase>("worker.server");
@@ -274,19 +274,7 @@ export class WorkerServerBase {
       typeof process === "undefined" ||
       process.env?.NODE_ENV !== "production" ||
       process.env?.WORKGLOW_INCLUDE_STACKS === "1";
-    let data: { message: string; name: string; stack?: string };
-    if (typeof error === "string") {
-      data = { message: error, name: "Error" };
-    } else if (error instanceof Error) {
-      data = { message: error.message, name: error.name };
-      if (includeStack) {
-        const scrubbed = scrubStack(error.stack, roots);
-        if (scrubbed !== undefined) data.stack = scrubbed;
-      }
-    } else {
-      data = { message: String(error), name: "Error" };
-    }
-    this.post({ id, type: "error", data });
+    this.post({ id, type: "error", data: workerErrorPayload(error, { includeStack, roots }) });
   };
 
   private postStreamChunk = (id: string, event: any) => {

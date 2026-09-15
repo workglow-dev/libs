@@ -35,6 +35,7 @@ import {
 import { withJobErrorDiagnostics } from "./JobErrorDiagnostics";
 import type { StreamEventLike } from "./JobQueueEventListeners";
 import { storageToClass } from "./JobStorageConverters";
+import { isRetryableError } from "./Retryability";
 
 /**
  * Minimum interval between {@link JobQueueWorker.processJobs} loop-error logs.
@@ -860,7 +861,7 @@ export class JobQueueWorker<
     } catch (err: unknown) {
       const error = this.normalizeError(err);
       let spanErrorMessage = error.message;
-      if (error instanceof RetryableJobError) {
+      if (isRetryableError(error)) {
         const currentJob = await this.getJob(job.id);
         if (!currentJob) {
           throw new JobNotFoundError(`Job ${asText(job.id)} not found`);
@@ -890,7 +891,10 @@ export class JobQueueWorker<
           // can still call claim.retry(). rescheduleJob's finally block drops
           // the claim from activeClaims after it has been settled.
           this.activeJobAbortControllers.delete(job.id);
-          await this.rescheduleJob(currentJob, error.retryDate);
+          // Only `RetryableJobError` carries a requested time; an error that
+          // declared the flag some other way is rescheduled on the backoff.
+          const retryDate = error instanceof RetryableJobError ? error.retryDate : undefined;
+          await this.rescheduleJob(currentJob, retryDate);
           span?.addEvent("workglow.job.retry", {
             "workglow.job.attempt": currentJob.attempts,
           });
@@ -1353,7 +1357,15 @@ export class JobQueueWorker<
       return err;
     }
     if (err instanceof Error) {
-      return new PermanentJobError(withJobErrorDiagnostics(err.message, err));
+      // An error that declares itself retryable keeps that answer through the
+      // wrapping. This is the boundary a worker-thrown error arrives at with
+      // its class already gone, so wrapping unconditionally in
+      // `PermanentJobError` is what silently turned a rate limit into a
+      // terminal failure.
+      const message = withJobErrorDiagnostics(err.message, err);
+      return isRetryableError(err)
+        ? new RetryableJobError(message)
+        : new PermanentJobError(message);
     }
     return new PermanentJobError(String(err));
   }
