@@ -5,7 +5,13 @@
  */
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import type { IncomingMessage } from "node:http";
+import type {
+  IncomingMessage,
+  RequestListener,
+  Server as HttpServer,
+  ServerResponse,
+} from "node:http";
+import { getLogger } from "../logging/LoggerRegistry";
 
 /** Bytes of entropy behind a generated token. 32 is what a session key wants. */
 const TOKEN_BYTES = 32;
@@ -107,6 +113,17 @@ export function authorizeBearer(
 /** A bind address that names no reachable host, so no allow-list follows from it. */
 export function isWildcardHost(host: string): boolean {
   return host === "" || host === "0.0.0.0" || host === "::" || host === "[::]";
+}
+
+/**
+ * The host to print in a URL for a bind address.
+ *
+ * A wildcard names nothing a client can dial, so the loopback name stands in
+ * for it — the one address every machine answers on, and the only one this
+ * server can be sure of.
+ */
+export function displayHostFor(host: string): string {
+  return isWildcardHost(host.toLowerCase()) ? "localhost" : host;
 }
 
 /** What a server is, for the error naming the auth choice it refused. */
@@ -215,4 +232,111 @@ export async function readRequestBody(req: IncomingMessage, limit: number): Prom
     chunks.push(buffer);
   }
   return Buffer.concat(chunks, size).toString("utf8");
+}
+
+/** A JSON-RPC error body, which is what a JSON-RPC client can actually read. */
+export function sendJsonRpcError(
+  res: ServerResponse,
+  status: number,
+  code: number,
+  message: string,
+  headers: Record<string, string> = {}
+): void {
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
+  res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
+}
+
+export type JsonBodyResult =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false };
+
+/**
+ * The request body as parsed JSON, or `ok: false` once the failure has been
+ * answered — the caller has nothing left to send.
+ *
+ * Only the size cap is a 413. `for await` over the request also rejects when
+ * the client simply went away, and answering that with "request body too
+ * large" tells an operator the wrong thing about their own traffic. A capped
+ * request is also cut off rather than drained: the cap bounds memory, and
+ * reading the rest of an oversized body off the wire only to discard it would
+ * leave bandwidth and the socket unbounded.
+ */
+export async function readJsonRpcBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+  limit: number
+): Promise<JsonBodyResult> {
+  let body: string;
+  try {
+    body = await readRequestBody(req, limit);
+  } catch (error) {
+    if (error instanceof BodyTooLargeError) {
+      // Ours, and it names only the limit the operator configured.
+      res.writeHead(413, {
+        "content-type": "application/json; charset=utf-8",
+        connection: "close",
+      });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: error.message },
+          id: null,
+        }),
+        () => req.destroy()
+      );
+    } else if (!res.headersSent) {
+      sendJsonRpcError(res, 400, -32000, "could not read request body");
+    }
+    return { ok: false };
+  }
+  try {
+    return { ok: true, value: JSON.parse(body) };
+  } catch {
+    sendJsonRpcError(res, 400, -32700, "malformed JSON in request body");
+    return { ok: false };
+  }
+}
+
+/**
+ * A request listener that never lets a throw reach the socket unanswered.
+ *
+ * The caller learns only that it failed. An unexpected throw carries whatever
+ * the thrower put in it — a filesystem path, a connection string — and these
+ * endpoints answer anyone who reaches the port. The operator gets the detail
+ * on the server's own log instead, under `label`.
+ */
+export function guardedRequestListener(
+  label: string,
+  handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>
+): RequestListener {
+  return (req, res) => {
+    handle(req, res).catch((error: unknown) => {
+      getLogger().error(`${label} request failed`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (!res.headersSent) sendJsonRpcError(res, 500, -32603, "internal server error");
+      else res.destroy();
+    });
+  };
+}
+
+/** Listens, and resolves with the port actually bound — `0` asks for any. */
+export function listenHttp(server: HttpServer, port: number, host: string): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.off("error", reject);
+      const address = server.address();
+      resolve(typeof address === "object" && address !== null ? address.port : port);
+    });
+  });
+}
+
+/**
+ * Closes a server and every connection on it. `close()` alone waits for
+ * keep-alive sockets to go idle, which a test — or a Ctrl-C — never does.
+ */
+export async function closeHttpServer(server: HttpServer): Promise<void> {
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
 }

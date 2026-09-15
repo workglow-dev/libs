@@ -10,11 +10,14 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import {
   assertAuthChoice,
   authorizeBearer,
-  BodyTooLargeError,
-  getLogger,
+  closeHttpServer,
+  displayHostFor,
+  guardedRequestListener,
   hostWithoutPort,
-  readRequestBody,
+  listenHttp,
+  readJsonRpcBody,
   resolveAllowedHosts,
+  sendJsonRpcError as sendError,
 } from "@workglow/util";
 import {
   createServer as createHttpServer,
@@ -86,18 +89,6 @@ interface RequestContext {
   readonly router: McpSessionRouter<StreamableHTTPServerTransport>;
 }
 
-/** A JSON-RPC error body, which is what an MCP client can actually read. */
-function sendError(
-  res: ServerResponse,
-  status: number,
-  code: number,
-  message: string,
-  headers: Record<string, string> = {}
-): void {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
-  res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
-}
-
 async function serve(
   req: IncomingMessage,
   res: ServerResponse,
@@ -154,28 +145,9 @@ async function serve(
   // The body is read and parsed here rather than inside the transport because
   // the decision it drives — is this an initialize, and so may it open a
   // session — has to be made before there is a transport to hand it to.
-  let body: string;
-  try {
-    body = await readRequestBody(req, ctx.maxBodyBytes);
-  } catch (error) {
-    // Only the size cap is a 413. `for await` over the request also rejects when
-    // the client simply went away, and answering that with "request body too
-    // large" tells an operator the wrong thing about their own traffic.
-    if (error instanceof BodyTooLargeError) {
-      // Ours, and it names only the limit the operator configured.
-      sendError(res, 413, -32000, error.message);
-    } else if (!res.headersSent) {
-      sendError(res, 400, -32000, "could not read request body");
-    }
-    return;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    sendError(res, 400, -32700, "malformed JSON in request body");
-    return;
-  }
+  const body = await readJsonRpcBody(req, res, ctx.maxBodyBytes);
+  if (!body.ok) return;
+  const parsed = body.value;
 
   if (existing) {
     await existing.handleRequest(req, res, parsed);
@@ -227,41 +199,18 @@ export async function startMcpHttpServer(
     router,
   };
 
-  const server = createHttpServer((req, res) => {
-    serve(req, res, ctx).catch((error: unknown) => {
-      // The caller learns only that it failed. An unexpected throw here
-      // carries whatever the thrower put in it — a filesystem path, a
-      // connection string — and this endpoint answers anyone who reaches the
-      // port. The operator gets the detail on the server's own log instead.
-      getLogger().error("mcp server request failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      if (!res.headersSent) sendError(res, 500, -32603, "internal server error");
-      else res.destroy();
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(args.port, args.host, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-
-  const address = server.address();
-  const port = typeof address === "object" && address !== null ? address.port : args.port;
-  // A bare wildcard is not something a client config can connect to.
-  const displayHost = args.host === "0.0.0.0" || args.host === "::" ? "localhost" : args.host;
+  const server = createHttpServer(
+    guardedRequestListener("mcp server", (req, res) => serve(req, res, ctx))
+  );
+  const port = await listenHttp(server, args.port, args.host);
   return {
     server,
-    url: `http://${displayHost}:${port}${path}`,
+    url: `http://${displayHostFor(args.host)}:${port}${path}`,
     token,
     sessionCount: () => router.size,
     close: async () => {
       await router.closeAll();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await closeHttpServer(server);
     },
   };
 }

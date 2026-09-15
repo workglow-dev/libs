@@ -10,6 +10,7 @@ import {
   assertAuthChoice,
   authorizeBearer,
   bearerTokenMatches,
+  displayHostFor,
   generateBearerToken,
   hostWithoutPort,
   isWildcardHost,
@@ -64,6 +65,14 @@ describe("serverGuards", () => {
   it("names the bind addresses that imply no reachable host", () => {
     for (const host of ["", "0.0.0.0", "::", "[::]"]) expect(isWildcardHost(host)).toBe(true);
     expect(isWildcardHost("127.0.0.1")).toBe(false);
+  });
+
+  it("prints a dialable host for every wildcard bind, not just the IPv4 one", () => {
+    // A URL naming `[::]` goes into a card and a client config that nobody can
+    // connect to; every spelling of "any interface" has to print the same way.
+    for (const host of ["", "0.0.0.0", "::", "[::]"])
+      expect(displayHostFor(host)).toBe("localhost");
+    expect(displayHostFor("127.0.0.1")).toBe("127.0.0.1");
   });
 
   it("refuses an unauthenticated wildcard bind, and an unstated choice", () => {
