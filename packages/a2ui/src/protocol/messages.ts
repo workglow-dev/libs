@@ -20,6 +20,13 @@ export type A2UIDataBinding = {
   readonly path: string;
 };
 
+/** A value a component computes by calling one of the catalog's functions. */
+export type A2UIFunctionCall = {
+  readonly call: string;
+  readonly args: Record<string, unknown>;
+  readonly returnType?: "string" | "number" | "boolean" | "array" | "object" | "any" | "void";
+};
+
 /**
  * One component in a surface's adjacency list.
  *
@@ -162,6 +169,18 @@ export function isChildrenTemplate(value: unknown): value is A2UIChildrenTemplat
     !Array.isArray(value) &&
     typeof (value as { path?: unknown }).path === "string" &&
     typeof (value as { componentId?: unknown }).componentId === "string"
+  );
+}
+
+/** True when a property value is a call into the catalog's function set. */
+export function isFunctionCall(value: unknown): value is A2UIFunctionCall {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { call?: unknown }).call === "string" &&
+    typeof (value as { args?: unknown }).args === "object" &&
+    (value as { args?: unknown }).args !== null
   );
 }
 

@@ -105,6 +105,50 @@ describe("batchCatalogIssues", () => {
     expect(issues).toEqual([]);
   });
 
+  it("refuses a call to a function the catalog does not declare", () => {
+    // Left unchecked it resolves to undefined and draws an empty label, which
+    // reads as missing data rather than as a surface asking for something no
+    // host implements.
+    expect(
+      codes(
+        batch({
+          id: "root",
+          component: "Text",
+          text: { call: "exfiltrate", args: { value: { path: "/secret" } } },
+        })
+      )
+    ).toContain("UNKNOWN_FUNCTION");
+  });
+
+  it("finds a call nested inside an action context, not just at the top level", () => {
+    expect(
+      codes(
+        batch(
+          { id: "root", component: "Column", children: ["go"] },
+          {
+            id: "go",
+            component: "Button",
+            child: "label",
+            action: { event: { name: "go", context: { x: { call: "nope", args: {} } } } },
+          },
+          { id: "label", component: "Text", text: "Go" }
+        )
+      )
+    ).toContain("UNKNOWN_FUNCTION");
+  });
+
+  it("accepts a call the catalog declares", () => {
+    const issues = batchCatalogIssues(
+      batch({
+        id: "root",
+        component: "Text",
+        text: { call: "formatCurrency", args: { value: 12.5, currency: "USD" } },
+      }),
+      { catalog }
+    );
+    expect(issues).toEqual([]);
+  });
+
   it("refuses a surface with no root", () => {
     expect(codes(batch({ id: "body", component: "Text", text: "x" }))).toContain("MISSING_ROOT");
   });

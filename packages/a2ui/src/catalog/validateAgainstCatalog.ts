@@ -5,7 +5,7 @@
  */
 
 import type { A2UIComponent, A2UIServerMessage } from "../protocol/messages";
-import { isChildrenTemplate } from "../protocol/messages";
+import { isChildrenTemplate, isFunctionCall } from "../protocol/messages";
 import type { A2UISurfaceState } from "../protocol/surfaces";
 import { A2UI_ROOT_COMPONENT_ID, foldSurfaces } from "../protocol/surfaces";
 import type { A2UICatalogSpec, A2UIComponentSpec, A2UIPropertySpec } from "./CatalogSpec";
@@ -35,6 +35,7 @@ export type A2UICatalogIssue = {
     | "MISSING_PROPERTY"
     | "BAD_VALUE"
     | "BAD_URL"
+    | "UNKNOWN_FUNCTION"
     | "MISSING_ROOT"
     | "DANGLING_CHILD";
   readonly message: string;
@@ -110,15 +111,57 @@ function urlIssue(value: unknown, schemes: readonly string[]): string | undefine
   return undefined;
 }
 
+/**
+ * Every function name reached anywhere inside a value.
+ *
+ * A call can sit at any depth — a button's `action` context, one option's
+ * label, an argument of another call — so this walks rather than reading the
+ * top level. The catalog names its functions for the same reason it names its
+ * components, and a name it does not list is one no host implements: left
+ * unchecked it resolves to `undefined` and draws an empty label, which reads as
+ * missing data rather than as a surface asking for something that does not
+ * exist.
+ */
+function functionNamesIn(value: unknown, into: Set<string>): void {
+  if (isFunctionCall(value)) {
+    into.add(value.call);
+    for (const arg of Object.values(value.args)) functionNamesIn(arg, into);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) functionNamesIn(entry, into);
+    return;
+  }
+  if (typeof value === "object" && value !== null) {
+    for (const entry of Object.values(value as Record<string, unknown>))
+      functionNamesIn(entry, into);
+  }
+}
+
 function checkComponent(
   component: A2UIComponent,
   surfaceId: string,
   spec: A2UIComponentSpec,
-  schemes: readonly string[]
+  schemes: readonly string[],
+  functions: readonly string[]
 ): readonly A2UICatalogIssue[] {
   const issues: A2UICatalogIssue[] = [];
   const at = { surfaceId, componentId: component.id };
   const known = new Map(spec.properties.map((property) => [property.name, property]));
+
+  const called = new Set<string>();
+  for (const [key, value] of Object.entries(component)) {
+    if (key === "id" || key === "component") continue;
+    functionNamesIn(value, called);
+  }
+  for (const name of called) {
+    if (functions.includes(name)) continue;
+    issues.push({
+      ...at,
+      code: "UNKNOWN_FUNCTION",
+      message: `"${component.id}" calls "${name}", which this catalog has no function for`,
+    });
+  }
 
   for (const property of spec.properties) {
     if (property.required && component[property.name] === undefined) {
@@ -210,7 +253,7 @@ export function surfaceCatalogIssues(
       });
       continue;
     }
-    issues.push(...checkComponent(component, surface.surfaceId, spec, schemes));
+    issues.push(...checkComponent(component, surface.surfaceId, spec, schemes, catalog.functions));
     for (const id of referencedComponentIds(component, catalog)) {
       if (surface.components.has(id)) continue;
       issues.push({

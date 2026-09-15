@@ -12,12 +12,29 @@ which the host renders with its own widgets. Nothing the agent sends executes.
 
 | Subpath | What it holds |
 | --- | --- |
-| `./protocol` | The v0.9 wire types, batch validation, JSON-pointer data model patching, and the fold from a message stream to surface state |
-| `./catalog` | The component allowlist, the check that enforces it, and the prompt text that teaches an agent to write against it |
+| `./protocol` | The v0.9 wire types, batch validation, JSON-pointer data model patching, the fold from a message stream to surface state, and the binding layer a renderer resolves values through |
+| `./catalog` | The component allowlist, the check that enforces it, the client-side functions it declares, and the prompt text that teaches an agent to write against it |
 | `./tasks` | `A2UISurfaceTask`, and the `IA2UIConnector` seam a host implements |
 
 There is no renderer here, on purpose: a renderer is a framework choice, and
-every one of them needs the same three things above.
+every one of them needs the same things above. What is here is everything a
+renderer needs that is **not** a framework choice — including the part that is
+easy to get subtly wrong:
+
+```typescript
+import { expandChildren, resolveValue } from "@workglow/a2ui/protocol";
+
+// A template drawn once per item, each copy reading its own item.
+const slots = expandChildren(component.children, { dataModel, basePath: "" });
+for (const slot of slots) {
+  const props = resolveProps(byId(slot.componentId), { dataModel, basePath: slot.basePath });
+}
+```
+
+`basePath` is what makes a repeated row read the Nth item rather than the
+first. A renderer that resolves every path against the root renders a list
+where every row shows the same data — which looks like a rendering bug and is
+a resolution one.
 
 ## Drawing a surface
 
@@ -75,6 +92,12 @@ refusal: unknown components, unknown properties, values outside a closed set,
 child ids nothing defines, and URL schemes a renderer must not fetch. A renderer
 that silently skips an unknown component makes an over-reaching agent look like a
 quiet one.
+
+**A function the catalog does not declare is refused too.** A call can sit at
+any depth — a button's action context, one option's label, an argument of
+another call — so the check walks rather than reading the top level. Unchecked,
+such a call resolves to nothing and draws an empty label, which reads as
+missing data rather than as a surface asking for something no host implements.
 
 **A batch is checked after folding, never per message.** The protocol's own
 incremental idiom defines a container before the children it names and patches a

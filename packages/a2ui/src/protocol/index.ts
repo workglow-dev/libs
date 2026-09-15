@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export * from "./binding";
 export * from "./dataModel";
 export * from "./messages";
 export * from "./surfaces";

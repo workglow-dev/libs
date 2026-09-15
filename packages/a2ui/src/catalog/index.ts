@@ -7,5 +7,6 @@
 export * from "./CatalogSpec";
 export * from "./basicCatalog";
 export * from "./describeCatalog";
+export * from "./functions";
 export * from "./renderTool";
 export * from "./validateAgainstCatalog";
