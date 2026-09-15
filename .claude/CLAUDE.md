@@ -556,15 +556,26 @@ section `graph` — `task-graph` selects that package's co-located `__tests__`.
 
 **`--shard i/N`** partitions whatever the rest of the selection resolves to, which is how
 the blocking workflow runs the unit slice as four parallel jobs instead of the one that
-took four times every other job on the board. What makes the split pay is that the cost is
-almost all per FILE and barely any of it the tests: vitest accounts the unit slice as ~75%
-setup (a fresh module registry per file, `vitest.setup.ts` bootstrapping the task registry
-into each) and ~20% transform, so dividing the file list divides the wall clock —
-measured 3.5x across four shards. `scripts/lib/testShards.ts` holds the partition, dealt
-round-robin from a **sorted** list: each shard runs on its own machine off a discovery walk
-in `readdirSync` order, so an order-dependent partition would let a file land in two shards,
-or in none and never run with every job still green. An empty shard passes, which is what a
-`--changed` pull request narrowed to a handful of files produces.
+took four times every other job on the board. What makes the split pay is that most of the
+cost is per FILE: vitest accounts the slice as ~51% setup (a fresh module registry per file,
+`vitest.setup.ts` bootstrapping the task registry into each), ~21% transform, ~5% import and
+~22% tests. Four shards measured 2.9x, not 4x, and transform is the shortfall — it is mostly
+the shared module graph, so a quarter of the files still transforms nearly all of it (43% of
+that shard's wall clock against 21% of the whole slice's). That is the part `fsModuleCache`
+would address, not sharding.
+
+`scripts/lib/testShards.ts` holds the partition, dealt round-robin from a **sorted** list:
+each shard runs on its own machine off a discovery walk in `readdirSync` order, so an
+order-dependent partition would let a file land in two shards, or in none and never run with
+every job still green. An empty shard passes, which is what a `--changed` pull request
+narrowed to a handful of files produces.
+
+**Measure with the passphrase UNSET** (`env -u WORKGLOW_SECRETS_PASSPHRASE`) when the number
+is meant to describe the unit job, which sets no secret. With one set, `preload-credentials`
+runs per test file and derives a 600k-iteration PBKDF2 key per credential — nine of them,
+~290ms each — which is 53% of the wall clock on this slice and swamps whatever else is being
+measured. It is also why a local full unit run takes 871s where the same files take 333s
+without it.
 
 **Running the same files under Bun** — `bun test` resolves `import { vi } from "vitest"` to
 its own compatibility shim, which is missing `setSystemTime`, `stubGlobal`/`stubEnv` and
