@@ -27,26 +27,34 @@ function HumanPressEnterRow({
   readonly request: IHumanRequest;
   readonly onFinish: (r: IHumanResponse) => void;
 }): React.ReactElement {
-  useInput((_input, key) => {
+  // Asked of the model rather than hardcoded, because this row serves a
+  // notify/display acknowledgement AND an elicit with no fields to fill. Only
+  // the latter can be refused, and a letter key is free to mean it here: unlike
+  // the form, this row takes no text.
+  const canDecline = humanPromptModel({
+    kind: request.kind,
+    message: request.message,
+    schema: request.contentSchema,
+    data: request.contentData,
+  }).actions.includes("decline");
+
+  useInput((input, key) => {
+    const answer = (action: IHumanResponse["action"]): void =>
+      onFinish({ requestId: request.requestId, action, content: undefined, done: true });
     if (key.return) {
-      onFinish({
-        requestId: request.requestId,
-        action: "accept",
-        content: undefined,
-        done: true,
-      });
+      answer("accept");
+    }
+    if (canDecline && input.toLowerCase() === "n") {
+      answer("decline");
     }
     if (key.escape) {
-      onFinish({
-        requestId: request.requestId,
-        action: "cancel",
-        content: undefined,
-        done: true,
-      });
+      answer("cancel");
     }
   });
 
-  return <Text dimColor>Enter to continue · Esc to cancel</Text>;
+  return (
+    <Text dimColor>Enter to continue{canDecline ? " · n to decline" : ""} · Esc to cancel</Text>
+  );
 }
 
 function HumanNotifyPanel({
@@ -175,7 +183,12 @@ function HumanElicitPanel({
           onFinish={(response) => {
             onFinish({
               requestId: response.requestId,
-              action: "cancel",
+              // A refusal survives; anything else becomes `cancel`. A form that
+              // failed to load has no values, so Enter cannot report an accept
+              // — but the person who pressed `n` did refuse, and collapsing
+              // that into `cancel` would advertise an action this panel then
+              // threw away.
+              action: response.action === "decline" ? "decline" : "cancel",
               content: undefined,
               done: true,
             });
@@ -254,6 +267,17 @@ function HumanElicitPanel({
           onFinish({
             requestId: request.requestId,
             action: "cancel",
+            content: undefined,
+            done: true,
+          });
+        }}
+        // Carries no content, like an approval's decline: a refusal is not a
+        // partially filled form, and anything under the schema would land on
+        // the task's output ports as if the person had written it.
+        onDecline={() => {
+          onFinish({
+            requestId: request.requestId,
+            action: "decline",
             content: undefined,
             done: true,
           });

@@ -39,9 +39,4 @@ runHumanConnectorConformance({
     concurrent: true,
     abortMidElicit: true,
   },
-  // The elicit form offers submit and Esc, so a person can walk away from it
-  // but cannot refuse it. Unlike a confirm, nothing turns on the difference
-  // there yet — an elicit's caller wanted a value and gets none either way —
-  // so this is recorded rather than papered over.
-  expectedFailures: ["roundtrip.decline"],
 });
