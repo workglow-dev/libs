@@ -191,6 +191,24 @@ async function spawnRunner(
   label: string,
   opts: { tier?: "all" | "e2e" } = { tier: "all" }
 ): Promise<number> {
+  // Decrypt the credential store here, in the one process every runner is
+  // spawned from, so the child inherits the keys already in its environment.
+  // The per-file test preload then finds nothing left to decrypt and derives
+  // no key — the difference between eight PBKDF2 derivations once and eight per
+  // test file. Vitest does the same in its own global setup, for runs that do
+  // not come through this script; `bun test` has no such hook, so for Bun this
+  // is the only thing between a 700-file run and 700 decryptions of the same
+  // eight secrets.
+  //
+  // Imported HERE rather than at the top of the file, and this is load-bearing:
+  // the chain reaches `packages/storage/src`, whose `@workglow/*` specifiers
+  // resolve through each package's `exports` into `dist`. Every other import in
+  // this module is `node:` or a sibling script, which is what lets
+  // `--check-sections` run on a tree that has never been built — the CI
+  // discovery job does exactly that. Spawning a runner already requires `dist`,
+  // so the dependency is real only on this path.
+  const { hydrateTestCredentials } = await import("./lib/test-credentials");
+  await hydrateTestCredentials();
   const proc = Bun.spawn(args, {
     cwd: ROOT,
     stdio: ["inherit", "inherit", "inherit"],

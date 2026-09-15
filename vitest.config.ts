@@ -198,6 +198,12 @@ const projects = listTestProjects(discovered).map((p) => {
 export default defineConfig({
   envDir: __dirname,
   test: {
+    // Runs in the main process before any worker is spawned, and a worker
+    // inherits `process.env` — which is the whole point: the credential store
+    // is decrypted once here instead of once per test file. Absolute, like
+    // every other path in this file, since a relative one resolves against
+    // each project's own root.
+    globalSetup: [abs("vitest.globalSetup.ts")],
     projects,
     coverage: {
       provider: "v8", // or 'istanbul'

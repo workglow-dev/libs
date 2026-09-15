@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -22,7 +22,12 @@ interface TestCredentialsModule {
   installAndHydrate: (
     passphrase: string | undefined,
     secretsDir?: string
-  ) => Promise<{ readonly unlocked: boolean; readonly hydrated: readonly string[] }>;
+  ) => Promise<
+    | { readonly status: "no-passphrase" }
+    | { readonly status: "nothing-to-do"; readonly present: readonly string[] }
+    | { readonly status: "hydrated"; readonly hydrated: readonly string[] }
+    | { readonly status: "locked"; readonly reason: string }
+  >;
 }
 
 let buildCredentialStore: TestCredentialsModule["buildCredentialStore"];
@@ -63,7 +68,7 @@ describe("installAndHydrate", () => {
 
   it("is a no-op when no passphrase is provided", async () => {
     const result = await installAndHydrate(undefined, secretsDir);
-    expect(result).toEqual({ unlocked: false, hydrated: [] });
+    expect(result).toEqual({ status: "no-passphrase" });
     for (const k of ENV_VARS) expect(process.env[k]).toBeUndefined();
   });
 
@@ -74,7 +79,8 @@ describe("installAndHydrate", () => {
     await encrypted.put("openai-api-key", "sk-oai-test");
 
     const result = await installAndHydrate(passphrase, secretsDir);
-    expect(result.unlocked).toBe(true);
+    expect(result.status).toBe("hydrated");
+    if (result.status !== "hydrated") return;
     expect([...result.hydrated].sort()).toEqual(["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]);
     expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
     expect(process.env.OPENAI_API_KEY).toBe("sk-oai-test");
@@ -84,12 +90,15 @@ describe("installAndHydrate", () => {
     const passphrase = "p";
     const { encrypted } = await buildCredentialStore(passphrase, secretsDir);
     await encrypted.put("anthropic-api-key", "sk-ant-from-store");
+    await encrypted.put("openai-api-key", "sk-oai-from-store");
     process.env.ANTHROPIC_API_KEY = "sk-ant-from-shell";
 
     const result = await installAndHydrate(passphrase, secretsDir);
-    expect(result.unlocked).toBe(true);
+    expect(result.status).toBe("hydrated");
+    if (result.status !== "hydrated") return;
     expect(result.hydrated).not.toContain("ANTHROPIC_API_KEY");
     expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-from-shell");
+    expect(process.env.OPENAI_API_KEY).toBe("sk-oai-from-store");
   });
 
   it("leaves env untouched when the passphrase is wrong", async () => {
@@ -98,12 +107,63 @@ describe("installAndHydrate", () => {
 
     const result = await installAndHydrate("wrong-passphrase", secretsDir);
 
-    expect(result).toEqual({ unlocked: false, hydrated: [] });
+    expect(result.status).toBe("locked");
     expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
   });
 
-  it("returns unlocked:true with empty hydrated when no ciphertext exists", async () => {
+  it("has nothing to do when the store holds no credentials", async () => {
     const result = await installAndHydrate("any-passphrase", secretsDir);
-    expect(result).toEqual({ unlocked: true, hydrated: [] });
+    expect(result).toEqual({ status: "nothing-to-do", present: [] });
+  });
+
+  /**
+   * The point of the whole arrangement: something earlier in the process tree
+   * has already hydrated, so this call must reach its answer without opening
+   * the store. It is asserted as "did not decrypt" rather than as a duration,
+   * by handing it a passphrase that could not possibly open this store — a
+   * call that opened it would report `locked` instead.
+   */
+  it("skips the store entirely when every stored credential is already in env", async () => {
+    const passphrase = "the-real-one";
+    const { encrypted } = await buildCredentialStore(passphrase, secretsDir);
+    await encrypted.put("anthropic-api-key", "sk-ant-test");
+    await encrypted.put("openai-api-key", "sk-oai-test");
+    process.env.ANTHROPIC_API_KEY = "sk-ant-already";
+    process.env.OPENAI_API_KEY = "sk-oai-already";
+
+    const result = await installAndHydrate("a-passphrase-that-cannot-open-this", secretsDir);
+
+    expect(result.status).toBe("nothing-to-do");
+    if (result.status !== "nothing-to-do") return;
+    expect([...result.present].sort()).toEqual(["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]);
+    expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-already");
+  });
+
+  /** One credential short is still a reason to open the store, and only that one is decrypted into env. */
+  it("opens the store when a stored credential is missing from env", async () => {
+    const passphrase = "p";
+    const { encrypted } = await buildCredentialStore(passphrase, secretsDir);
+    await encrypted.put("anthropic-api-key", "sk-ant-test");
+    await encrypted.put("openai-api-key", "sk-oai-test");
+    process.env.ANTHROPIC_API_KEY = "sk-ant-already";
+
+    const result = await installAndHydrate(passphrase, secretsDir);
+
+    expect(result.status).toBe("hydrated");
+    if (result.status !== "hydrated") return;
+    expect(result.hydrated).toEqual(["OPENAI_API_KEY"]);
+    expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-already");
+    expect(process.env.OPENAI_API_KEY).toBe("sk-oai-test");
+  });
+
+  /**
+   * Running the suite must not write to the credential folder. Hydrating used
+   * to unlock unconditionally, and unlocking a store with no sentinel writes
+   * one — so a test run left a file behind in `.secrets`.
+   */
+  it("does not write to the store", async () => {
+    const before = readdirSync(secretsDir).sort();
+    await installAndHydrate("any-passphrase", secretsDir);
+    expect(readdirSync(secretsDir).sort()).toEqual(before);
   });
 });

@@ -570,12 +570,30 @@ order-dependent partition would let a file land in two shards, or in none and ne
 every job still green. An empty shard passes, which is what a `--changed` pull request
 narrowed to a handful of files produces.
 
-**Measure with the passphrase UNSET** (`env -u WORKGLOW_SECRETS_PASSPHRASE`) when the number
-is meant to describe the unit job, which sets no secret. With one set, `preload-credentials`
-runs per test file and derives a 600k-iteration PBKDF2 key per credential — nine of them,
-~290ms each — which is 53% of the wall clock on this slice and swamps whatever else is being
-measured. It is also why a local full unit run takes 871s where the same files take 333s
-without it.
+**Test credentials are decrypted once per RUN, not once per test file.** Each credential in
+`.secrets` carries its own random salt, so opening the store derives a 600k-iteration PBKDF2
+key per credential (~290ms) plus one for the unlock sentinel — nine for a store of eight.
+`preload-credentials` runs from `vitest.setup.ts` and `bunfig.toml`, both of which fire per
+test file in a fresh process, so that was ~2.6s of key derivation per file: 53% of the wall
+clock on the unit slice, and 246s against 110s on a quarter of it.
+
+Three places call `hydrateTestCredentials` now, and only the first normally does any work:
+`vitest.globalSetup.ts` (the main process, before any worker is spawned — a worker inherits
+`process.env`), `spawnRunner` in `scripts/test.ts` (the one process both runners are spawned
+from, which is what covers `bun test`, since Bun has no global-setup hook), and the per-file
+preload, which stays wired so a single file run directly still gets its keys.
+
+What makes the repeat calls free is that `installAndHydrate` asks the STORE what is left to
+do — `kv.get` returns the stored ciphertext as-is, so "is this credential present" is a file
+read where reading its value is a derivation — and returns `nothing-to-do` without opening
+anything. Deliberately not a "already hydrated" marker in the environment: anyone can export
+one, and if it were wrong the keys would simply be absent, which every integration test reads
+as *skip* rather than as a failure. It also no longer unlocks unconditionally, so running the
+suite no longer writes a sentinel into `.secrets` as a side effect.
+
+Still **measure with the passphrase UNSET** (`env -u WORKGLOW_SECRETS_PASSPHRASE`) when the
+number is meant to describe the unit job, which configures no secret at all: one hydrate per
+run is cheap but not free, and the job it describes does not pay even that.
 
 **Running the same files under Bun** — `bun test` resolves `import { vi } from "vitest"` to
 its own compatibility shim, which is missing `setSystemTime`, `stubGlobal`/`stubEnv` and
