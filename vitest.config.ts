@@ -107,6 +107,30 @@ const shared = {
   // Vitest uses hookTimeout for beforeEach/afterAll separately from testTimeout; keep both aligned
   hookTimeout: 15000,
   retry: 1,
+  // Transform is the cost sharding cannot divide: it is mostly the shared module
+  // graph, so a quarter of the unit files still transforms nearly all of it.
+  // Persisting the results turns that into a read on every run AFTER the first,
+  // which is why this is a local-development win and not a CI one: a CI job
+  // starts on a fresh container, and within one run there is nothing to save —
+  // vitest transforms in the main process and serves workers from memory, so a
+  // module is transformed at most once per project per run either way. Carrying
+  // the directory between runs through an `actions/cache` entry was measured
+  // and dropped: `bun.lock` moves often enough here that a third of runs would
+  // start cold regardless (vitest clears the cache when the lockfile hash
+  // changes), and one entry per shard per lockfile generation would crowd the
+  // repo-wide cache cap that the provider jobs' model caches live in.
+  //
+  // It belongs HERE rather than at the root, twice over. `fsModuleCache` is a
+  // per-PROJECT option (vitest lists it among the project CLI overrides) and
+  // these projects set `extends: false`, so a root-level value would reach none
+  // of them. And `fsModuleCachePath` resolves against the project's own root,
+  // which would scatter eighteen cache directories through `packages/*` and
+  // `providers/*` instead of one a developer can find and clear. Sharing it
+  // across projects is sound because they share the resolver plugin and these
+  // options, so the same file transforms to the same output whichever project
+  // asks for it.
+  fsModuleCache: true,
+  fsModuleCachePath: abs("node_modules/.vitest-cache"),
   exclude: [...configDefaults.exclude, ...tierExclude],
 };
 
@@ -198,6 +222,12 @@ const projects = listTestProjects(discovered).map((p) => {
 export default defineConfig({
   envDir: __dirname,
   test: {
+    // Runs in the main process before any worker is spawned, and a worker
+    // inherits `process.env` — which is the whole point: the credential store
+    // is decrypted once here instead of once per test file. Absolute, like
+    // every other path in this file, since a relative one resolves against
+    // each project's own root.
+    globalSetup: [abs("vitest.globalSetup.ts")],
     projects,
     coverage: {
       provider: "v8", // or 'istanbul'

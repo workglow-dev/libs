@@ -546,12 +546,30 @@ Import from `vitest`. Generic suites are extracted to shared helpers
 ```sh
 bun scripts/test.ts [--all] [kinds...] [sections...] [runners...] [options]
 bun scripts/test.ts --changed [base]    # packages affected since base (default origin/main)
+bun scripts/test.ts vitest unit --shard 2/4   # one of the four parallel CI unit jobs
 ```
 
 Sections are **discovered**, never enumerated; `--check-sections` fails if any test file
 is unreachable by section+kind selection. Note `packages/test/src/test/task-graph*/` is
 section `graph` — `task-graph` selects that package's co-located `__tests__`.
 `--changed` delegates package selection to Turbo, so dependents run too.
+
+**`--shard i/N`** partitions whatever the selection resolves to; the blocking workflow runs
+the unit slice as four parallel shards. `scripts/lib/testShards.ts` deals the partition from
+a **sorted** list — each shard runs on its own machine, so an order-dependent partition could
+put a file in two shards or in none. An empty shard passes.
+
+**`fsModuleCache` is on**, persisting transforms to `node_modules/.vitest-cache`. It is a
+per-project option and these projects set `extends: false`, so it lives in `shared`, with an
+explicit path because the default resolves against each project's own root. Nothing prunes
+it between whole-cache wipes (vitest clears it when `bun.lock` changes);
+`npx vitest --clearCache` resets it. CI does not carry it between runs; it is a local win.
+
+**Test credentials are hydrated once per run**, not once per test file: `vitest.globalSetup.ts`
+and `spawnRunner` in `scripts/test.ts` (Bun has no global-setup hook) do it before any worker
+spawns, and the per-file preload then finds nothing to decrypt. It stays wired so a single
+file run directly still gets its keys. Do not put the work back in a per-file hook — opening
+the store is a 600k-iteration PBKDF2 derivation per credential.
 
 **Running the same files under Bun** — `bun test` resolves `import { vi } from "vitest"` to
 its own compatibility shim, which is missing `setSystemTime`, `stubGlobal`/`stubEnv` and

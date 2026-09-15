@@ -141,4 +141,72 @@ describe("scripts/test.ts", () => {
       expect(stderr).toContain("WORKGLOW_COVERAGE is set but");
     });
   });
+
+  /**
+   * `shardFiles` is tested over lists in `testShards.test.ts`; what is tested
+   * here is the wiring, over the real selection the CI jobs pass. The failure
+   * this catches is the silent one: a shard that resolves to more or fewer
+   * files than it should still passes, and four green jobs then report a suite
+   * that was never run whole.
+   */
+  describe("--shard", () => {
+    async function unitShardFiles(shardArg: readonly string[]): Promise<string[]> {
+      const proc = Bun.spawn(
+        ["bun", "scripts/test.ts", "vitest", "unit", ...shardArg, "--dry-run"],
+        { cwd: import.meta.dir + "/..", stdout: "pipe", stderr: "pipe" }
+      );
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      if (exitCode !== 0) throw new Error(`scripts/test.ts exited ${exitCode}: ${stderr}`);
+      const line = stdout.split("\n").find((l) => l.startsWith("["));
+      if (line === undefined) throw new Error(`no runner command in output:\n${stdout}`);
+      // ["npx","vitest","run", ...files] — the flags carry no ".test.ts".
+      return (JSON.parse(line) as string[]).filter((a) => a.endsWith(".test.ts"));
+    }
+
+    test("the four shards CI runs are exactly the unsharded selection", async () => {
+      const [whole, ...pieces] = await Promise.all([
+        unitShardFiles([]),
+        unitShardFiles(["--shard", "1/4"]),
+        unitShardFiles(["--shard", "2/4"]),
+        unitShardFiles(["--shard", "3/4"]),
+        unitShardFiles(["--shard", "4/4"]),
+      ]);
+      expect(whole.length).toBeGreaterThan(0);
+      // Sorted-and-equal covers both halves at once: a file in two shards makes
+      // the union longer than the whole, and a file in none makes it shorter.
+      expect(pieces.flat().sort()).toEqual([...whole].sort());
+      const sizes = pieces.map((p) => p.length);
+      expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1);
+    }, 60_000);
+
+    test("is consumed as an option, not read as a section", async () => {
+      const proc = Bun.spawn(
+        ["bun", "scripts/test.ts", "vitest", "unit", "--shard", "2/4", "--dry-run"],
+        { cwd: import.meta.dir + "/..", stdout: "pipe", stderr: "pipe" }
+      );
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe("");
+      expect(stdout).toContain("shard 2/4");
+    });
+
+    test("refuses a malformed value instead of running a slice as the whole", async () => {
+      const proc = Bun.spawn(["bun", "scripts/test.ts", "vitest", "unit", "--shard", "5/4"], {
+        cwd: import.meta.dir + "/..",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("--shard index must be between 1 and 4");
+    });
+  });
 });
