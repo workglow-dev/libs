@@ -30,6 +30,8 @@ import {
   matchesKind,
   ROOT,
 } from "./lib/testDiscovery";
+import type { Shard } from "./lib/testShards";
+import { parseShard, shardFiles } from "./lib/testShards";
 import { resolveTestTarget } from "./lib/workspaceSource";
 
 const KNOWN_RUNNERS = ["bun", "vitest"] as const;
@@ -75,6 +77,9 @@ Options:
                     filters the file list so CI slices still apply.
   --except a,b      Run every section EXCEPT these (the sections that have their own
                     CI job). Complements the positional section list.
+  --shard i/N       Run only the i-th of N equal pieces of the selection, so one
+                    slice can be spread over N parallel CI jobs. Every piece
+                    together is the whole selection, and an empty piece passes.
   --check-sections  Verify every test file is reachable by section+kind selection
   --dry-run         Print runner commands without executing them
   --help            Show this usage message
@@ -85,6 +90,7 @@ Examples:
   bun scripts/test.ts storage unit          # Run only unit tests in storage dirs
   bun scripts/test.ts bun storage unit      # Run storage unit tests under Bun
   bun scripts/test.ts integration --except rag,browser
+  bun scripts/test.ts vitest unit --shard 2/4   # one of four parallel unit jobs
   bun scripts/test.ts --changed             # turbo test for packages affected since origin/main
   bun scripts/test.ts --changed unit        # unit tests in those packages (what CI uses)
 `);
@@ -285,12 +291,33 @@ const excludedSections = (exceptValue ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
+
+/**
+ * `--shard i/N` — run one of N equal pieces of whatever the rest of the
+ * selection resolves to, so a slice too big for one CI job becomes N parallel
+ * ones. The partition itself is {@link shardFiles}; see that module for why it
+ * is dealt from a sorted list rather than sliced.
+ */
+const shardIdx = rawArgs.indexOf("--shard");
+const shardValue = shardIdx === -1 ? undefined : rawArgs[shardIdx + 1];
+let shard: Shard | undefined;
+if (shardIdx !== -1) {
+  const parsed = parseShard(shardValue);
+  if (!parsed.ok) {
+    console.error(parsed.error);
+    process.exit(1);
+  }
+  shard = parsed.shard;
+}
+
 const filteredArgs = rawArgs.filter(
   (a, i) =>
     a !== "--all" &&
     a !== "--dry-run" &&
     a !== "--except" &&
-    !(exceptIdx !== -1 && i === exceptIdx + 1)
+    a !== "--shard" &&
+    !(exceptIdx !== -1 && i === exceptIdx + 1) &&
+    !(shardIdx !== -1 && i === shardIdx + 1)
 );
 
 const unknownExcluded = excludedSections.filter((s) => !KNOWN_SECTIONS.includes(s));
@@ -363,30 +390,65 @@ if (changedBase !== undefined) {
 
 // ── Collect test files (when section or kind filter is given) ──────────────────
 
+// `--shard` has to name the files too: a shard is a subset, and the only way to
+// express a subset to either runner is an explicit list.
 const needsFileFilter =
   sections.length > 0 ||
   kinds.length > 0 ||
   excludedSections.length > 0 ||
+  shard !== undefined ||
   (changedDirs !== undefined && changedDirs !== "all");
 let selected = needsFileFilter
   ? allFiles
       .filter((f) => (sections.length === 0 ? true : sections.includes(f.section)))
       .filter((f) => !excludedSections.includes(f.section))
       .filter((f) => matchesKind(f.path, kinds))
+      // An explicit list overrides the config's tier gate, which is what keeps
+      // `.e2e` files out of every run that did not name the kind — so with no
+      // kind given (`--all --shard 1/4`) the exclusion has to be applied here
+      // instead, or the shard hands vitest the paid, multi-GB tier by name.
+      .filter((f) => kinds.includes("end2end") || !f.path.endsWith(".e2e.test.ts"))
   : [];
 if (changedDirs !== undefined && changedDirs !== "all") {
   selected = filesInChangedPackages(needsFileFilter ? selected : allFiles, changedDirs);
 }
+
+/**
+ * The shard is taken from each runner's OWN list, after the compatibility
+ * filters below and never before them. Sharding the combined list would deal a
+ * `bun:test` file into a vitest shard, where it is dropped as incompatible —
+ * and no other shard would hold it, so the file runs nowhere and every job
+ * still passes.
+ */
+const shardOf = (paths: string[]): string[] =>
+  shard === undefined ? paths : shardFiles(paths, shard);
+
 // A `@vitest-environment` file needs a DOM Bun's runner cannot provide; running
 // it there fails on the environment rather than on anything under test.
 const files: string[] = orderFilteredTestFiles(
-  selected.filter((f) => f.runner !== "vitest").map((f) => f.path)
+  shardOf(selected.filter((f) => f.runner !== "vitest").map((f) => f.path))
 );
 // A `bun:test` file uses Bun-only APIs and cannot run under vitest; skip it there
 // rather than letting vitest fail on an unresolvable `bun:test` import.
 const vitestFiles: string[] = orderFilteredTestFiles(
-  selected.filter((f) => f.runner !== "bun").map((f) => f.path)
+  shardOf(selected.filter((f) => f.runner !== "bun").map((f) => f.path))
 );
+
+/**
+ * Why this runner has nothing to run, for a selection that was not empty to
+ * begin with. An empty SHARD is ordinary and passes — a `--changed` pull request
+ * narrows the suite to a handful of files, and the shards past the first then
+ * hold none of them — so it has to read as that rather than as the
+ * incompatible-files case, which is about the tree and not about this job.
+ */
+function emptySelectionReason(runner: "Bun" | "vitest"): string {
+  if (shard !== undefined) {
+    return `Shard ${shard.index}/${shard.count} holds no ${runner} files (${selected.length} file(s) in the selection).`;
+  }
+  return runner === "Bun"
+    ? "No Bun-compatible files in selection (all need a vitest environment)."
+    : "No vitest-compatible files in selection (all are bun-only).";
+}
 
 if (needsFileFilter && selected.length === 0) {
   const kindLabel = kinds.length > 0 ? kinds.join("+") : "all";
@@ -398,9 +460,16 @@ if (needsFileFilter && selected.length === 0) {
 const kindLabel = kinds.length > 0 ? kinds.join("+") : "all";
 const sectionLabel = sections.length > 0 ? sections.join("+") : "all";
 const exceptLabel = excludedSections.length > 0 ? ` except [${excludedSections.join("+")}]` : "";
-const fileCount = files.length > 0 ? `${files.length} file(s)` : "all files";
+const shardLabel = shard === undefined ? "" : ` shard ${shard.index}/${shard.count}`;
+// The count is the list the runner about to be spawned will get, and "all
+// files" is reserved for the case where no list is passed at all. Reading the
+// length alone said "all files" for a selection that resolved to none — which
+// is what an empty shard is, and it is the one case where the runner running
+// everything instead would be a real failure.
+const runnerFiles = wantsBun ? files : vitestFiles;
+const fileCount = needsFileFilter ? `${runnerFiles.length} file(s)` : "all files";
 console.log(
-  `\nRunning ${kindLabel} tests in sections [${sectionLabel}]${exceptLabel} — ${fileCount}\n`
+  `\nRunning ${kindLabel} tests in sections [${sectionLabel}]${exceptLabel}${shardLabel} — ${fileCount}\n`
 );
 
 // `.e2e` files are excluded by the vitest config unless the caller named the
@@ -412,13 +481,13 @@ if (dryRun) {
   if (wantsBun && needsFileFilter && files.length === 0) {
     // Same trap as the vitest branch below: an empty list makes `bun test` mean
     // "run everything under the configured root".
-    console.log("# bun: skipped — no Bun-compatible files in selection");
+    console.log(`# bun: skipped — ${emptySelectionReason("Bun")}`);
   } else if (wantsBun) console.log(JSON.stringify(buildBunTestArgs(files)));
   else if (needsFileFilter && vitestFiles.length === 0) {
     // An empty file list makes `vitest run` mean "run everything", so a
     // selection that filtered down to nothing must print no vitest command
     // rather than one that silently widens to the whole suite.
-    console.log("# vitest: skipped — no vitest-compatible files in selection");
+    console.log(`# vitest: skipped — ${emptySelectionReason("vitest")}`);
   } else {
     console.log(JSON.stringify(buildVitestArgs(vitestFiles)));
   }
@@ -429,14 +498,14 @@ if (dryRun) {
 
 if (wantsBun) {
   if (needsFileFilter && files.length === 0) {
-    console.log("No Bun-compatible files in selection (all need a vitest environment).");
+    console.log(emptySelectionReason("Bun"));
     process.exit(0);
   }
   process.exit(await spawnRunner(buildBunTestArgs(files), "Bun test", { tier }));
 }
 
 if (needsFileFilter && vitestFiles.length === 0) {
-  console.log("No vitest-compatible files in selection (all are bun-only).");
+  console.log(emptySelectionReason("vitest"));
   process.exit(0);
 }
 process.exit(await spawnRunner(buildVitestArgs(vitestFiles), "Vitest test", { tier }));

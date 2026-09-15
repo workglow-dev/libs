@@ -117,9 +117,28 @@ jobs:
             examples/*/dist/**
           retention-days: 1
 
+  # Sharded, and it is the only job here that is. The unit slice is ~700 files
+  # and ran four times the wall clock of every other job in this workflow, so
+  # the run finished when this job did and nothing else on the board mattered.
+  # Almost none of that is test execution: vitest reports it as ~75% setup and
+  # ~20% transform, both paid PER FILE (a fresh module registry each time, and
+  # `vitest.setup.ts` bootstrapping the task registry into it), which is why
+  # dividing the file list divides the wall clock — measured 3.5x across four
+  # shards. `scripts/lib/testShards.ts` does the partition and says why it is
+  # dealt from a sorted list rather than sliced.
+  #
+  # `fail-fast: false` because the shards are one job's worth of tests split up:
+  # cancelling the rest on the first red one would report a fraction of the
+  # failures and send someone back for a second full run to see the others.
   test-vitest-unit:
     runs-on: ubuntu-latest
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        # `i/N` verbatim, so the count lives in one place and the job name
+        # reads as the shard it ran.
+        shard: ["1/4", "2/4", "3/4", "4/4"]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -136,8 +155,10 @@ jobs:
         with:
           name: build-output
           path: .
-      - name: Run unit tests via vitest
-        run: bun run test:vitest:unit -- ${{ env.TEST_CHANGED }}
+      # An empty shard passes: `--changed` narrows a pull request to a handful
+      # of files, and the shards past the first then hold none of them.
+      - name: Run unit tests via vitest (shard ${{ matrix.shard }})
+        run: bun run test:vitest:unit -- --shard ${{ matrix.shard }} ${{ env.TEST_CHANGED }}
 
   test-vitest-integration:
     runs-on: ubuntu-latest

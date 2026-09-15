@@ -546,12 +546,25 @@ Import from `vitest`. Generic suites are extracted to shared helpers
 ```sh
 bun scripts/test.ts [--all] [kinds...] [sections...] [runners...] [options]
 bun scripts/test.ts --changed [base]    # packages affected since base (default origin/main)
+bun scripts/test.ts vitest unit --shard 2/4   # one of the four parallel CI unit jobs
 ```
 
 Sections are **discovered**, never enumerated; `--check-sections` fails if any test file
 is unreachable by section+kind selection. Note `packages/test/src/test/task-graph*/` is
 section `graph` — `task-graph` selects that package's co-located `__tests__`.
 `--changed` delegates package selection to Turbo, so dependents run too.
+
+**`--shard i/N`** partitions whatever the rest of the selection resolves to, which is how
+the blocking workflow runs the unit slice as four parallel jobs instead of the one that
+took four times every other job on the board. What makes the split pay is that the cost is
+almost all per FILE and barely any of it the tests: vitest accounts the unit slice as ~75%
+setup (a fresh module registry per file, `vitest.setup.ts` bootstrapping the task registry
+into each) and ~20% transform, so dividing the file list divides the wall clock —
+measured 3.5x across four shards. `scripts/lib/testShards.ts` holds the partition, dealt
+round-robin from a **sorted** list: each shard runs on its own machine off a discovery walk
+in `readdirSync` order, so an order-dependent partition would let a file land in two shards,
+or in none and never run with every job still green. An empty shard passes, which is what a
+`--changed` pull request narrowed to a handful of files produces.
 
 **Running the same files under Bun** — `bun test` resolves `import { vi } from "vitest"` to
 its own compatibility shim, which is missing `setSystemTime`, `stubGlobal`/`stubEnv` and
