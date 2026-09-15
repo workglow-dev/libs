@@ -138,6 +138,7 @@ Capability flags:
 | `IEntitlementProfile`                   | `@workglow/test-contract/entitlement-profile`     | Browser, Desktop, Server, Custom                                                                      |
 | `IBrowserContext`                       | `@workglow/test-contract/browser-context`         | Mock, Playwright, BunWebView, Electron                                                                |
 | `IHumanConnector`                       | `@workglow/test-contract/human-connector`         | MockHumanConnector, McpElicitationConnector                                                           |
+| `IWebSearchProvider`                    | `@workglow/test-contract/web-search`              | Brave, Tavily, SearXNG, Anthropic, OpenAI, OpenRouter, Gemini                                         |
 | Worker-proxy parity                     | `@workglow/test-contract/worker-proxy`            | _harness only — no adapters wired yet_                                                                |
 
 ## Billing failures: skipped on CI, failed locally

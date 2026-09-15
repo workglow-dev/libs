@@ -108,6 +108,17 @@ export interface WebSearchCapabilities {
   readonly maxResultsCap: number | undefined;
 }
 
+/**
+ * A web-search backend, HTTP or model-grounded, behind one normalized shape.
+ *
+ * **An implementer runs `runWebSearchProviderConformance`**
+ * (`@workglow/test-contract/web-search`), which reads {@link capabilities} and
+ * asserts the matching behaviour: an option declared unservable is refused
+ * before the vendor is reached, and one declared servable actually reaches the
+ * wire. Over-declaring is the failure the whole record exists to prevent, and
+ * it does not throw — the adapter drops the option and reports a search that
+ * looks like it honored it.
+ */
 export interface IWebSearchProvider {
   readonly name: string;
   readonly capabilities: WebSearchCapabilities;

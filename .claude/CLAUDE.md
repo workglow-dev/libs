@@ -334,6 +334,14 @@ none, so the interface form is not assignable to the `DataPorts` constraint `Tas
 Only SearXNG needs no API key and has no quota, so it is the only one whose integration test
 runs unmocked (`.integration.test.ts`, skipped unless `WEB_SEARCH_SEARXNG_URL` is set).
 
+All seven run `runWebSearchProviderConformance` (`@workglow/test-contract/web-search`) over a
+mocked transport, in `packages/test/src/test/web-search/`. It reads the capability record and
+asserts the behaviour that record promises, rather than listing what each provider does — an
+option declared unservable is refused before the vendor is reached, one declared servable
+reaches the wire. Over-declaring is what it exists to catch, because that failure does not
+throw: the adapter has nowhere to put the option, drops it, and returns a search reporting
+the provider, the query and a plausible result set with the restriction gone.
+
 ### `providers/*`
 
 Standalone packages with optional peer deps, each exposing `./ai` (main thread) and
