@@ -8,7 +8,7 @@ import type { Part } from "@a2a-js/sdk";
 import { describe, expect, it } from "vitest";
 
 import type { A2AClientLike } from "../A2AAgentTask";
-import { A2AAgentTask } from "../A2AAgentTask";
+import { A2AAgentTask, agentBaseUrl } from "../A2AAgentTask";
 
 function textPart(value: string): Part {
   return {
@@ -28,6 +28,16 @@ function fakeClient(reply: { text: string; contextId: string; state: string }): 
     }),
   };
 }
+
+describe("agentBaseUrl", () => {
+  it("accepts the card URL a server prints, as well as the base it hangs off", () => {
+    // The SDK resolves the well-known path relative to what it is handed, so
+    // the card's own URL would otherwise look for the card underneath itself.
+    expect(agentBaseUrl("http://h:1/.well-known/agent-card.json")).toBe("http://h:1/");
+    expect(agentBaseUrl("http://h:1/x/.well-known/agent-card.json")).toBe("http://h:1/x");
+    expect(agentBaseUrl("http://h:1")).toBe("http://h:1/");
+  });
+});
 
 describe("A2AAgentTask", () => {
   it("declares a title, because the progress UI labels the row with it", () => {

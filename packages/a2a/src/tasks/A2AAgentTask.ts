@@ -5,7 +5,7 @@
  */
 
 import type { Part, Task as A2ATask } from "@a2a-js/sdk";
-import { Role, TaskState, taskStateToJSON } from "@a2a-js/sdk";
+import { AGENT_CARD_PATH, Role, TaskState, taskStateToJSON } from "@a2a-js/sdk";
 import { ClientFactory } from "@a2a-js/sdk/client";
 import type { IExecuteContext, TaskConfig } from "@workglow/task-graph";
 import { Task, TaskConfigSchema } from "@workglow/task-graph";
@@ -74,10 +74,26 @@ function partsOfTask(task: A2ATask): Part[] {
   return fromArtifacts.length > 0 ? fromArtifacts : (task.status?.message?.parts ?? []);
 }
 
+/**
+ * The URL the card is resolved against.
+ *
+ * The SDK resolves `.well-known/agent-card.json` relative to what it is given,
+ * so handing it the card's own URL — the one a server prints, and the one an
+ * operator pastes — would look for the card underneath itself.
+ */
+export function agentBaseUrl(agentUrl: string): string {
+  const url = new URL(agentUrl);
+  const suffix = `/${AGENT_CARD_PATH}`;
+  if (url.pathname.endsWith(suffix)) {
+    url.pathname = url.pathname.slice(0, -suffix.length) || "/";
+  }
+  return url.toString();
+}
+
 async function defaultCreateClient(agentUrl: string): Promise<A2AClientLike> {
   // The card is resolved first: it names the binding to speak and the URL to
   // speak it at, so a bare URL is not enough to build a client from.
-  const client = await new ClientFactory().createFromUrl(agentUrl);
+  const client = await new ClientFactory().createFromUrl(agentBaseUrl(agentUrl));
   return {
     sendMessage: async (input, signal) => {
       const reply = await client.sendMessage(
@@ -142,7 +158,8 @@ export class A2AAgentTask extends Task<A2AAgentTaskInput, A2AAgentTaskOutput, A2
           type: "string",
           title: "Agent URL",
           format: "uri",
-          description: "Where the agent's card is published; the card names the endpoint.",
+          description:
+            "The agent's base URL, or its card URL; the card names the endpoint to speak to.",
         },
         prompt: { type: "string", title: "Prompt" },
         contextId: {
