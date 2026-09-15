@@ -61,6 +61,24 @@ Peers are opaque to each other: a caller sees messages, task status and
 artifacts, never the callee's tools, model or transcript. `input-required`
 is never published — a turn that would ask a person fails instead.
 
+## Working against `@a2a-js/sdk`
+
+The SDK is proto-derived, and a few things follow from that which a hand-written
+literal gets wrong:
+
+- `TaskState` and `Role` are numeric enums. Use `taskStateToJSON` where a state
+  crosses a port; the wire is still strings, which the SDK's `toJSON` handles.
+- A `Message` carries `parts`, and every proto field is required. Build events
+  with the `AgentEvent` factories and fill them all in.
+- A `TaskStatusUpdateEvent` has no `final` flag; a terminal `state` ends a task.
+- The card is served through `AgentCard.toJSON`, not `JSON.stringify`: the
+  in-memory card spells security schemes as `$case` unions, which the SDK's own
+  client reads back as no scheme at all.
+- The SDK reads an absent `A2A-Version` header as `0.3`, which the card does not
+  publish, so such a request is refused with the protocol's own error.
+- `InMemoryTaskStore` evicts nothing and `TaskStore` has no delete, so a
+  long-running host grows without bound.
+
 ## License
 
 Apache-2.0
