@@ -1,0 +1,20 @@
+{
+  // The tooling's own tests. `scripts/` is not a workspace, so nothing builds
+  // it and this is the only program that checks these files.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false,
+    "types": ["@types/bun"],
+    // These tests import `../vitest.config.ts` and each other by path, both of
+    // which live outside `scripts/` or carry the extension Bun runs them with.
+    "rootDir": "..",
+    "allowImportingTsExtensions": true
+  },
+  "include": ["*.ts", "lib/**/*.ts"],
+  "exclude": ["node_modules"]
+}

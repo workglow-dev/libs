@@ -26,7 +26,7 @@
     "build:js": "turbo run build-js --concurrency=15",
     "build:types": "turbo run build-types --concurrency=15",
     "typecheck:budget": "bun scripts/typecheck-budget.ts",
-    "typecheck:tests": "for f in packages/*/tsconfig.test.json; do echo \"typecheck $f\" && tsc -p \"$f\" || exit 1; done",
+    "typecheck:tests": "bun ./scripts/typecheck-tests.ts",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/*tsbuildinfo packages/*/dist packages/*/src/**/*\\.d\\.ts packages/*/src/**/*\\.map integrations/*/node_modules integrations/*/dist integrations/*/src/**/*\\.d\\.ts integrations/*/src/**/*\\.map examples/*/node_modules examples/*/dist examples/*/src/**/*\\.d\\.ts examples/*/src/**/*\\.map .turbo */*/.turbo",
     "dev": "turbo run dev --concurrency=15",
     "docs": "typedoc",

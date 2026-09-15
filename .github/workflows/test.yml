@@ -48,6 +48,12 @@ jobs:
       # they never reach `dist`, which also takes them out of every tsc run.
       # `tsconfig.test.json` is the program that still checks them; without this
       # step a type error in a test file is invisible until someone runs it.
+      #
+      # The step also FAILS on a workspace whose co-located tests no program
+      # checks, rather than skipping it: the shell glob this replaced could not
+      # tell "no tests here" from "no project file here", so a new package
+      # joined the tree outside the gate and the gate reported success.
+      #
       # Must follow the budget guard, which is what emits the `dist/*.d.ts` these
       # programs resolve their own package against.
       - name: Typecheck co-located tests

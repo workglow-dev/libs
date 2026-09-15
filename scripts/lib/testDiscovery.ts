@@ -114,8 +114,14 @@ function dirToSection(): Map<string, string> {
   return map;
 }
 
-/** Recursively collect files matching `suffix` under `base`. */
-function walkFiles(base: string, suffix: string, out: string[] = []): string[] {
+/**
+ * Recursively collect files ending in any of `suffixes` under `base`.
+ *
+ * Shared with the typecheck gate, which walks for a wider set of suffixes than
+ * discovery does: the two ask different questions of the same tree and must not
+ * each grow their own walker.
+ */
+export function walkFiles(base: string, suffixes: readonly string[], out: string[] = []): string[] {
   let entries: string[];
   try {
     entries = readdirSync(base);
@@ -131,8 +137,8 @@ function walkFiles(base: string, suffix: string, out: string[] = []): string[] {
     } catch {
       continue;
     }
-    if (isDir) walkFiles(full, suffix, out);
-    else if (name.endsWith(suffix)) out.push(full);
+    if (isDir) walkFiles(full, suffixes, out);
+    else if (suffixes.some((suffix) => name.endsWith(suffix))) out.push(full);
   }
   return out;
 }
@@ -160,7 +166,7 @@ export function discoverTestFiles(): TestFile[] {
 
   for (const dir of listDirs(TEST_BASE)) {
     const section = sectionOf.get(dir) ?? dir;
-    for (const f of walkFiles(join(TEST_BASE, dir), ".test.ts")) {
+    for (const f of walkFiles(join(TEST_BASE, dir), [".test.ts"])) {
       if (seen.has(f)) continue;
       seen.add(f);
       out.push({ path: f, section, runner: runnerFor(f) });
@@ -172,7 +178,7 @@ export function discoverTestFiles(): TestFile[] {
   for (const group of PACKAGE_GROUPS) {
     for (const pkg of listDirs(join(ROOT, group))) {
       if (group === "packages" && pkg === "test") continue; // handled above
-      for (const f of walkFiles(join(ROOT, group, pkg, "src"), ".test.ts")) {
+      for (const f of walkFiles(join(ROOT, group, pkg, "src"), [".test.ts"])) {
         if (seen.has(f)) continue;
         seen.add(f);
         out.push({ path: f, section: pkg, runner: runnerFor(f) });
@@ -182,7 +188,7 @@ export function discoverTestFiles(): TestFile[] {
 
   // Tooling tests (e.g. the runner's own test) live outside any package.
   for (const dir of EXTRA_TEST_DIRS) {
-    for (const f of walkFiles(join(ROOT, dir), ".test.ts")) {
+    for (const f of walkFiles(join(ROOT, dir), [".test.ts"])) {
       if (seen.has(f)) continue;
       seen.add(f);
       out.push({ path: f, section: dir, runner: runnerFor(f) });
@@ -203,7 +209,7 @@ export function discoverTestFiles(): TestFile[] {
  * a new top-level group, or tests outside a package's `src/`.
  */
 export function findAllTestFiles(): string[] {
-  return walkFiles(ROOT, ".test.ts");
+  return walkFiles(ROOT, [".test.ts"]);
 }
 
 export function listSections(files: readonly TestFile[]): string[] {

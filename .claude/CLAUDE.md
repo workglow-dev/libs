@@ -551,6 +551,19 @@ package root and silently fails to load. `testDiscovery.test.ts` fails if a disc
 test file falls outside every project root — such a file does not error, it just stops
 running.
 
+**Typechecking the tests** — vitest transpiles without typechecking and each package's
+build program *excludes* its co-located tests (so they never reach `dist`), which leaves
+`bun run typecheck:tests` (`scripts/typecheck-tests.ts`) as the only thing that type-checks
+them. It derives its own set: it walks every workspace's `src` for `.test.ts`/`.test.tsx`,
+reads each tsc program's resolved file list from `tsc --showConfig`, and **fails on a test
+file no program that anything runs covers**. Two shapes satisfy it — a `tsconfig.test.json`,
+which this gate runs, or the workspace's own `tsconfig.json` where that includes the tests
+and the workspace declares `build-types`, which is what runs that program (`packages/test`
+and the examples are covered this way). The shell glob it replaced could only run the
+project files that existed, and could not tell "no tests here" from "no project file here",
+so a new package's sixteen test files sat outside every gate while the gate reported
+success.
+
 **Coverage** — vitest resolves every `@workglow/*` specifier to the package's `src`
 (`scripts/lib/workspaceSource.ts`), so a cross-package suite covers `packages/ai/src/**`
 and not `packages/ai/dist/node.js`. Resolution still goes through `exports`, so `dist`

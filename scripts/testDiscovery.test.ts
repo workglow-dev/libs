@@ -97,9 +97,11 @@ describe("test discovery", () => {
     // really happen is the config drifting away from discovery, which is only
     // visible from the config itself.
     const mod = await import("../vitest.config.ts");
-    const roots: string[] = (mod.default.test?.projects ?? []).map(
-      (p: { test: { root: string } }) => p.test.root
-    );
+    // A vitest project may be written as a path glob instead of an inline
+    // config; this one derives every project as an object, so the roots are
+    // read from that shape rather than handled two ways.
+    const projects = (mod.default.test?.projects ?? []) as Array<{ test: { root: string } }>;
+    const roots: string[] = projects.map((p) => p.test.root);
     expect(roots.length).toBeGreaterThan(0);
     const uncovered = files
       .filter((f) => !roots.some((r) => f.path === r || f.path.startsWith(r + "/")))
