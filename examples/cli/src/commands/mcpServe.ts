@@ -49,7 +49,7 @@ interface McpServeOptions {
 }
 
 /**
- * The bearer token this server will require, or `null` for none.
+ * The bearer token a served endpoint will require, or `null` for none.
  *
  * A pinned token wins over a generated one because a client config has to hold
  * the same value across restarts, and the environment wins over nothing at all
@@ -58,13 +58,17 @@ interface McpServeOptions {
  * this generates one to prevent — so an empty `--token` or an empty variable
  * falls through to a generated token rather than to the empty string, which is
  * why this reads `||` and not `??`.
+ *
+ * `envName` is the variable a pinned token arrives in; each served protocol
+ * has its own, so a token meant for one endpoint is never read by another.
  */
 export function resolveServeToken(
   opts: { readonly auth: boolean; readonly token?: string },
-  env: Readonly<Record<string, string | undefined>> = process.env
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  envName: string = MCP_TOKEN_ENV
 ): string | null {
   if (!opts.auth) return null;
-  return opts.token || env[MCP_TOKEN_ENV] || generateBearerToken();
+  return opts.token || env[envName] || generateBearerToken();
 }
 
 /**

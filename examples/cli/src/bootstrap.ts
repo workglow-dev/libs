@@ -17,6 +17,7 @@ import {
 import type { Command } from "commander";
 import { program as defaultProgram } from "commander";
 import path from "node:path";
+import { registerA2ACommand } from "./commands/a2a";
 import { registerAgentCommand } from "./commands/agent";
 import { registerCredentialCommand } from "./commands/credential";
 import { registerInitCommand } from "./commands/init";
@@ -125,6 +126,7 @@ export async function runWorkglowCli(options: WorkglowCliOptions = {}): Promise<
   registerMcpCommand(program);
   registerWorkflowCommand(program);
   registerAgentCommand(program);
+  registerA2ACommand(program);
   registerCredentialCommand(program);
   registerTaskCommand(program);
   registerWebCommand(program, options.web ?? {});

@@ -45,6 +45,7 @@
     }
   },
   "dependencies": {
+    "@workglow/a2a": "workspace:*",
     "@workglow/ai": "workspace:*",
     "@workglow/anthropic": "workspace:*",
     "@workglow/deepseek": "workspace:*",
