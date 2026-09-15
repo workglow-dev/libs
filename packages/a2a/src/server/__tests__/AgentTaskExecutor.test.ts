@@ -91,7 +91,7 @@ describe("AgentTaskExecutor", () => {
     const executor = new AgentTaskExecutor({
       descriptor,
       runTurn: async (input) => {
-        seen.push(String(input.prompt ?? ""));
+        seen.push(typeof input.prompt === "string" ? input.prompt : JSON.stringify(input.prompt));
         return { text: "ok" };
       },
     });

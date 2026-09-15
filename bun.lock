@@ -45,6 +45,7 @@
         "@huggingface/transformers": "catalog:",
         "@inkjs/ui": "^2.0.0",
         "@napi-rs/keyring": "^1.3.0",
+        "@workglow/a2a": "workspace:*",
         "@workglow/ai": "workspace:*",
         "@workglow/anthropic": "workspace:*",
         "@workglow/browser-control": "workspace:*",

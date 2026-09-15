@@ -10,6 +10,10 @@ import { A2AAgentTask } from "../../tasks/A2AAgentTask";
 import type { IA2AAgentDescriptor } from "../../util/AgentDescriptor";
 import { startA2AHttpServer } from "../A2AHttpServer";
 
+/** The prompt a turn was handed, as text; the type also admits content blocks. */
+const promptText = (prompt: unknown): string =>
+  typeof prompt === "string" ? prompt : JSON.stringify(prompt);
+
 let close: (() => Promise<void>) | undefined;
 afterEach(async () => {
   await close?.();
@@ -49,8 +53,8 @@ describe("A2AAgentTask against startA2AHttpServer", () => {
       token: null,
       descriptor,
       runTurn: async (input) => {
-        prompts.push(String(input.prompt));
-        return { text: `you said: ${input.prompt}` };
+        prompts.push(promptText(input.prompt));
+        return { text: `you said: ${promptText(input.prompt)}` };
       },
     });
     close = handle.close;

@@ -189,7 +189,7 @@ export class A2AAgentTask extends Task<A2AAgentTaskInput, A2AAgentTaskOutput, A2
     } as const satisfies DataPortSchema;
   }
 
-  public async execute(
+  public override async execute(
     input: A2AAgentTaskInput,
     context: IExecuteContext
   ): Promise<A2AAgentTaskOutput> {
