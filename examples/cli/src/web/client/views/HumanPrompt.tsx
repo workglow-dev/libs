@@ -8,7 +8,7 @@
 import type { HumanResponseAction } from "@workglow/util";
 import type { JSX } from "preact";
 import { useState } from "preact/hooks";
-import { humanPromptModel } from "../../../ui/model/humanPrompt";
+import { humanPromptModel } from "@workglow/util";
 
 interface SchemaLike {
   readonly properties?: Record<string, { type?: string; title?: string; format?: string }>;

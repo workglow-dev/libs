@@ -19,12 +19,18 @@ export type { RunEventSink } from "./run-events/runEventChannel";
 export { InkHumanConnector } from "./ui/InkHumanConnector";
 export { PromptHumanConnector } from "./ui/PromptHumanConnector";
 export type { PromptHumanRenderers } from "./ui/PromptHumanConnector";
-export { humanPromptModel } from "./ui/model/humanPrompt";
+// Re-exported, not defined here. `humanPromptModel` is a pure function over a
+// request, and it shipped from a package whose dependencies include ink, react,
+// commander, a keyring binding and two model runtimes — which a browser app
+// will not install to get one hundred lines. It lives in `@workglow/util` now,
+// beside the interface it decides the rendering for; this stays so existing
+// callers are unchanged.
+export { humanPromptModel } from "@workglow/util";
 export type {
   HumanPromptDetail,
   HumanPromptModel,
   HumanPromptShape,
   HumanPromptSource,
-} from "./ui/model/humanPrompt";
+} from "@workglow/util";
 export { emptyRunView, reduceRunEvent } from "./web/client/state";
 export type { RunViewState } from "./web/client/state";

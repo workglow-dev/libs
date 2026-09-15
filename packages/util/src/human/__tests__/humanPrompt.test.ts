@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { humanPromptModel } from "./humanPrompt";
+import { humanPromptModel } from "../humanPrompt";
 
 const confirmSchema = {
   properties: { action: { title: "Action" }, reaches: { title: "Reaches" } },

@@ -106,6 +106,13 @@ export interface IHumanResponse {
  * Unified schema-driven: the `kind` field in IHumanRequest determines the
  * interaction pattern. The connector renders accordingly — a notification
  * toast, a data visualization, or an input form.
+ *
+ * **An implementer runs `runHumanConnectorConformance`**
+ * (`@workglow/test-contract/human-connector`) and decides what to render with
+ * {@link humanPromptModel} rather than its own switch over `kind`. Re-deriving
+ * that switch is how a `confirm` came to be answered with `action: "accept"`
+ * and a content payload — an approval reported as a form nobody filled in,
+ * which every layer downstream then reads as consent.
  */
 export interface IHumanConnector {
   /**

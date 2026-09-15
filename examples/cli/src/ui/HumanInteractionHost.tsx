@@ -12,7 +12,7 @@ import { prepareSchemaFormFields, type PromptFieldDescriptor } from "../input/pr
 import { deepMerge } from "../input/resolve-input";
 import { SchemaPromptApp } from "./SchemaPromptApp";
 import { asDataPortSchemaObject } from "./humanSchema";
-import { humanPromptModel } from "./model/humanPrompt";
+import { humanPromptModel } from "@workglow/util";
 
 function abortError(): Error {
   const e = new Error("The operation was aborted");

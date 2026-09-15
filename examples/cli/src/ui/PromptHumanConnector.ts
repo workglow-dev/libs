@@ -7,7 +7,7 @@
 import type { IHumanConnector, IHumanRequest, IHumanResponse } from "@workglow/util";
 import { prepareSchemaFormFields, type PromptFieldDescriptor } from "../input/prompt";
 import { asDataPortSchemaObject } from "./humanSchema";
-import { humanPromptModel } from "./model/humanPrompt";
+import { humanPromptModel } from "@workglow/util";
 import { renderSchemaPrompt, renderSelectPrompt } from "./render";
 
 /**

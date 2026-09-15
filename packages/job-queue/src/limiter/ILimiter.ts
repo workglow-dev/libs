@@ -38,6 +38,12 @@ export type LimiterScope = "process" | "cluster";
  * proceed and reserves the slot in a single uninterruptible step. Callers
  * MUST use {@link tryAcquire}/{@link release} when correctness matters under
  * concurrency.
+ *
+ * **An implementer runs the limiter half of `runGenericJobQueueTests`**
+ * (`packages/test/src/test/job-queue/genericJobQueueTests`), which is where
+ * that atomicity is actually asserted — a `canProceed`-then-`recordJobStart`
+ * pair passes every single-threaded test and admits two jobs into one slot the
+ * moment anything runs concurrently.
  */
 export interface ILimiter {
   /**

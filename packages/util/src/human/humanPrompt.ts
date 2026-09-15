@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { HumanResponseAction } from "@workglow/util";
+import type { HumanResponseAction } from "./HumanConnector";
 
 /** One value a person reads before answering, under the label to read it by. */
 export interface HumanPromptDetail {

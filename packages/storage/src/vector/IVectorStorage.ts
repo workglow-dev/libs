@@ -122,6 +122,11 @@ export type VectorEventParameters<
 /**
  * Vector storage repository: extends {@link ITabularStorage} with similarity
  * search over an embedding column.
+ *
+ * **An implementer runs `runVectorStorageContract`**
+ * (`@workglow/test-contract/vector-storage`) for the similarity, metadata-filter
+ * and dimension-validation assertions, and `runTabularStorageContract` for the
+ * tabular surface underneath it.
  */
 export interface IVectorStorage<
   Metadata extends Record<string, unknown> | undefined,
