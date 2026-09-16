@@ -6,6 +6,7 @@
 
 import type { AiProviderRunFn, ModelConfig, ToolDefinition } from "@workglow/ai";
 import {
+  AGENT_APPROVAL_OPT_OUT,
   AgentTask,
   AiProviderRegistry,
   DirectExecutionStrategy,
@@ -698,7 +699,7 @@ describe("AgentTask", () => {
       expect(reach).not.toContain("host function");
     });
 
-    it('runs an unapproved-reach tool when approval is "never"', async () => {
+    it('runs an unapproved-reach tool when the host opted out and approval is "never"', async () => {
       scriptModel([
         {
           calls: [
@@ -707,6 +708,7 @@ describe("AgentTask", () => {
         },
         { text: "ok" },
       ]);
+      registry.registerInstance(AGENT_APPROVAL_OPT_OUT, true);
 
       await new AgentTask().run(
         { model: MODEL, prompt: "fetch", tools: [FETCH_TOOL], approval: "never" },
@@ -716,7 +718,15 @@ describe("AgentTask", () => {
       expect(fetchRuns).toBe(1);
     });
 
-    it("honours requiresApproval in both directions", async () => {
+    /**
+     * The gate is deliberately asymmetric, and these two tests are the two
+     * halves of it: the tool list and the approval settings arrive on the SAME
+     * input, which a shared graph JSON document can write in full. So
+     * `requiresApproval: true` is honoured wherever it came from — nothing is
+     * lost by asking more often — while `false` is honoured only where a
+     * document could not have put it.
+     */
+    it("lets an input-borne definition tighten the gate", async () => {
       scriptModel([
         { calls: [{ id: "c1", name: "AgentTest_EchoTask", input: { text: "hi" } }] },
         { text: "done" },
@@ -729,25 +739,127 @@ describe("AgentTask", () => {
       }));
       registry.registerInstance(HUMAN_CONNECTOR, human.connector);
 
+      // A tool whose class reaches nothing: asked anyway, because it said so.
       await new AgentTask().run(
-        {
-          model: MODEL,
-          prompt: "echo",
-          tools: [{ ...ECHO_TOOL, requiresApproval: true }],
-        },
+        { model: MODEL, prompt: "echo", tools: [{ ...ECHO_TOOL, requiresApproval: true }] },
         { registry }
       );
-      expect(human.requests).toHaveLength(1);
 
+      expect(human.requests).toHaveLength(1);
+      expect(echoRuns).toBe(1);
+    });
+
+    it("does not let an input-borne definition lower the gate", async () => {
+      scriptModel([
+        {
+          calls: [
+            { id: "c1", name: "AgentTest_FetchTask", input: { url: "https://example.test" } },
+          ],
+        },
+        { text: "done" },
+      ]);
+      const human = connector((request) => ({
+        requestId: request.requestId,
+        action: "decline",
+        content: undefined,
+        done: true,
+      }));
+      registry.registerInstance(HUMAN_CONNECTOR, human.connector);
+
+      // `false` beside a task-backed tool whose class reaches the network: the
+      // class is what answers, so the call is still put to a person.
+      await new AgentTask().run(
+        { model: MODEL, prompt: "fetch", tools: [{ ...FETCH_TOOL, requiresApproval: false }] },
+        { registry }
+      );
+
+      expect(human.requests).toHaveLength(1);
+      expect(fetchRuns).toBe(0);
+    });
+
+    it("ignores approval settings a graph JSON document supplied", async () => {
+      scriptModel([
+        {
+          calls: [
+            { id: "c1", name: "AgentTest_FetchTask", input: { url: "https://example.test" } },
+          ],
+        },
+        { text: "ok" },
+      ]);
+      const human = connector((request) => ({
+        requestId: request.requestId,
+        action: "decline",
+        content: undefined,
+        done: true,
+      }));
+      registry.registerInstance(HUMAN_CONNECTOR, human.connector);
+      registerAiTasks();
+
+      // Exactly the shape a shared workflow file carries: the whole tool list
+      // and both relaxations sit in `defaults`, which is graph JSON.
+      const graph = createGraphFromGraphJSON(
+        {
+          tasks: [
+            {
+              id: "agent",
+              type: "AgentTask",
+              defaults: {
+                model: MODEL,
+                prompt: "fetch",
+                approval: "never",
+                tools: [{ ...FETCH_TOOL, requiresApproval: false }],
+              },
+            },
+          ],
+          dataflows: [],
+        } as unknown as TaskGraphJson,
+        registry
+      );
+
+      await graph.run(undefined, { registry });
+
+      expect(human.requests).toHaveLength(1);
+      expect(fetchRuns).toBe(0);
+    });
+
+    it("lets a host-supplied function tool lower its own gate", async () => {
+      scriptModel([{ calls: [{ id: "c1", name: "fetch_it", input: {} }] }, { text: "ok" }]);
+      const human = connector((request) => ({
+        requestId: request.requestId,
+        action: "accept",
+        content: undefined,
+        done: true,
+      }));
+      registry.registerInstance(HUMAN_CONNECTOR, human.connector);
+      let ran = 0;
+
+      // `taskType` names a class that reaches the network, so this tool would
+      // be confirmed on the class's say-so. An `execute` function cannot
+      // survive a round trip through JSON, so the `false` beside it was
+      // written by host code and is honoured.
       await new AgentTask().run(
         {
           model: MODEL,
           prompt: "fetch",
-          tools: [{ ...FETCH_TOOL, requiresApproval: false }],
+          tools: [
+            {
+              name: "fetch_it",
+              description: "Fetches a URL",
+              inputSchema: { type: "object", properties: {} },
+              taskType: AgentTest_FetchTask.type,
+              requiresApproval: false,
+              execute: async () => {
+                ran++;
+                return "fetched";
+              },
+            },
+          ],
         },
         { registry }
       );
-      expect(human.requests).toHaveLength(1);
+
+      expect(ran).toBe(1);
+      expect(human.requests).toHaveLength(0);
     });
   });
 

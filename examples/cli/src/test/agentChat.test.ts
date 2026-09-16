@@ -6,6 +6,7 @@
 
 import type { AiProviderRunFn, ModelConfig } from "@workglow/ai";
 import {
+  AGENT_APPROVAL_OPT_OUT,
   AiProviderRegistry,
   DirectExecutionStrategy,
   getAiProviderRegistry,
@@ -206,6 +207,23 @@ describe("agent chat loop", () => {
       expect(chatRegistry(parent, true).get(HUMAN_CONNECTOR)).toBe(installed);
       // On a terminal it is the other way round: the session prompts itself.
       expect(chatRegistry(parent, false).get(HUMAN_CONNECTOR)).not.toBe(installed);
+    });
+
+    it("grants the approval opt-out only when --no-approval was passed", () => {
+      const parent = new ServiceRegistry(new Container());
+
+      // The turn reads the grant off the registry rather than off its own
+      // input, so `--no-approval` has to be stated here to have any effect.
+      expect(chatRegistry(parent, false, "beyond-inference").has(AGENT_APPROVAL_OPT_OUT)).toBe(
+        false
+      );
+      expect(chatRegistry(parent, false, "never").get(AGENT_APPROVAL_OPT_OUT)).toBe(true);
+      // A reported session gets a child registry too, rather than writing the
+      // grant onto the registry the console handed in.
+      const reported = chatRegistry(parent, true, "never");
+      expect(reported).not.toBe(parent);
+      expect(reported.get(AGENT_APPROVAL_OPT_OUT)).toBe(true);
+      expect(parent.has(AGENT_APPROVAL_OPT_OUT)).toBe(false);
     });
   });
 

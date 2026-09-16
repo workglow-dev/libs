@@ -5,7 +5,7 @@
  */
 
 import type { AgentApprovalMode, AgentTaskOutput, ChatMessage, ToolDefinition } from "@workglow/ai";
-import { AgentTask } from "@workglow/ai";
+import { AGENT_APPROVAL_OPT_OUT, AgentTask } from "@workglow/ai";
 import type { StreamEvent } from "@workglow/task-graph";
 import {
   globalServiceRegistry,
@@ -87,11 +87,20 @@ export const CHAT_MESSAGE_SCHEMA: DataPortSchema = {
  * channel, installed with the channel itself. Overriding it here would point a
  * console session's approvals at an Ink prompt nobody can see, on a process
  * whose stdout is a pipe.
+ *
+ * `--no-approval` is granted here rather than left to the turn's input: the
+ * turn reads the grant off the registry, which is this process stating it, and
+ * not off a tool list a saved graph could have written.
  */
-export function chatRegistry(parent: ServiceRegistry, reported: boolean): ServiceRegistry {
-  if (reported) return parent;
+export function chatRegistry(
+  parent: ServiceRegistry,
+  reported: boolean,
+  approval: AgentApprovalMode = "beyond-inference"
+): ServiceRegistry {
+  if (reported && approval !== "never") return parent;
   const registry = new ServiceRegistry(parent.container.createChildContainer());
-  registry.registerInstance(HUMAN_CONNECTOR, new PromptHumanConnector());
+  if (!reported) registry.registerInstance(HUMAN_CONNECTOR, new PromptHumanConnector());
+  if (approval === "never") registry.registerInstance(AGENT_APPROVAL_OPT_OUT, true);
   return registry;
 }
 
@@ -138,7 +147,7 @@ export function askThroughConnector(
  */
 export async function runAgentChat(options: AgentChatOptions, io?: AgentChatIo): Promise<void> {
   const reported = ensureRunReporting() !== undefined;
-  const registry = chatRegistry(globalServiceRegistry, reported);
+  const registry = chatRegistry(globalServiceRegistry, reported, options.approval);
   const sessionAbort = new AbortController();
   const ask = io?.ask ?? (reported ? askThroughConnector(registry, sessionAbort.signal) : askLine);
   const transcript = createChatTranscript(io?.write ?? ((text) => void process.stdout.write(text)));

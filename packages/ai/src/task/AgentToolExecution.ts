@@ -14,8 +14,8 @@ import {
   getTaskConstructors,
   taskClassNeedsApproval,
 } from "@workglow/task-graph";
-import type { IHumanRequest, IHumanResponse } from "@workglow/util";
-import { getLogger, HUMAN_CONNECTOR, uuid4 } from "@workglow/util";
+import type { IHumanRequest, IHumanResponse, ServiceRegistry } from "@workglow/util";
+import { createServiceToken, getLogger, HUMAN_CONNECTOR, uuid4 } from "@workglow/util";
 import type { DataPortSchema } from "@workglow/util/schema";
 import type { ToolCall, ToolDefinition } from "./ToolCallingUtils";
 import { ToolCallError } from "./ToolCallingUtils";
@@ -29,9 +29,34 @@ import { ToolCallError } from "./ToolCallingUtils";
  *   rather than a second list kept in step by hand.
  * - `"never"`: no tool is ever confirmed. For a headless run, where there is
  *   nobody to ask and blocking on an answer that cannot come is worse than the
- *   reach.
+ *   reach. It only takes effect once host code has bound
+ *   {@link AGENT_APPROVAL_OPT_OUT} — see {@link toolCallNeedsApproval}.
  */
 export type AgentApprovalMode = "beyond-inference" | "never";
+
+/**
+ * Host consent to run an agent's tools with nobody asked.
+ *
+ * The mode and the tool list reach the turn on the same input, and that input
+ * can be a graph JSON document the host did not author — so a document saying
+ * `"never"` would otherwise turn off the only per-call control there is. A
+ * registry binding is a statement host code makes and a document cannot: the
+ * registry is built by the process, never deserialized alongside the graph.
+ *
+ * Bind it to `true` for a genuinely headless run. Relaxations stay inert
+ * without it; nothing here can make a gate stricter than the tools themselves
+ * ask for, so a run that never binds it is only ever asked more.
+ */
+export const AGENT_APPROVAL_OPT_OUT = createServiceToken<boolean>("ai.agent.approvalOptOut");
+
+function hostAllowsSkippingApproval(registry: ServiceRegistry | undefined): boolean {
+  if (!registry) return false;
+  try {
+    return registry.has(AGENT_APPROVAL_OPT_OUT) && registry.get(AGENT_APPROVAL_OPT_OUT) === true;
+  } catch {
+    return false;
+  }
+}
 
 /** What a tool call produced, as the model will read it back. */
 export interface AgentToolResult {
@@ -97,16 +122,26 @@ function errorMessage(error: unknown): string {
  * arrive in graph JSON the host did not author — so the reach has to be read
  * rather than trusted. A **function-backed** tool can only have been handed in
  * by host code, which is a decision already made, so it defaults to no
- * approval. Either can say so outright with `requiresApproval`, which wins in
- * both directions.
+ * approval.
+ *
+ * `requiresApproval` and `mode` arrive on the same input as the tool list, so
+ * they are read **asymmetrically**: either may ask for a call to be confirmed,
+ * and neither may take a confirmation away. The two ways to lower the gate —
+ * `requiresApproval: false` and `"never"` — hold only where the relaxation
+ * cannot have been written by the document: a tool carrying an `execute`
+ * function was handed in by host code (a function does not survive JSON), and
+ * {@link AGENT_APPROVAL_OPT_OUT} is bound by host code on the registry. Absent
+ * both, a tool whose class reaches past running a model is still confirmed
+ * however the document asked.
  */
 export function toolCallNeedsApproval(
   tool: ToolDefinition,
   mode: AgentApprovalMode,
   registry: Parameters<typeof getTaskConstructors>[0]
 ): boolean {
-  if (mode === "never") return false;
-  if (typeof tool.requiresApproval === "boolean") return tool.requiresApproval;
+  if (tool.requiresApproval === true) return true;
+  const mayRelax = typeof tool.execute === "function" || hostAllowsSkippingApproval(registry);
+  if (mayRelax && (mode === "never" || tool.requiresApproval === false)) return false;
   const ctor = getTaskConstructors(registry).get(backingTaskType(tool));
   if (!ctor) return false;
   return taskClassNeedsApproval(ctor);
