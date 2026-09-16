@@ -168,7 +168,8 @@ class CapturingStdout extends EventEmitter {
   }
 }
 
-const stripAnsi = (s: string): string => s.replace(/\[[0-9;]*[A-Z]/gi, "");
+// eslint-disable-next-line no-control-regex
+const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*[A-Z]/gi, "");
 
 async function runWorkflowApp(task: ITask): Promise<string> {
   const workflow = new Workflow();
