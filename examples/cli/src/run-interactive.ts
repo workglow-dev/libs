@@ -15,6 +15,7 @@ import { TaskGraph } from "@workglow/task-graph";
 import { projectRunEvents, projectTaskRunEvents } from "./run-events/projectRunEvents";
 import type { RunEventSink } from "./run-events/runEventChannel";
 import { ensureRunReporting } from "./run-events/runReporting";
+import { isAbortError, runWithProcessSignalAbort } from "./run-signal-abort";
 import { detectCliTheme, setCliTheme } from "./terminal/detectTerminalTheme";
 import { renderTaskInstanceRun, renderWorkflowRun } from "./ui/render";
 
@@ -48,8 +49,7 @@ async function runReported<T>(
     sink.emit({ k: "result", output: result });
     return result;
   } catch (error) {
-    const aborted =
-      error instanceof Error && (/abort/i.test(error.name) || /abort/i.test(error.message));
+    const aborted = isAbortError(error);
     sink.emit({
       k: "run_end",
       state: aborted ? "aborted" : "failed",
@@ -178,27 +178,34 @@ function withCliTask(task: ITask, options?: WithCliOptions): WithCliTaskHandle {
       overrides?: Record<string, unknown>,
       runConfig?: Partial<IRunConfig>
     ): Promise<unknown> => {
-      const sink = ensureRunReporting();
-      if (sink) {
-        return runReported(
-          sink,
-          (s) => projectTaskRunEvents(task, s),
-          () => task.run(overrides, runConfig)
-        );
-      }
-      if (!interactive || !process.stdout.isTTY) {
-        return task.run(overrides, runConfig);
-      }
+      return runWithProcessSignalAbort(
+        () => {
+          task.abort();
+        },
+        async () => {
+          const sink = ensureRunReporting();
+          if (sink) {
+            return runReported(
+              sink,
+              (s) => projectTaskRunEvents(task, s),
+              () => task.run(overrides, runConfig)
+            );
+          }
+          if (!interactive || !process.stdout.isTTY) {
+            return task.run(overrides, runConfig);
+          }
 
-      setCliTheme(await detectCliTheme());
+          setCliTheme(await detectCliTheme());
 
-      const taskType = taskStaticType(task);
+          const taskType = taskStaticType(task);
 
-      return renderTaskInstanceRun(task, taskType, {
-        suppressResultOutput,
-        overrides,
-        runConfig,
-      });
+          return renderTaskInstanceRun(task, taskType, {
+            suppressResultOutput,
+            overrides,
+            runConfig,
+          });
+        }
+      );
     },
   };
 }
@@ -215,25 +222,32 @@ function withCliWorkflow(workflow: IWorkflow, options?: WithCliOptions): WithCli
       input: Record<string, unknown> = {},
       config?: WorkflowRunConfig
     ): Promise<unknown> => {
-      const sink = ensureRunReporting();
-      if (sink) {
-        return runReported(
-          sink,
-          (s) => projectRunEvents(workflow.graph, s),
-          () => workflow.run(input, config)
-        );
-      }
-      if (!interactive || !process.stdout.isTTY) {
-        return workflow.run(input, config);
-      }
+      return runWithProcessSignalAbort(
+        () => {
+          workflow.graph.abort();
+        },
+        async () => {
+          const sink = ensureRunReporting();
+          if (sink) {
+            return runReported(
+              sink,
+              (s) => projectRunEvents(workflow.graph, s),
+              () => workflow.run(input, config)
+            );
+          }
+          if (!interactive || !process.stdout.isTTY) {
+            return workflow.run(input, config);
+          }
 
-      setCliTheme(await detectCliTheme());
+          setCliTheme(await detectCliTheme());
 
-      return renderWorkflowRun(workflow.graph, input, {
-        config: config as Record<string, unknown> | undefined,
-        runExecutor: () => workflow.run(input, config),
-        suppressResultOutput,
-      });
+          return renderWorkflowRun(workflow.graph, input, {
+            config: config as Record<string, unknown> | undefined,
+            runExecutor: () => workflow.run(input, config),
+            suppressResultOutput,
+          });
+        }
+      );
     },
   };
 }
@@ -250,25 +264,32 @@ function withCliGraph(graph: TaskGraph, options?: WithCliOptions): WithCliGraphH
       input: Record<string, unknown> = {},
       config?: TaskGraphRunConfig
     ): Promise<unknown> => {
-      const sink = ensureRunReporting();
-      if (sink) {
-        return runReported(
-          sink,
-          (s) => projectRunEvents(graph, s),
-          () => graph.run(input, config)
-        );
-      }
-      if (!interactive || !process.stdout.isTTY) {
-        return graph.run(input, config);
-      }
+      return runWithProcessSignalAbort(
+        () => {
+          graph.abort();
+        },
+        async () => {
+          const sink = ensureRunReporting();
+          if (sink) {
+            return runReported(
+              sink,
+              (s) => projectRunEvents(graph, s),
+              () => graph.run(input, config)
+            );
+          }
+          if (!interactive || !process.stdout.isTTY) {
+            return graph.run(input, config);
+          }
 
-      setCliTheme(await detectCliTheme());
+          setCliTheme(await detectCliTheme());
 
-      return renderWorkflowRun(graph, input, {
-        config: config as Record<string, unknown> | undefined,
-        runExecutor: () => graph.run(input, config),
-        suppressResultOutput,
-      });
+          return renderWorkflowRun(graph, input, {
+            config: config as Record<string, unknown> | undefined,
+            runExecutor: () => graph.run(input, config),
+            suppressResultOutput,
+          });
+        }
+      );
     },
   };
 }

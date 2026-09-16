@@ -9,10 +9,12 @@ import type { InputTaskConfig } from "@workglow/tasks";
 import { render } from "ink";
 import React from "react";
 import type { PromptFieldDescriptor } from "../input/prompt";
+import { isAbortError } from "../run-signal-abort";
 import { getCliTheme } from "../terminal/detectTerminalTheme";
 import { formatError, outputResult } from "../util";
-import { releaseOnAbort } from "./promptAbort";
 import { CliThemeProvider } from "./CliThemeContext";
+import { ForwardCtrlCAsSigint } from "./ForwardCtrlCAsSigint";
+import { releaseOnAbort } from "./promptAbort";
 import { SchemaPromptApp } from "./SchemaPromptApp";
 import type { SearchSelectAppProps, SearchSelectItem } from "./SearchSelectApp";
 import { SearchSelectApp } from "./SearchSelectApp";
@@ -27,6 +29,30 @@ function wrapWithCliTheme(node: React.ReactElement): React.ReactElement {
     value: getCliTheme(),
     slot: node,
   });
+}
+
+/** Run UIs only: prompts keep Ink's default Ctrl-C = exit. */
+function wrapRunUi(node: React.ReactElement): React.ReactElement {
+  return wrapWithCliTheme(
+    React.createElement(React.Fragment, null, React.createElement(ForwardCtrlCAsSigint), node)
+  );
+}
+
+const RUN_INK_OPTIONS = { exitOnCtrlC: false } as const;
+
+function failRun(
+  instance: { clear(): void; unmount(): void },
+  error: Error,
+  reject: (reason: Error) => void
+): void {
+  instance.clear();
+  instance.unmount();
+  if (isAbortError(error)) {
+    reject(error);
+    return;
+  }
+  console.error(`\nError: ${formatError(error)}`);
+  process.exit(1);
 }
 
 interface RenderOptions {
@@ -67,14 +93,11 @@ export async function renderWorkflowRun(
     };
 
     const onError = (error: Error) => {
-      instance.clear();
-      instance.unmount();
-      console.error(`\nError: ${formatError(error)}`);
-      process.exit(1);
+      failRun(instance, error, reject);
     };
 
     const instance = render(
-      wrapWithCliTheme(
+      wrapRunUi(
         React.createElement(WorkflowRunApp, {
           graph,
           input,
@@ -83,7 +106,8 @@ export async function renderWorkflowRun(
           onComplete,
           onError,
         })
-      )
+      ),
+      RUN_INK_OPTIONS
     );
   });
 }
@@ -107,14 +131,11 @@ export async function renderTaskInstanceRun(
     };
 
     const onError = (error: Error) => {
-      instance.clear();
-      instance.unmount();
-      console.error(`\nError: ${formatError(error)}`);
-      process.exit(1);
+      failRun(instance, error, reject);
     };
 
     const instance = render(
-      wrapWithCliTheme(
+      wrapRunUi(
         React.createElement(TaskRunApp, {
           task,
           taskType,
@@ -123,7 +144,8 @@ export async function renderTaskInstanceRun(
           onComplete,
           onError,
         })
-      )
+      ),
+      RUN_INK_OPTIONS
     );
   });
 }

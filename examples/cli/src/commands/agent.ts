@@ -15,6 +15,7 @@ import {
 } from "@workglow/task-graph";
 import type { DataPortSchemaObject } from "@workglow/util/schema";
 import type { Command } from "commander";
+import { runAgentChat } from "../agent/runAgentChat";
 import { loadConfig } from "../config";
 import { editStringInExternalEditor } from "../editInEditor";
 import {
@@ -27,11 +28,11 @@ import {
 } from "../input";
 import { promptMissingInput } from "../input/prompt";
 import { ensureCredentialStoreUnlocked } from "../keyring";
+import { ensureRunReporting } from "../run-events/runReporting";
+import { isAbortError, runFailureExitCode, runWithProcessSignalAbort } from "../run-signal-abort";
 import { createAgentRepository } from "../storage";
 import { renderSelectPrompt, renderWorkflowRun } from "../ui/render";
 import { formatError, formatTable, outputResult } from "../util";
-import { runAgentChat } from "../agent/runAgentChat";
-import { ensureRunReporting } from "../run-events/runReporting";
 
 export function registerAgentCommand(program: Command): void {
   const agent = program.command("agent").description("Manage and run agents");
@@ -341,18 +342,25 @@ export function registerAgentCommand(program: Command): void {
       }
 
       try {
-        if (process.stdout.isTTY) {
-          await renderWorkflowRun(graph, input, {
-            outputJsonFile: opts.outputJsonFile as string | undefined,
-            config: runConfig,
-          });
-        } else {
-          const result = await graph.run(input, runConfig);
-          await outputResult(result, opts.outputJsonFile as string | undefined);
-        }
+        await runWithProcessSignalAbort(
+          () => graph.abort(),
+          async () => {
+            if (process.stdout.isTTY) {
+              await renderWorkflowRun(graph, input, {
+                outputJsonFile: opts.outputJsonFile as string | undefined,
+                config: runConfig,
+              });
+            } else {
+              const result = await graph.run(input, runConfig);
+              await outputResult(result, opts.outputJsonFile as string | undefined);
+            }
+          }
+        );
       } catch (err) {
-        console.error(`Error: ${formatError(err)}`);
-        process.exit(1);
+        if (!isAbortError(err)) {
+          console.error(`Error: ${formatError(err)}`);
+        }
+        process.exit(runFailureExitCode(err));
       }
     });
 
