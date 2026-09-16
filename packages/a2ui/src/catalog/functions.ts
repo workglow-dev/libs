@@ -139,8 +139,11 @@ export const A2UI_BASIC_FUNCTIONS: A2UIFunctions = Object.freeze({
     const values = args.values;
     const bag =
       typeof values === "object" && values !== null ? (values as Record<string, unknown>) : args;
+    // Own properties only. The placeholder name is the agent's, and `in` answers
+    // off `Object.prototype` — `{constructor}` and `{toString}` came back as an
+    // empty string where the literal the agent wrote was the honest answer.
     return template.replace(/\{(\w+)\}/g, (whole, key: string) =>
-      key in bag ? str(bag[key]) : whole
+      Object.hasOwn(bag, key) ? str(bag[key]) : whole
     );
   },
   formatNumber: (args) => {
@@ -173,7 +176,15 @@ export const A2UI_BASIC_FUNCTIONS: A2UIFunctions = Object.freeze({
   },
   formatDate: (args) => {
     const raw = args.value;
-    const date = raw instanceof Date ? raw : new Date(str(raw));
+    // A number is epoch milliseconds, not text to re-parse: `new Date("2026")`
+    // is a year and `new Date("1770000000000")` is Invalid Date, so a timestamp
+    // an agent bound straight in rendered as the wrong century or as nothing.
+    const date =
+      raw instanceof Date
+        ? raw
+        : typeof raw === "number" && Number.isFinite(raw)
+          ? new Date(raw)
+          : new Date(str(raw));
     if (Number.isNaN(date.getTime())) return "";
     const style = str(args.style ?? "medium");
     const dateStyle = (["full", "long", "medium", "short"] as const).find((s) => s === style);

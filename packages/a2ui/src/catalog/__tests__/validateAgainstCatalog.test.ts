@@ -48,6 +48,56 @@ describe("batchCatalogIssues", () => {
     expect(issues).toEqual([]);
   });
 
+  it("refuses a URL a function computes, which nothing here can scheme-check", () => {
+    // The host owns the function implementations, so resolution here answers
+    // `undefined` — indistinguishable from "no URL", which let a computed
+    // `javascript:` straight past the one check the catalog rests on.
+    const issues = batchCatalogIssues(
+      batch({
+        id: "root",
+        component: "Image",
+        url: { call: "formatString", args: { template: "javascript:alert(1)" } },
+      }),
+      { catalog }
+    );
+    expect(issues.map((issue) => issue.code)).toContain("BAD_URL");
+  });
+
+  it("checks a closed set through a binding, not only a literal", () => {
+    const messages: A2UIServerMessage[] = [
+      { version: "v0.9", createSurface: { surfaceId: "s1", catalogId: A2UI_BASIC_CATALOG_ID } },
+      { version: "v0.9", updateDataModel: { surfaceId: "s1", path: "/v", value: "marquee" } },
+      {
+        version: "v0.9",
+        updateComponents: {
+          surfaceId: "s1",
+          components: [{ id: "root", component: "Text", text: "x", variant: { path: "/v" } }],
+        },
+      },
+    ];
+    expect(codes(messages)).toContain("BAD_VALUE");
+  });
+
+  it("reports a pointer the fold refuses instead of throwing out of the check", () => {
+    // Shape-legal, destination illegal, and only knowable once `/list` holds an
+    // array. Left to throw it reaches a task as an opaque failure and a renderer
+    // in the middle of drawing.
+    const messages: A2UIServerMessage[] = [
+      { version: "v0.9", createSurface: { surfaceId: "s1", catalogId: A2UI_BASIC_CATALOG_ID } },
+      { version: "v0.9", updateDataModel: { surfaceId: "s1", path: "/list", value: [1, 2] } },
+      { version: "v0.9", updateDataModel: { surfaceId: "s1", path: "/list/name", value: "x" } },
+      {
+        version: "v0.9",
+        updateComponents: {
+          surfaceId: "s1",
+          components: [{ id: "root", component: "Text", text: "x" }],
+        },
+      },
+    ];
+    expect(() => batchCatalogIssues(messages, { catalog })).not.toThrow();
+    expect(codes(messages)).toContain("BAD_POINTER");
+  });
+
   it("refuses a component the catalog does not define", () => {
     expect(codes(batch({ id: "root", component: "ScriptTag", src: "x" }))).toContain(
       "UNKNOWN_COMPONENT"

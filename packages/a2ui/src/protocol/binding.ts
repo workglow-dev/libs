@@ -130,6 +130,12 @@ export function resolveValue(value: unknown, context: A2UIResolveContext): unkno
   if (typeof value === "object" && value !== null) {
     const out: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      // `out.__proto__ = {…}` swaps the bag's prototype rather than landing as a
+      // property, so every later read of an unset key answers out of what the
+      // agent put there — and this bag becomes a component's props, or the
+      // context an action reports back. The data model strips these on the way
+      // in; a component's own properties never passed through that.
+      if (RESERVED_SEGMENTS.has(key)) continue;
       out[key] = resolveValue(entry, context);
     }
     return out;
@@ -156,6 +162,9 @@ export function resolveProps(
   for (const [key, value] of Object.entries(component)) {
     if (key === "id" || key === "component") continue;
     if (structuralProps.includes(key)) continue;
+    // Same reason as {@link resolveValue}: a component property spelled
+    // `__proto__` re-prototypes the props bag instead of becoming one of them.
+    if (RESERVED_SEGMENTS.has(key)) continue;
     out[key] = resolveValue(value, context);
   }
   return out;

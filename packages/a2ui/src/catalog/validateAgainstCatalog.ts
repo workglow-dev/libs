@@ -5,8 +5,9 @@
  */
 
 import type { A2UIComponent, A2UIServerMessage } from "../protocol/messages";
-import { isChildrenTemplate, isFunctionCall } from "../protocol/messages";
+import { isChildrenTemplate, isFunctionCall, surfaceIdOf } from "../protocol/messages";
 import { resolveValue } from "../protocol/binding";
+import { A2UIPointerError } from "../protocol/dataModel";
 import type { A2UISurfaceState } from "../protocol/surfaces";
 import { A2UI_ROOT_COMPONENT_ID, foldSurfaces } from "../protocol/surfaces";
 import type { A2UICatalogSpec, A2UIComponentSpec, A2UIPropertySpec } from "./CatalogSpec";
@@ -37,6 +38,7 @@ export type A2UICatalogIssue = {
     | "BAD_VALUE"
     | "BAD_URL"
     | "UNKNOWN_FUNCTION"
+    | "BAD_POINTER"
     | "MISSING_ROOT"
     | "DANGLING_CHILD"
     | "CYCLIC_CHILD";
@@ -189,14 +191,37 @@ function checkComponent(
       });
       continue;
     }
-    if (property.values && typeof value === "string" && !property.values.includes(value)) {
-      issues.push({
-        ...at,
-        code: "BAD_VALUE",
-        message: `${spec.name} "${component.id}" sets ${key} to "${value}"; allowed: ${property.values.join(", ")}`,
-      });
+    if (property.values) {
+      // The bound value as well as the literal, for the same reason the URL
+      // check resolves one: a closed set the agent points at its own data model
+      // is still the agent's choice, and a renderer with no fallback for an
+      // unlisted value draws whatever that string happens to name. A binding
+      // the batch has not filled yet resolves to `undefined` and is left alone —
+      // that is the protocol's incremental idiom, not a bad value.
+      const resolved =
+        typeof value === "string" ? value : resolveValue(value, { dataModel, basePath: "" });
+      if (typeof resolved === "string" && !property.values.includes(resolved)) {
+        issues.push({
+          ...at,
+          code: "BAD_VALUE",
+          message: `${spec.name} "${component.id}" sets ${key} to "${resolved}"; allowed: ${property.values.join(", ")}`,
+        });
+      }
     }
     if (property.url) {
+      // A computed URL is refused rather than checked. What a function returns
+      // is the HOST's — this package registers none — so resolving one here
+      // answers `undefined`, which is indistinguishable from "no URL" and let
+      // `{ "call": "formatString", "args": { "template": "javascript:…" } }`
+      // through the one check the catalog's safety argument rests on.
+      if (isFunctionCall(value)) {
+        issues.push({
+          ...at,
+          code: "BAD_URL",
+          message: `${spec.name} "${component.id}" property ${key}: a computed value cannot be scheme-checked; give a literal URL or bind one`,
+        });
+        continue;
+      }
       // An absolute binding resolves here; a relative one inside a repeated
       // template reads a base path this check does not know, which is why
       // `dataModelUrlIssues` sweeps the model as well.
@@ -413,7 +438,24 @@ export function batchCatalogIssues(
 
   let state: ReadonlyMap<string, A2UISurfaceState> = new Map();
   for (const message of messages) {
-    state = foldSurfaces([message], state.values());
+    // A pointer whose shape is legal but whose destination is not — `/list/name`
+    // where `/list` already holds an array — is only knowable once the model it
+    // writes into exists, so the fold is where it surfaces. Reported as an issue
+    // rather than left to throw: every caller here refuses a batch by reading
+    // this list, and a throw instead reaches a task as an opaque failure and a
+    // renderer in the middle of drawing.
+    try {
+      state = foldSurfaces([message], state.values());
+    } catch (error) {
+      if (!(error instanceof A2UIPointerError)) throw error;
+      issues.push({
+        surfaceId: surfaceIdOf(message),
+        componentId: undefined,
+        code: "BAD_POINTER",
+        message: error.message,
+      });
+      continue;
+    }
     if (!("updateComponents" in message)) continue;
     const surface = state.get(message.updateComponents.surfaceId);
     if (!surface) continue;
