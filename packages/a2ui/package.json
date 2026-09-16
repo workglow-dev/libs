@@ -16,37 +16,37 @@
   "scripts": {
     "watch": "concurrently -c 'auto' 'bun:watch-*'",
     "watch-js": "concurrently -c 'auto' -n 'protocol,catalog,tasks-br,tasks-n' 'bun run watch-protocol' 'bun run watch-catalog' 'bun run watch-tasks-browser' 'bun run watch-tasks-node'",
-    "watch-protocol": "bun build --watch --no-clear-screen --sourcemap=external --packages=external --outdir ./dist/protocol ./src/protocol/index.ts",
-    "watch-catalog": "bun build --watch --no-clear-screen --sourcemap=external --packages=external --outdir ./dist/catalog ./src/catalog/index.ts",
-    "watch-tasks-browser": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --outdir ./dist/tasks ./src/tasks/browser.ts",
-    "watch-tasks-node": "bun build --watch --no-clear-screen --target=node --sourcemap=external --packages=external --outdir ./dist/tasks ./src/tasks/node.ts",
+    "watch-protocol": "bun build --watch --no-clear-screen --sourcemap=external --packages=external --outdir ./dist ./src/protocol-entry.ts",
+    "watch-catalog": "bun build --watch --no-clear-screen --sourcemap=external --packages=external --outdir ./dist ./src/catalog-entry.ts",
+    "watch-tasks-browser": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/tasks-browser.ts",
+    "watch-tasks-node": "bun build --watch --no-clear-screen --target=node --sourcemap=external --packages=external --outdir ./dist ./src/tasks-node.ts",
     "watch-types": "tsc --watch --preserveWatchOutput",
     "build-package": "bun run build-js && bun run build-types",
     "build-js": "concurrently -m 12 --timings -c 'auto' -n 'protocol,catalog,tasks-br,tasks-n' 'bun run build-protocol' 'bun run build-catalog' 'bun run build-tasks-browser' 'bun run build-tasks-node'",
     "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
-    "build-protocol": "bun build --sourcemap=external --packages=external --outdir ./dist/protocol ./src/protocol/index.ts",
-    "build-catalog": "bun build --sourcemap=external --packages=external --outdir ./dist/catalog ./src/catalog/index.ts",
-    "build-tasks-browser": "bun build --target=browser --sourcemap=external --packages=external --outdir ./dist/tasks ./src/tasks/browser.ts",
-    "build-tasks-node": "bun build --target=node --sourcemap=external --packages=external --outdir ./dist/tasks ./src/tasks/node.ts",
+    "build-protocol": "bun build --sourcemap=external --packages=external --outdir ./dist ./src/protocol-entry.ts",
+    "build-catalog": "bun build --sourcemap=external --packages=external --outdir ./dist ./src/catalog-entry.ts",
+    "build-tasks-browser": "bun build --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/tasks-browser.ts",
+    "build-tasks-node": "bun build --target=node --sourcemap=external --packages=external --outdir ./dist ./src/tasks-node.ts",
     "build-types": "rm -f tsconfig.tsbuildinfo && tsc",
     "test": "vitest run --config ../../vitest.config.ts --project a2ui"
   },
   "exports": {
     "./protocol": {
-      "types": "./dist/protocol/index.d.ts",
-      "import": "./dist/protocol/index.js"
+      "types": "./dist/protocol-entry.d.ts",
+      "import": "./dist/protocol-entry.js"
     },
     "./catalog": {
-      "types": "./dist/catalog/index.d.ts",
-      "import": "./dist/catalog/index.js"
+      "types": "./dist/catalog-entry.d.ts",
+      "import": "./dist/catalog-entry.js"
     },
     "./tasks": {
       "browser": {
-        "types": "./dist/tasks/browser.d.ts",
-        "import": "./dist/tasks/browser.js"
+        "types": "./dist/tasks-browser.d.ts",
+        "import": "./dist/tasks-browser.js"
       },
-      "types": "./dist/tasks/node.d.ts",
-      "import": "./dist/tasks/node.js"
+      "types": "./dist/tasks-node.d.ts",
+      "import": "./dist/tasks-node.js"
     }
   },
   "peerDependencies": {
