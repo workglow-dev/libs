@@ -23,6 +23,7 @@ import { uuid4 } from "@workglow/util";
 import {
   buildInitialPromptsFromHistory,
   findLastUserIndex,
+  flattenToolExchange,
   messageText,
 } from "./WebBrowser_ChatHistory";
 import {
@@ -52,11 +53,14 @@ function flattenPrompt(prompt: ToolCallingTaskInput["prompt"]): string {
  *
  * When `input.messages` is present we treat the last user message as the
  * turn-in-progress; everything before it goes into `initialPrompts` via
- * {@link buildInitialPromptsFromHistory}. Multi-turn tool-calling histories
- * (assistant tool_use + tool role tool_result) collapse to text-only frames,
- * so a follow-up turn after tool execution may lose structured tool-call
- * context. The orchestrator is responsible for re-supplying any context the
- * model needs as plain text.
+ * {@link buildInitialPromptsFromHistory}.
+ *
+ * Everything AFTER it is this turn's tool exchange — the assistant `tool_use`
+ * an orchestrator recorded and the `tool_result` it fed back. Chrome's surface
+ * has no frame for either, so {@link flattenToolExchange} folds them into the
+ * prompt text instead of letting them fall on the floor: a second round whose
+ * request is byte-identical to the first is a model asking for the same tool
+ * until the rounds run out.
  */
 function buildToolCallPrompt(input: ToolCallingTaskInput): {
   initialPrompts: LanguageModelCreateOptions["initialPrompts"];
@@ -68,14 +72,19 @@ function buildToolCallPrompt(input: ToolCallingTaskInput): {
     const lastUserIdx = findLastUserIndex(messages);
     if (lastUserIdx < 0) {
       return {
-        initialPrompts: [],
+        initialPrompts: buildInitialPromptsFromHistory([], input.systemPrompt).initialPrompts,
         promptText: flattenPrompt(input.prompt),
       };
     }
-    const { initialPrompts } = buildInitialPromptsFromHistory(messages.slice(0, lastUserIdx));
+    const { initialPrompts } = buildInitialPromptsFromHistory(
+      messages.slice(0, lastUserIdx),
+      input.systemPrompt
+    );
+    const exchange = flattenToolExchange(messages.slice(lastUserIdx + 1));
+    const userText = messageText(messages[lastUserIdx]);
     return {
       initialPrompts,
-      promptText: messageText(messages[lastUserIdx]),
+      promptText: exchange.length === 0 ? userText : `${userText}\n\n${exchange}`,
     };
   }
 
