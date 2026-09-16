@@ -173,6 +173,18 @@
         "@workglow/util": "workspace:*",
       },
     },
+    "packages/a2ui": {
+      "name": "@workglow/a2ui",
+      "version": "0.6.1",
+      "devDependencies": {
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+      },
+      "peerDependencies": {
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+      },
+    },
     "packages/ai": {
       "name": "@workglow/ai",
       "version": "0.6.1",
@@ -1709,6 +1721,8 @@
     "@vitest/utils": ["@vitest/utils@5.0.1", "", { "dependencies": { "@vitest/pretty-format": "5.0.1", "convert-source-map": "^2.0.0", "tinyrainbow": "^3.1.1" } }, "sha512-E9+yEA+jsfaoxZcUHFzEqUrQcoNh2EwrPT5efIqkUPUwD5Ua2Li9BRWaYeRwvzvdLgTSVrre8oKNeyrfg7KkdQ=="],
 
     "@workglow/a2a": ["@workglow/a2a@workspace:packages/a2a"],
+
+    "@workglow/a2ui": ["@workglow/a2ui@workspace:packages/a2ui"],
 
     "@workglow/ai": ["@workglow/ai@workspace:packages/ai"],
 
