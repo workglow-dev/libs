@@ -6,9 +6,15 @@
 
 import type { Part, Task as A2ATask } from "@a2a-js/sdk";
 import { AGENT_CARD_PATH, Role, TaskState, taskStateToJSON } from "@a2a-js/sdk";
-import { ClientFactory } from "@a2a-js/sdk/client";
-import type { IExecuteContext, TaskConfig } from "@workglow/task-graph";
-import { Task, TaskConfigSchema } from "@workglow/task-graph";
+import {
+  ClientFactory,
+  DefaultAgentCardResolver,
+  JsonRpcTransportFactory,
+  RestTransportFactory,
+} from "@a2a-js/sdk/client";
+import type { IExecuteContext, TaskConfig, TaskEntitlements } from "@workglow/task-graph";
+import { Entitlements, mergeEntitlements, Task, TaskConfigSchema } from "@workglow/task-graph";
+import { classifyUrl, safeFetch, urlResourcePattern } from "@workglow/tasks";
 import { uuid4 } from "@workglow/util";
 import type { DataPortSchema } from "@workglow/util/schema";
 
@@ -95,6 +101,82 @@ export function resolveCardLocation(agentUrl: string): CardLocation {
   return { baseUrl: url.toString(), cardPath: undefined };
 }
 
+/** What reaching any agent costs, before the destination is known. */
+const A2A_BASE_ENTITLEMENTS: TaskEntitlements = Object.freeze({
+  entitlements: Object.freeze([
+    { id: Entitlements.NETWORK_HTTP, reason: "Sends a prompt to a remote agent over HTTP(S)" },
+  ]),
+});
+
+/**
+ * Entitlements a call to `agentUrl` requires.
+ *
+ * The destination is the caller's to choose — on an agent's tool list the port
+ * is filled by a model — so this is the same shape a URL fetcher declares: HTTP
+ * always, plus `network:private` scoped to the origin when that origin is
+ * loopback, link-local or otherwise internal. An agent URL not yet known at
+ * evaluation time fails closed and requires the private grant unscoped.
+ */
+export function a2aAgentEntitlementsFor(agentUrl: string | undefined): TaskEntitlements {
+  const base = A2A_BASE_ENTITLEMENTS;
+  if (typeof agentUrl !== "string" || agentUrl.length === 0) {
+    return mergeEntitlements(base, {
+      entitlements: [
+        {
+          id: Entitlements.NETWORK_PRIVATE,
+          reason:
+            "Agent URL is not yet available during entitlement evaluation; private/internal destinations must be explicitly allowed",
+        },
+      ],
+    });
+  }
+  const classification = classifyUrl(agentUrl);
+  if (classification.kind !== "private") return base;
+  return mergeEntitlements(base, {
+    entitlements: [
+      {
+        id: Entitlements.NETWORK_PRIVATE,
+        reason: `Agent URL targets private/internal host: ${classification.reason ?? classification.host ?? "unknown"}`,
+        resources: [urlResourcePattern(agentUrl)],
+      },
+    ],
+  });
+}
+
+/**
+ * What the SDK actually calls its `fetchImpl` as. Spelled out rather than
+ * `typeof fetch`, whose Bun-flavoured form also carries `preconnect`.
+ */
+type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+/** The URL a request names. The SDK passes a string or a `URL`, never a `Request`. */
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+/**
+ * The fetch the SDK is given: every card lookup and every transport call runs
+ * through the SSRF checks, DNS pinning and redirect-scope enforcement.
+ *
+ * Both halves matter, because they are two different destinations. The card is
+ * fetched from the agent URL, and the card then NAMES the endpoint the
+ * transport speaks to — so a public agent can hand back a loopback endpoint,
+ * and only a check on the second request catches it.
+ *
+ * A private destination is allowed only when the agent URL itself was private,
+ * which is what the task declared `network:private` for and what the enforcer
+ * approved; the declared origin is passed as the scope so neither a card nor a
+ * redirect can pivot to a different internal host.
+ */
+function fetchForAgent(agentUrl: string): FetchLike {
+  const allowPrivate = classifyUrl(agentUrl).kind === "private";
+  const privateResourceScopes = allowPrivate ? [urlResourcePattern(agentUrl)] : undefined;
+  return (input, init) =>
+    safeFetch(requestUrl(input), { ...init, allowPrivate, privateResourceScopes });
+}
+
 /**
  * One client per agent, kept for the life of the process.
  *
@@ -116,9 +198,21 @@ function defaultCreateClient(agentUrl: string): Promise<A2AClientLike> {
 }
 
 async function createClient(location: CardLocation): Promise<A2AClientLike> {
+  // The SDK types its option as the whole `fetch` global; it only ever calls it.
+  const fetchImpl = fetchForAgent(location.baseUrl) as typeof fetch;
+  // Transports are listed rather than merged onto the SDK's defaults: one the
+  // SDK adds later would arrive without this fetch, and an unchecked transport
+  // is the whole hole back.
+  const factory = new ClientFactory({
+    transports: [
+      new JsonRpcTransportFactory({ fetchImpl }),
+      new RestTransportFactory({ fetchImpl }),
+    ],
+    cardResolver: new DefaultAgentCardResolver({ fetchImpl }),
+  });
   // The card is resolved first: it names the binding to speak and the URL to
   // speak it at, so a bare URL is not enough to build a client from.
-  const client = await new ClientFactory().createFromUrl(location.baseUrl, location.cardPath);
+  const client = await factory.createFromUrl(location.baseUrl, location.cardPath);
   return {
     sendMessage: async (input, signal) => {
       const reply = await client.sendMessage(
@@ -165,6 +259,20 @@ export class A2AAgentTask extends Task<A2AAgentTaskInput, A2AAgentTaskOutput, A2
   public static override description = "Send a message to an agent published over A2A.";
   /** A remote agent is not a pure function of its input. */
   public static override cacheable = false;
+  public static override hasDynamicEntitlements: boolean = true;
+
+  public static override entitlements(): TaskEntitlements {
+    return A2A_BASE_ENTITLEMENTS;
+  }
+
+  /**
+   * Narrows the static declaration to the agent this run actually reaches: a
+   * public one needs no private grant, a private one needs it scoped to its own
+   * origin so a grant for a dev server is not a grant for the metadata service.
+   */
+  public override entitlements(): TaskEntitlements {
+    return a2aAgentEntitlementsFor(this.runInputData?.agentUrl);
+  }
 
   public static override configSchema(): DataPortSchema {
     return configSchema;

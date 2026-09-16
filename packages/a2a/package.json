@@ -55,6 +55,7 @@
   "peerDependencies": {
     "@workglow/ai": "workspace:*",
     "@workglow/storage": "workspace:*",
+    "@workglow/tasks": "workspace:*",
     "@workglow/task-graph": "workspace:*",
     "@workglow/util": "workspace:*"
   },
@@ -63,6 +64,9 @@
       "optional": false
     },
     "@workglow/storage": {
+      "optional": false
+    },
+    "@workglow/tasks": {
       "optional": false
     },
     "@workglow/task-graph": {
@@ -75,6 +79,7 @@
   "devDependencies": {
     "@workglow/ai": "workspace:*",
     "@workglow/storage": "workspace:*",
+    "@workglow/tasks": "workspace:*",
     "@workglow/task-graph": "workspace:*",
     "@workglow/util": "workspace:*"
   },

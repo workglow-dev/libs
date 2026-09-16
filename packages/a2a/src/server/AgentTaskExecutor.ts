@@ -17,9 +17,16 @@ import { AgentEvent } from "@a2a-js/sdk/server";
 import type { AgentTaskInput, ChatMessage } from "@workglow/ai";
 import { AgentTask } from "@workglow/ai";
 import { getLogger, uuid4 } from "@workglow/util";
+import type { DataPortSchemaObject } from "@workglow/util/schema";
 
 import type { IA2AAgentDescriptor } from "../util/AgentDescriptor";
-import { PartBindingError, partsToPorts, textOfParts, textPart } from "../util/partBinding";
+import {
+  declaredPortNames,
+  PartBindingError,
+  partsToPorts,
+  textOfParts,
+  textPart,
+} from "../util/partBinding";
 
 /** One turn, as this executor needs it — injected so a test needs no model. */
 export type RunAgentTurn = (
@@ -80,6 +87,26 @@ function agentMessage(taskId: string, contextId: string, text: string): Message 
 
 function statusNow(state: TaskState, message: Message | undefined): TaskStatus {
   return { state, message, timestamp: new Date().toISOString() };
+}
+
+/**
+ * Keeps only the keys the skill declared as ports.
+ *
+ * `partsToPorts` already binds nothing else, and this restates that where the
+ * bag is spread into the turn's input — the one place where a key that got
+ * through would be read as a setting the host owns (the tool list, the system
+ * prompt, whether a tool call is put to a person) rather than as an argument.
+ */
+function onlyDeclared(
+  bound: Record<string, unknown>,
+  schema: DataPortSchemaObject
+): Record<string, unknown> {
+  const declared = new Set(declaredPortNames(schema));
+  const kept: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(bound)) {
+    if (declared.has(key)) kept[key] = value;
+  }
+  return kept;
 }
 
 function chatMessage(role: "user" | "assistant", text: string): ChatMessage {
@@ -166,7 +193,7 @@ export class AgentTaskExecutor implements AgentExecutor {
       // Bind through the skill's schema when it declares one; otherwise the
       // prompt is simply the text the caller sent.
       const bound = skill?.inputSchema
-        ? partsToPorts(parts, skill.inputSchema)
+        ? onlyDeclared(partsToPorts(parts, skill.inputSchema), skill.inputSchema)
         : { prompt: textOfParts(parts) };
       const history = await this.priorMessages(contextId, taskId, requestContext.context);
       // A cancel that landed while the history was read has no turn to abort;
