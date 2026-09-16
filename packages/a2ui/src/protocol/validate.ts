@@ -67,6 +67,26 @@ function checkString(
 }
 
 /**
+ * A pointer, which unlike every other string on the wire may be empty.
+ *
+ * `""` and `"/"` both name the root, so {@link checkString}'s non-empty rule
+ * refuses a message {@link parsePointer} parses and the root check below is
+ * written to expect. An empty `surfaceId` names nothing; an empty pointer names
+ * the whole model.
+ */
+function checkPointer(
+  value: unknown,
+  where: string,
+  limits: A2UIValidationLimits
+): string | undefined {
+  if (typeof value !== "string") return `${where} must be a string`;
+  if (value.length > limits.maxStringLength) {
+    return `${where} is longer than ${limits.maxStringLength} characters`;
+  }
+  return undefined;
+}
+
+/**
  * Walks a JSON value the agent wrote, bounding depth and string length.
  *
  * Depth rather than total size because the cost a renderer pays is per node:
@@ -202,7 +222,7 @@ export function validateServerMessage(
     }
     case "updateDataModel": {
       if (body.path !== undefined) {
-        const pathReason = checkString(body.path, "updateDataModel/path", limits);
+        const pathReason = checkPointer(body.path, "updateDataModel/path", limits);
         if (pathReason) return fail(pathReason);
         try {
           parsePointer(body.path as string);

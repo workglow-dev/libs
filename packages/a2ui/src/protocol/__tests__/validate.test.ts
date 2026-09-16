@@ -202,6 +202,25 @@ describe("refusals that would otherwise escape as a throw", () => {
     expect(reasonOf(result)).toMatch(/root must carry an object/);
   });
 
+  it('accepts the empty pointer, which names the root like "/" does', () => {
+    // parsePointer reads "" and "/" as the same empty segment list, and the
+    // root check below reads both. Refusing one of them for being empty
+    // refuses a message the rest of the package is written to accept.
+    const result = validateServerMessages([
+      create,
+      { version: "v0.9", updateDataModel: { surfaceId: "s1", path: "", value: { rows: [] } } },
+    ]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("still holds the root to an object when the pointer is empty", () => {
+    const result = validateServerMessages([
+      create,
+      { version: "v0.9", updateDataModel: { surfaceId: "s1", path: "", value: 7 } },
+    ]);
+    expect(reasonOf(result)).toMatch(/root must carry an object/);
+  });
+
   it("accepts an object root, and a non-object below it", () => {
     const result = validateServerMessages([
       create,
