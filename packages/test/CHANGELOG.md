@@ -1,5 +1,31 @@
 # @workglow/test
 
+## 0.6.3
+
+### Features
+
+- add @huggingface/transformers-structured-output dependency and update related packages
+
+### Bug Fixes
+
+#### chrome-ai
+
+- carry the tool exchange into the next tool-calling round
+
+#### ai
+
+- stop a graph JSON document turning off an agent's tool approvals
+
+### Refactors
+
+#### vscode
+
+- update settings for formatting and linting
+
+### Updated Dependencies
+
+- `miniflare`: ^5.20260916.0-alpha
+
 ## 0.6.2
 
 ### Features

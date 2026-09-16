@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.3
+
+### Bug Fixes
+
+- update stripAnsi function to handle control characters and enhance date parsing in publishedDate module
+
 ## 0.6.2
 
 _No changes in this package._

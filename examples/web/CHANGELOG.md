@@ -1,5 +1,11 @@
 # @workglow/web
 
+## 0.6.3
+
+### Features
+
+- add @huggingface/transformers-structured-output dependency and update related packages
+
 ## 0.6.2
 
 _No changes in this package._

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.3
+
+### Bug Fixes
+
+#### chrome-ai
+
+- carry the tool exchange into the next tool-calling round
+
 ## 0.6.2
 
 _No changes in this package._

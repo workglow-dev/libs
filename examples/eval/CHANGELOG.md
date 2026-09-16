@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.3
+
+### Features
+
+- add @huggingface/transformers-structured-output dependency and update related packages
+
+### Updated Dependencies
+
+- `hyparquet`: ^1.31.0
+
 ## 0.6.2
 
 _No changes in this package._

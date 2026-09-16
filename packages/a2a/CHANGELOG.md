@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.3
+
+### Bug Fixes
+
+#### a2a
+
+- declare A2AAgentTask's network reach, and stop a peer binding undeclared ports
+
 ## 0.6.2
 
 _No changes in this package._

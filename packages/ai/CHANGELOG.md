@@ -1,5 +1,13 @@
 # @workglow/ai
 
+## 0.6.3
+
+### Bug Fixes
+
+#### ai
+
+- stop a graph JSON document turning off an agent's tool approvals
+
 ## 0.6.2
 
 _No changes in this package._

@@ -1,5 +1,23 @@
 # @workglow/cli
 
+## 0.6.3
+
+### Features
+
+- add @huggingface/transformers-structured-output dependency and update related packages
+
+#### cli
+
+- implement process signal abort handling in CLI commands and UI components
+
+### Bug Fixes
+
+- update stripAnsi function to handle control characters and enhance date parsing in publishedDate module
+
+#### ai
+
+- stop a graph JSON document turning off an agent's tool approvals
+
 ## 0.6.2
 
 ### Features

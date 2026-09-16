@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.3
+
+### Refactors
+
+#### a2ui
+
+- build entries flat into dist, as every other package does
+
 ## 0.6.2
 
 ### Features
