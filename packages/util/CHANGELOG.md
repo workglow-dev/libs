@@ -1,5 +1,19 @@
 # @workglow/util
 
+## 0.6.2
+
+### Features
+
+#### cli,util
+
+- let a person refuse a form, not only submit or abandon it
+
+### Performance
+
+#### test
+
+- decrypt test credentials once per run, not once per test file
+
 ## 0.6.1
 
 ### Features

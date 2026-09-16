@@ -1,5 +1,13 @@
 # @workglow/test
 
+## 0.6.2
+
+### Features
+
+#### cli,util
+
+- let a person refuse a form, not only submit or abandon it
+
 ## 0.6.1
 
 ### Features

@@ -2,7 +2,7 @@
   "name": "@workglow/stable-diffusion-server",
   "type": "module",
   "sideEffects": false,
-  "version": "0.6.1",
+  "version": "0.6.2",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

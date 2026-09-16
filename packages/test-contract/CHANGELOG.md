@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2
+
+### Bug Fixes
+
+#### test-contract
+
+- stop expected-fail tests reporting as flaky
+
 ## 0.6.1
 
 ### Features

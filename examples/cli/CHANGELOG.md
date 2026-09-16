@@ -1,5 +1,19 @@
 # @workglow/cli
 
+## 0.6.2
+
+### Features
+
+#### cli,util
+
+- let a person refuse a form, not only submit or abandon it
+
+### Bug Fixes
+
+#### cli
+
+- honour a refusal on the form-load-error panel
+
 ## 0.6.1
 
 ### Features

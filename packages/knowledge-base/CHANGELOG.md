@@ -1,5 +1,9 @@
 # @workglow/knowledge-base
 
+## 0.6.2
+
+_No changes in this package._
+
 ## 0.6.1
 
 _No changes in this package._
