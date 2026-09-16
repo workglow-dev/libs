@@ -62,6 +62,9 @@
       "optional": false
     }
   },
+  "dependencies": {
+    "@huggingface/transformers-structured-output": "catalog:"
+  },
   "devDependencies": {
     "@huggingface/transformers": "catalog:",
     "@workglow/ai": "workspace:*",

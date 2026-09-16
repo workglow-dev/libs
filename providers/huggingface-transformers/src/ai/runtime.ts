@@ -25,3 +25,12 @@ export * from "./common/HFT_TextReranker";
 export * from "./common/HFT_ToolMarkup";
 export * from "./registerHuggingFaceTransformersInline";
 export * from "./registerHuggingFaceTransformersWorker";
+
+import { HFT_RUN_FNS } from "./common/HFT_JobRunFns";
+
+/**
+ * @internal Symbols exported only for use by `@workglow/test`. Not part of the stable public API.
+ */
+export const _testOnly = {
+  HFT_RUN_FNS,
+} as const;

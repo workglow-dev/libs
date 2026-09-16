@@ -5,6 +5,8 @@
  */
 
 import type { Message, TextGenerationPipeline } from "@huggingface/transformers";
+import type { ResponseFormat } from "@huggingface/transformers-structured-output";
+import { StructuredOutputProcessor } from "@huggingface/transformers-structured-output";
 import type {
   AiProviderRunFn,
   StructuredGenerationTaskInput,
@@ -87,12 +89,21 @@ export const HFT_StructuredGeneration: AiProviderRunFn<
       signal.addEventListener("abort", () => stopping_criteria.interrupt(), { once: true });
     }
 
+    // Prompt injection tells the model what the fields mean; the logits
+    // processor is what actually constrains decode to valid JSON for the schema.
+    const processor = new StructuredOutputProcessor(generateText.tokenizer, {
+      type: "json_schema",
+      json_schema: input.outputSchema,
+    } as Extract<ResponseFormat, { type: "json_schema" }>);
+
     await generateText(formattedPrompt, {
       max_new_tokens: input.maxTokens ?? 1024,
       temperature: input.temperature ?? undefined,
+      do_sample: false,
       return_full_text: false,
       streamer,
       stopping_criteria: [stopping_criteria],
+      logits_processor: processor,
     });
 
     emit({

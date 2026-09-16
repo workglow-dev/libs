@@ -68,7 +68,8 @@
     "caniuse-lite": "^1.0.30001810"
   },
   "catalog": {
-    "@huggingface/transformers": "^4.2.0",
+    "@huggingface/transformers": "^4.3.0",
+    "@huggingface/transformers-structured-output": "^4.3.0",
     "@mediapipe/tasks-text": "^1.0.1",
     "@mediapipe/tasks-vision": "^1.0.1",
     "@mediapipe/tasks-audio": "^1.0.1",
@@ -80,7 +81,7 @@
     "needle-rs": "^0.2.1",
     "@huggingface/inference": "^4.13.28",
     "ollama": "^0.6.3",
-    "openai": "^7.15.0",
+    "openai": "^7.17.0",
     "tiktoken": "^1.0.22",
     "js-tiktoken": "^1.0.21",
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -93,7 +94,7 @@
     "@duckdb/node-api": "^1.5.5-r.5",
     "@sqlite.org/sqlite-wasm": "^3.53.4-build1",
     "@sqliteai/sqlite-vector": "^1.1.2",
-    "@aws-sdk/client-sqs": "^3.1133.0",
+    "@aws-sdk/client-sqs": "^3.1134.0",
     "@cloudflare/workers-types": "^5.20260916.1",
     "fake-indexeddb": "^6.2.5",
     "@types/dom-chromium-ai": "^0.0.17",
@@ -150,8 +151,6 @@
     "{packages,providers,examples}/*/src/**/*.json": "oxfmt --no-error-on-unmatched-pattern"
   },
   "overrides": {
-    "@types/node": "24.13.4",
-    "adm-zip": "^0.6.0",
-    "sharp": "0.35.4"
+    "@types/node": "24.13.4"
   }
 }

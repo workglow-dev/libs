@@ -65,6 +65,7 @@
     "@workglow/tasks": "workspace:*",
     "@workglow/util": "workspace:*",
     "@huggingface/transformers": "catalog:",
+    "@huggingface/transformers-structured-output": "catalog:",
     "tiktoken": "catalog:",
     "openai": "catalog:",
     "ollama": "catalog:",
