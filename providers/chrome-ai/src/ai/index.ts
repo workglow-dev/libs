@@ -20,6 +20,7 @@ import { WebBrowser_Chat } from "./common/WebBrowser_Chat";
 import {
   buildInitialPromptsFromHistory,
   findLastUserIndex,
+  flattenToolExchange,
   messageText,
 } from "./common/WebBrowser_ChatHistory";
 import { snapshotStreamToTextDeltas } from "./common/WebBrowser_ChromeHelpers";
@@ -68,6 +69,7 @@ export const _testOnly = {
     messageText,
     findLastUserIndex,
     buildInitialPromptsFromHistory,
+    flattenToolExchange,
   },
   chromeHelpers: {
     snapshotStreamToTextDeltas,

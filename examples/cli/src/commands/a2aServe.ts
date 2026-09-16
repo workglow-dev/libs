@@ -7,7 +7,7 @@
 import { DEFAULT_A2A_PATH, startA2AHttpServer } from "@workglow/a2a/server";
 import type { IA2AAgentDescriptor } from "@workglow/a2a/util";
 import type { AgentTaskInput } from "@workglow/ai";
-import { AgentTask } from "@workglow/ai";
+import { AGENT_APPROVAL_OPT_OUT, AgentTask } from "@workglow/ai";
 import type { TaskGraphJson } from "@workglow/task-graph";
 import { globalServiceRegistry, HUMAN_CONNECTOR } from "@workglow/util";
 import type { Command } from "commander";
@@ -155,6 +155,10 @@ export function registerA2AServeCommand(a2a: Command): void {
       // A served agent has no person to ask. `--no-approval` runs its tools
       // regardless; the default declines each request in words the model can
       // act on, instead of leaving the process's own terminal prompt to throw.
+      //
+      // The opt-out is registered as well as set on the input, because the
+      // input half came out of a saved graph and the turn will not lower its
+      // gate on a document's say-so.
       const descriptor: IA2AAgentDescriptor = opts.approval
         ? described
         : { ...described, agentInput: { ...described.agentInput, approval: "never" } };
@@ -166,6 +170,8 @@ export function registerA2AServeCommand(a2a: Command): void {
               "Start it with --no-approval to run tools unasked."
           )
         );
+      } else {
+        globalServiceRegistry.registerInstance(AGENT_APPROVAL_OPT_OUT, true);
       }
 
       // The agent's model needs its key before the first peer arrives, not

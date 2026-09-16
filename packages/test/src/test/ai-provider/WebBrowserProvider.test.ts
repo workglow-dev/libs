@@ -1405,3 +1405,145 @@ describe("snapshotStreamToTextDeltas", () => {
     expect((deltas[0] as { textDelta: string }).textDelta).toBe("hi");
   });
 });
+
+// --------------------------------------------------------------------------
+// ToolCalling multi-round context
+// --------------------------------------------------------------------------
+
+/**
+ * A `LanguageModel` that records what each turn was actually asked, so a test
+ * can tell two rounds apart. It calls no tools: the point is the request.
+ */
+function makeRecordingToolCallingModel(): {
+  factory: any;
+  turns: Array<{ initialPrompts: unknown; promptText: string }>;
+} {
+  const turns: Array<{ initialPrompts: unknown; promptText: string }> = [];
+  const factory = {
+    availability: vi.fn().mockResolvedValue("available"),
+    create: vi.fn(async (options?: { initialPrompts?: unknown }) => {
+      const initialPrompts = options?.initialPrompts;
+      return {
+        promptStreaming: (text: string) => {
+          turns.push({ initialPrompts, promptText: text });
+          return new ReadableStream<string>({
+            start(controller) {
+              controller.close();
+            },
+          });
+        },
+        destroy: vi.fn(),
+      };
+    }),
+  };
+  return { factory, turns };
+}
+
+describe("WebBrowser_ToolCalling multi-round context", () => {
+  const toolA: ToolDefinition = {
+    name: "tool_a",
+    description: "tool a",
+    inputSchema: { type: "object", properties: {}, additionalProperties: true },
+  };
+
+  /**
+   * An agent turn feeds each round back as `messages` alone: the assistant's
+   * `tool_use` and a `role: "tool"` message carrying the `tool_result`. Chrome
+   * has no frame for either, so dropping them made round two's request
+   * byte-identical to round one's — the model asked for the same tool again,
+   * every round, and the turn ended with no answer and the tool run N times.
+   */
+  it("carries the tool result into the next round's request", async () => {
+    const { factory, turns } = makeRecordingToolCallingModel();
+    const restore = installLanguageModelGlobal(factory);
+    try {
+      const emit = vi.fn();
+      const round1: ChatMessage[] = [
+        { role: "user", content: [{ type: "text", text: "what is the weather" }] },
+      ];
+      await WebBrowser_ToolCalling(
+        asTCI({ prompt: "", tools: [toolA], messages: round1 }),
+        undefined,
+        new AbortController().signal,
+        emit
+      );
+
+      const round2: ChatMessage[] = [
+        ...round1,
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "c1", name: "tool_a", input: { city: "Paris" } }],
+        },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "c1",
+              content: [{ type: "text", text: "18C and raining" }],
+              is_error: undefined,
+            },
+          ],
+        },
+      ];
+      await WebBrowser_ToolCalling(
+        asTCI({ prompt: "", tools: [toolA], messages: round2 }),
+        undefined,
+        new AbortController().signal,
+        emit
+      );
+
+      expect(turns).toHaveLength(2);
+      expect(turns[1]!.promptText).not.toBe(turns[0]!.promptText);
+      expect(turns[1]!.promptText).toContain("what is the weather");
+      expect(turns[1]!.promptText).toContain("tool_a");
+      expect(turns[1]!.promptText).toContain("18C and raining");
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the system prompt when a history is also supplied", async () => {
+    const { factory, turns } = makeRecordingToolCallingModel();
+    const restore = installLanguageModelGlobal(factory);
+    try {
+      await WebBrowser_ToolCalling(
+        asTCI({
+          prompt: "",
+          tools: [toolA],
+          systemPrompt: "You are terse.",
+          messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+        }),
+        undefined,
+        new AbortController().signal,
+        vi.fn()
+      );
+
+      expect(turns[0]!.initialPrompts).toEqual([{ role: "system", content: "You are terse." }]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("marks a failed tool result as an error rather than as its answer", () => {
+    const text = chatHistory.flattenToolExchange([
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "c1", name: "tool_a", input: {} }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "c1",
+            content: [{ type: "text", text: "no such city" }],
+            is_error: true,
+          },
+        ],
+      },
+    ]);
+
+    expect(text).toContain("Tool error from tool_a: no such city");
+  });
+});

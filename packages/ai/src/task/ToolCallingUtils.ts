@@ -56,11 +56,12 @@ export interface ToolDefinition {
    */
   execute?: (input: Record<string, unknown>, context: ToolExecuteContext) => Promise<unknown>;
   /**
-   * Whether a person approves each call before it runs, overriding whatever a
-   * runner would otherwise decide for this tool. Set it in both directions: a
-   * host function that spends money says `true`, and a task whose reach a host
-   * has already scoped away says `false`. Absent leaves the decision to the
-   * runner — see `AgentTask`, which reads it from the backing task class.
+   * Whether a person approves each call before it runs. `true` is honoured
+   * wherever the definition came from; `false` only where the definition
+   * cannot have been written by an untrusted document — on a tool carrying an
+   * `execute` function, or under a host that opted the run out of approvals
+   * (`AGENT_APPROVAL_OPT_OUT`). Absent leaves the decision to the runner — see
+   * `AgentTask`, which reads it from the backing task class.
    */
   requiresApproval?: boolean;
 }

@@ -92,7 +92,7 @@ export const AgentInputSchema = {
       type: "string",
       title: "Approval",
       description:
-        'When a tool call is put to a person first: "beyond-inference" confirms any tool reaching past running a model, "never" confirms nothing',
+        'When a tool call is put to a person first: "beyond-inference" confirms any tool reaching past running a model, "never" confirms nothing. "never" needs the host to bind AGENT_APPROVAL_OPT_OUT; on its own it cannot take a confirmation away.',
       enum: ["beyond-inference", "never"],
       "x-ui-group": "Configuration",
     },
