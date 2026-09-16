@@ -9,7 +9,6 @@
   "editor.formatOnType": false,
   "editor.formatOnSave": true,
   "editor.formatOnSaveMode": "file",
-  "eslint.format.enable": false,
   "files.exclude": {
     // "**/dist": true,
     // "**/build": true,
@@ -24,10 +23,13 @@
     "**/node_modules": true
   },
   "editor.codeActionsOnSave": {
-    "source.fixAll.eslint": "explicit",
+    "source.fixAll.oxc": "explicit",
     "source.organizeImports": "always"
   },
-  "eslint.codeActionsOnSave.rules": null,
+  "typescript.format.tabSize": 2,
+  "typescript.format.indentSize": 2,
+  "javascript.format.tabSize": 2,
+  "javascript.format.indentSize": 2,
   "explorer.autoRevealExclude": {
     "data-out/**": true,
     "data-in/**": true
@@ -42,7 +44,7 @@
   },
   "typescript.format.enable": false,
   "typescript.disableAutomaticTypeAcquisition": false,
-  "typescript.preferences.importModuleSpecifier": "relative",
+  "js/ts.preferences.importModuleSpecifier": "relative",
   "html.format.enable": true,
   "json.format.enable": true,
   "javascript.format.enable": false,
@@ -50,6 +52,5 @@
   "bun.debugTerminal.enabled": true,
   "markdown.extension.toc.levels": "2..6",
   "js/ts.implicitProjectConfig.target": "ESNext",
-  "typescript.suggest.paths": false,
-  "javascript.suggest.paths": false
+  "js/ts.suggest.paths": false
 }
