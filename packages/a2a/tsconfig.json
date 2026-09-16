@@ -19,6 +19,9 @@
     },
     {
       "path": "../ai"
+    },
+    {
+      "path": "../tasks"
     }
   ],
   "exclude": ["dist", "node_modules", "src/**/__tests__/**", "src/**/*.test.ts"]

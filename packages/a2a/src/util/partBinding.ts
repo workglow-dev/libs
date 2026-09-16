@@ -49,9 +49,18 @@ function requiredPorts(schema: DataPortSchemaObject | undefined): readonly strin
   return Array.isArray(required) ? (required as readonly string[]) : [];
 }
 
-function declaredPorts(schema: DataPortSchemaObject | undefined): readonly string[] | undefined {
+/**
+ * The port names a schema declares — none of them when it declares no
+ * properties, and none when there is no schema at all.
+ *
+ * A free-form schema (`{ type: "object" }`) is the natural spelling of "send me
+ * anything", and reading it as "every key is a port" is what lets a peer set
+ * one the host never offered. A host that means a port says so by declaring it,
+ * so the rule below holds for every schema shape rather than most of them.
+ */
+export function declaredPortNames(schema: DataPortSchemaObject | undefined): readonly string[] {
   const properties = schema?.properties;
-  return properties && typeof properties === "object" ? Object.keys(properties) : undefined;
+  return properties && typeof properties === "object" ? Object.keys(properties) : [];
 }
 
 function isStringPort(schema: DataPortSchemaObject | undefined, name: string): boolean {
@@ -84,7 +93,7 @@ export function partsToPorts(
   parts: readonly Part[],
   schema: DataPortSchemaObject | undefined
 ): Record<string, unknown> {
-  const declared = declaredPorts(schema);
+  const declared = declaredPortNames(schema);
   const ports: Record<string, unknown> = {};
   for (const part of parts) {
     const content = part.content;
@@ -93,7 +102,7 @@ export function partsToPorts(
     if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
     for (const key of Object.keys(value)) {
       if (RESERVED_KEYS.has(key)) continue;
-      if (declared !== undefined && !declared.includes(key)) continue;
+      if (!declared.includes(key)) continue;
       ports[key] = (value as Record<string, unknown>)[key];
     }
   }
@@ -104,7 +113,7 @@ export function partsToPorts(
   const unset = (name: string): boolean => !(name in ports);
   let candidates = requiredPorts(schema).filter(unset);
   if (candidates.length === 0) {
-    candidates = (declared ?? []).filter((name) => unset(name) && isStringPort(schema, name));
+    candidates = declared.filter((name) => unset(name) && isStringPort(schema, name));
   }
   if (candidates.length !== 1) throw new PartBindingError(candidates);
   ports[candidates[0]!] = text;
