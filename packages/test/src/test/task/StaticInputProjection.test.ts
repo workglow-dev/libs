@@ -7,6 +7,7 @@
 import {
   computeGraphEntitlements,
   Dataflow,
+  MapTask,
   Task,
   TaskGraph,
   withStaticInputProjection,
@@ -118,5 +119,32 @@ describe("withStaticInputProjection", () => {
 
     expect(fetch.runInputData).toBe(before);
     expect(fetch.runInputData["url"]).toBeUndefined();
+  });
+
+  // The Help/Blog Indexer is this shape: an outer url[] fans into a MapTask
+  // whose subgraph FileLoader/Fetch classifies `url`. Projection seeds the
+  // subgraph with the whole array; classifying it must scope private hosts,
+  // not fail-close unscoped (which a loopback grant cannot cover).
+  it("scopes network:private for a MapTask url array of private hosts", () => {
+    const inner = new TaskGraph();
+    inner.addTask(new FetchUrlTask({ id: "fetch", defaults: { response_type: "text" } } as any));
+    const map = new MapTask({ id: "map", maxIterations: "unbounded" });
+    map.subGraph = inner;
+    const graph = new TaskGraph();
+    graph.addTask(map);
+
+    const required = withStaticInputProjection(
+      graph,
+      {
+        url: [
+          "http://localhost:5173/raw/workglow.dev/blog/a.mdx",
+          "http://localhost:5173/raw/workglow.dev/blog/b.mdx",
+        ],
+      },
+      () => computeGraphEntitlements(graph)
+    );
+    const declared = privateEntitlement(required);
+    expect(declared).toBeDefined();
+    expect(declared?.resources).toEqual(["http://localhost:5173/*"]);
   });
 });

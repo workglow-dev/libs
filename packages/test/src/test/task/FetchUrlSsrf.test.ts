@@ -22,9 +22,11 @@ import {
 } from "@workglow/task-graph";
 import {
   classifyUrl,
+  fetchUrlEntitlementsFor,
   FetchUrlErrorCode,
   FetchUrlTask,
   getSafeFetchImpl,
+  MAX_PRIVATE_RESOURCE_PATTERNS,
   registerSafeFetch,
   resetSafeFetch,
   safeFetch,
@@ -34,11 +36,11 @@ import {
   type SafeFetchOptions,
 } from "@workglow/tasks";
 import {
+  asText,
   Container,
   InMemoryCredentialStore,
-  ServiceRegistry,
-  asText,
   registerCredentialDefaults,
+  ServiceRegistry,
   setGlobalCredentialStore,
   setLogger,
 } from "@workglow/util";
@@ -928,6 +930,78 @@ describe("FetchUrlTask dynamic entitlements", () => {
     // Fail-closed: require network:private when URL is not yet known at entitlement
     // evaluation time, so a policy grant is needed before any private access can happen.
     expect(ids).toContain(Entitlements.NETWORK_PRIVATE);
+  });
+
+  test("scopes network:private across an array of private URLs", () => {
+    // MapTask projection seeds the inner fetch with the whole url[] rather than
+    // one scalar per iteration. Classifying the array must union per-host
+    // scopes — treating a non-string as "unknown" would declare unscoped
+    // network:private, which a loopback-only grant cannot cover.
+    const result = fetchUrlEntitlementsFor([
+      "http://localhost:5173/raw/a.mdx",
+      "http://localhost:5173/raw/b.mdx",
+    ]);
+    const privateEnt = result.entitlements.find((e) => e.id === Entitlements.NETWORK_PRIVATE);
+    expect(privateEnt).toBeDefined();
+    expect(privateEnt?.resources).toEqual(["http://localhost:5173/*"]);
+  });
+
+  test("does not declare network:private for an array of public URLs", () => {
+    const result = fetchUrlEntitlementsFor(["https://example.com/a", "https://example.com/b"]);
+    expect(result.entitlements.map((e) => e.id)).not.toContain(Entitlements.NETWORK_PRIVATE);
+  });
+
+  test("scopes only the private hosts in a mixed array", () => {
+    const result = fetchUrlEntitlementsFor([
+      "https://example.com/a",
+      "http://localhost:5173/raw/b.mdx",
+    ]);
+    const privateEnt = result.entitlements.find((e) => e.id === Entitlements.NETWORK_PRIVATE);
+    expect(privateEnt?.resources).toEqual(["http://localhost:5173/*"]);
+  });
+
+  test("fail-closes when any array entry is not a usable URL", () => {
+    const result = fetchUrlEntitlementsFor(["http://localhost:5173/a.mdx", ""]);
+    const privateEnt = result.entitlements.find((e) => e.id === Entitlements.NETWORK_PRIVATE);
+    expect(privateEnt).toBeDefined();
+    expect(privateEnt?.resources).toBeUndefined();
+  });
+
+  test("dedupes repeated origins rather than one resource per URL", () => {
+    // A blog index is hundreds of paths on ONE dev-server origin. The scope is
+    // per-origin, so the declaration stays a single pattern however long the
+    // array is — and stays well under the distinct-host ceiling below.
+    const urls = Array.from({ length: 500 }, (_, i) => `http://localhost:5173/raw/post-${i}.mdx`);
+    const privateEnt = fetchUrlEntitlementsFor(urls).entitlements.find(
+      (e) => e.id === Entitlements.NETWORK_PRIVATE
+    );
+    expect(privateEnt?.resources).toEqual(["http://localhost:5173/*"]);
+  });
+
+  test("scopes up to the distinct private origin ceiling", () => {
+    const urls = Array.from(
+      { length: MAX_PRIVATE_RESOURCE_PATTERNS },
+      (_, i) => `http://10.0.0.${i}/x`
+    );
+    const privateEnt = fetchUrlEntitlementsFor(urls).entitlements.find(
+      (e) => e.id === Entitlements.NETWORK_PRIVATE
+    );
+    expect(privateEnt?.resources).toHaveLength(MAX_PRIVATE_RESOURCE_PATTERNS);
+  });
+
+  test("fail-closes past the distinct private origin ceiling", () => {
+    // Run input is caller-shaped: an array naming more private hosts than a
+    // reviewer can read collapses to the unscoped declaration rather than
+    // producing an unbounded resource list. Widening is the safe direction.
+    const urls = Array.from(
+      { length: MAX_PRIVATE_RESOURCE_PATTERNS + 1 },
+      (_, i) => `http://10.0.0.${i}/x`
+    );
+    const privateEnt = fetchUrlEntitlementsFor(urls).entitlements.find(
+      (e) => e.id === Entitlements.NETWORK_PRIVATE
+    );
+    expect(privateEnt).toBeDefined();
+    expect(privateEnt?.resources).toBeUndefined();
   });
 });
 

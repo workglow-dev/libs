@@ -850,6 +850,89 @@ function toJobFailure(reason: unknown): unknown {
   return new Error(`Queued fetch job rejected without a reason (${String(reason)})`);
 }
 
+const UNKNOWN_URL_PRIVATE_ENTITLEMENT: TaskEntitlements = {
+  entitlements: [
+    {
+      id: Entitlements.NETWORK_PRIVATE,
+      reason:
+        "Runtime URL is not yet available during entitlement evaluation; private/internal destinations must be explicitly allowed",
+    },
+  ],
+};
+
+/**
+ * Strings we can classify, or `undefined` to fail closed.
+ *
+ * A MapTask projection seeds the inner fetch with the whole `url[]` rather
+ * than one scalar per iteration. Every entry must be a non-empty string or
+ * we cannot tell the destinations apart from unknown and must not under-declare.
+ */
+function knownFetchUrls(
+  url: string | readonly string[] | undefined
+): readonly string[] | undefined {
+  if (typeof url === "string") {
+    return url.length === 0 ? undefined : [url];
+  }
+  if (!Array.isArray(url) || url.length === 0) return undefined;
+  const out: string[] = [];
+  for (const item of url) {
+    if (typeof item !== "string" || item.length === 0) return undefined;
+    out.push(item);
+  }
+  return out;
+}
+
+/**
+ * Distinct private origins one declaration will name before it gives up and
+ * falls back to the unscoped form. A url array comes from run input, so it can
+ * name as many hosts as the caller likes; past this point the scoped list is no
+ * longer something a human can review, and "every private destination" is the
+ * honest summary of what the run would reach. Staying scoped is a convenience —
+ * widening is always safe, narrowing would not be.
+ */
+export const MAX_PRIVATE_RESOURCE_PATTERNS = 64;
+
+const TOO_MANY_PRIVATE_HOSTS_ENTITLEMENT: TaskEntitlements = {
+  entitlements: [
+    {
+      id: Entitlements.NETWORK_PRIVATE,
+      reason:
+        `URL list names more than ${MAX_PRIVATE_RESOURCE_PATTERNS} distinct private/internal ` +
+        `hosts, too many to declare individually; private/internal destinations must be ` +
+        `explicitly allowed`,
+    },
+  ],
+};
+
+/**
+ * The `network:private` half of the declaration: one entitlement scoped to the
+ * union of the private origins among `urls`, or nothing when none of them is
+ * private. Patterns are collected in a set rather than merged pairwise so a
+ * long array costs one pass, not one map-and-set rebuild per entry.
+ */
+function privateNetworkEntitlementFor(urls: readonly string[]): TaskEntitlements {
+  const patterns = new Set<string>();
+  let reason: string | undefined;
+  for (const url of urls) {
+    const classification = classifyUrl(url);
+    if (classification.kind !== "private") continue;
+    patterns.add(urlResourcePattern(url));
+    if (patterns.size > MAX_PRIVATE_RESOURCE_PATTERNS) return TOO_MANY_PRIVATE_HOSTS_ENTITLEMENT;
+    // First reason wins, matching how `mergeEntitlementPair` folds two of these.
+    reason ??= `URL targets private/internal host: ${classification.reason ?? classification.host ?? "unknown"}`;
+  }
+  if (patterns.size === 0) return { entitlements: [] };
+  return {
+    entitlements: [
+      {
+        id: Entitlements.NETWORK_PRIVATE,
+        reason: reason!,
+        resources: Array.from(patterns),
+      },
+    ],
+  };
+}
+
 /**
  * Entitlements a fetch of `url` requires. A task that OWNS a `FetchUrlTask`
  * must declare these itself: the graph snapshot is taken over
@@ -858,34 +941,19 @@ function toJobFailure(reason: unknown): unknown {
  *
  * `url` may be unknown at evaluation time (root-task input is not applied
  * yet), in which case this fails closed and requires an unscoped
- * `network:private` rather than under-declaring it.
+ * `network:private` rather than under-declaring it. A known array — the shape
+ * a MapTask projection leaves on the inner fetch — is classified item by
+ * item; any unusable entry fails closed the same way a missing scalar does.
  */
-export function fetchUrlEntitlementsFor(url: string | undefined): TaskEntitlements {
+export function fetchUrlEntitlementsFor(
+  url: string | readonly string[] | undefined
+): TaskEntitlements {
   const base = FetchUrlTask.entitlements();
-  if (typeof url !== "string" || url.length === 0) {
-    return mergeEntitlements(base, {
-      entitlements: [
-        {
-          id: Entitlements.NETWORK_PRIVATE,
-          reason:
-            "Runtime URL is not yet available during entitlement evaluation; private/internal destinations must be explicitly allowed",
-        },
-      ],
-    });
+  const urls = knownFetchUrls(url);
+  if (urls === undefined) {
+    return mergeEntitlements(base, UNKNOWN_URL_PRIVATE_ENTITLEMENT);
   }
-  const classification = classifyUrl(url);
-  if (classification.kind !== "private") {
-    return base;
-  }
-  return mergeEntitlements(base, {
-    entitlements: [
-      {
-        id: Entitlements.NETWORK_PRIVATE,
-        reason: `URL targets private/internal host: ${classification.reason ?? classification.host ?? "unknown"}`,
-        resources: [urlResourcePattern(url)],
-      },
-    ],
-  });
+  return mergeEntitlements(base, privateNetworkEntitlementFor(urls));
 }
 
 export class FetchUrlTask<

@@ -107,6 +107,21 @@ export class FileLoaderTask extends BaseFileLoaderTask<FileLoaderTaskConfig> {
       entitlements: [{ id: Entitlements.FILESYSTEM_READ, reason: "Reads a local file from disk" }],
     };
 
+    // MapTask projection seeds the inner loader with the whole url[] rather
+    // than one scalar per iteration. A non-empty all-http array uses only the
+    // fetch half, so `fetchUrlEntitlementsFor` classifies it alone; anything
+    // else adds an unscoped `filesystem:read` on top of whatever that
+    // classification yields, because at least one entry may name a path. An
+    // EMPTY array is unknown, not vacuously http — `every` says true for it —
+    // so it has to fall through to the both-halves declaration.
+    if (Array.isArray(url)) {
+      const allHttp =
+        url.length > 0 &&
+        url.every((item) => typeof item === "string" && item.length > 0 && isHttpUrl(item));
+      if (allHttp) return fetchUrlEntitlementsFor(url);
+      return mergeEntitlements(fetchUrlEntitlementsFor(url), unscopedRead);
+    }
+
     if (typeof url !== "string" || url.length === 0) {
       return mergeEntitlements(fetchUrlEntitlementsFor(undefined), unscopedRead);
     }

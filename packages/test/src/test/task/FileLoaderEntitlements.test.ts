@@ -113,6 +113,68 @@ describe("FileLoaderTask entitlement enforcement", () => {
     expect(declared.find((e) => e.id === Entitlements.NETWORK_PRIVATE)?.resources).toBeUndefined();
   });
 
+  test("scopes network:private for an array of localhost urls", () => {
+    const task = new FileLoaderTask({ defaults: {} as never });
+    task.runInputData = {
+      url: ["http://localhost:5173/raw/a.mdx", "http://localhost:5173/raw/b.mdx"],
+    };
+    const privateEnt = task
+      .entitlements()
+      .entitlements.find((e) => e.id === Entitlements.NETWORK_PRIVATE);
+    expect(privateEnt?.resources).toEqual(["http://localhost:5173/*"]);
+  });
+
+  test("the server build scopes network:private for an array of http urls", () => {
+    const task = new FileLoaderServerTask({ defaults: {} as never });
+    task.runInputData = {
+      url: ["http://localhost:5173/raw/a.mdx", "http://localhost:5173/raw/b.mdx"],
+    };
+    const declared = task.entitlements().entitlements;
+    const privateEnt = declared.find((e) => e.id === Entitlements.NETWORK_PRIVATE);
+    expect(privateEnt?.resources).toEqual(["http://localhost:5173/*"]);
+    expect(declared.map((e) => e.id)).not.toContain(Entitlements.FILESYSTEM_READ);
+  });
+
+  test("the server build adds an unscoped filesystem:read for a mixed array", () => {
+    // Only an all-http array is purely a fetch. One path in the array means an
+    // iteration may open a file, and the path that iteration resolves is not
+    // knowable from here, so the read half is declared unscoped alongside the
+    // scope the http entries do yield.
+    const task = new FileLoaderServerTask({ defaults: {} as never });
+    task.runInputData = { url: ["/tmp/a.txt", "http://localhost:5173/raw/b.mdx"] } as never;
+    const declared = task.entitlements().entitlements;
+
+    expect(declared.find((e) => e.id === Entitlements.NETWORK_PRIVATE)?.resources).toEqual([
+      "http://localhost:5173/*",
+    ]);
+    const read = declared.find((e) => e.id === Entitlements.FILESYSTEM_READ);
+    expect(read).toBeDefined();
+    expect(read?.resources).toBeUndefined();
+  });
+
+  test("the server build declares only filesystem:read for an array of local paths", () => {
+    const task = new FileLoaderServerTask({ defaults: {} as never });
+    task.runInputData = { url: ["/tmp/a.txt", "/tmp/b.txt"] } as never;
+    const declared = task.entitlements().entitlements;
+
+    expect(declared.find((e) => e.id === Entitlements.FILESYSTEM_READ)?.resources).toBeUndefined();
+    // Nothing in the array names a private host, so no private-network claim.
+    expect(declared.map((e) => e.id)).not.toContain(Entitlements.NETWORK_PRIVATE);
+  });
+
+  test("the server build treats an empty array as unknown, not as all-http", () => {
+    // `[].every(...)` is vacuously true, so an empty array must not take the
+    // all-http path — that would drop `filesystem:read` from the declaration.
+    const task = new FileLoaderServerTask({ defaults: {} as never });
+    task.runInputData = { url: [] } as never;
+    const declared = task.entitlements().entitlements;
+
+    expect(declared.find((e) => e.id === Entitlements.NETWORK_PRIVATE)?.resources).toBeUndefined();
+    const read = declared.find((e) => e.id === Entitlements.FILESYSTEM_READ);
+    expect(read).toBeDefined();
+    expect(read?.resources).toBeUndefined();
+  });
+
   // The server build's static declaration now merges onto `super.entitlements()`
   // rather than restating `FetchUrlTask.entitlements()`, so pin that the switch
   // kept both halves.
