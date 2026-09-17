@@ -33,7 +33,12 @@ function isReasoningDeepSeekFamily(id: string): boolean {
 export const deepseekEffortPolicy: ModelEffortPolicyFn = makeEffortPolicy({
   rules: [
     {
-      when: [isReasoningDeepSeekFamily, /^deepseek-reasoner/i, /^deepseek-r\d/i],
+      when: [
+        isReasoningDeepSeekFamily,
+        /^deepseek-flash/i,
+        /^deepseek-reasoner/i,
+        /^deepseek-r\d/i,
+      ],
       policy: REASONING,
     },
   ],

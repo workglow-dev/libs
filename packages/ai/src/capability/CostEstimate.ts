@@ -5,8 +5,9 @@
  */
 
 import type { Usage } from "@workglow/task-graph";
-import type { ModelPricing } from "../model/ModelSchema";
+import { USAGE_PROMPT_FIELDS } from "@workglow/task-graph";
 import { resolveEffectiveRates } from "../model/ModelPricing";
+import type { ModelPricing } from "../model/ModelSchema";
 
 /** Per-token-hour counter a provider-side cache accrues while it lives. */
 export const CACHE_STORAGE_TOKEN_HOURS_KEY = "cacheStorageTokenHours";
@@ -21,22 +22,28 @@ export interface CostEstimate {
 }
 
 /** Counters priced at their own rate. Disjoint, so this is a plain sum. */
-const PRICED_FIELDS = ["input", "output", "cached", "cacheWrite"] as const;
+const PRICED_FIELDS = [
+  "input",
+  "output",
+  "cached",
+  "cacheWrite",
+  "imageInput",
+  "imageCached",
+] as const;
 
 const PER_MILLION = 1_000_000;
 
 /**
  * The whole prompt this request sent, which is what a provider's context
- * threshold measures: plain input, cache reads and cache writes are disjoint
- * counters that together make up one prompt. `undefined` when none of the three
- * was reported, so a usage that says nothing about its prompt selects no tier
- * rather than the smallest one.
+ * threshold measures: text input, cache reads/writes, and image input/cache
+ * are disjoint counters that together make up one prompt. `undefined` when none
+ * of them was reported, so a usage that says nothing about its prompt selects
+ * no tier rather than the smallest one.
  */
 function promptTokens(usage: Usage): number | undefined {
-  if (usage.input === undefined && usage.cached === undefined && usage.cacheWrite === undefined) {
-    return undefined;
-  }
-  return (usage.input ?? 0) + (usage.cached ?? 0) + (usage.cacheWrite ?? 0);
+  const slices = USAGE_PROMPT_FIELDS.map((field) => usage[field]);
+  if (slices.every((slice) => slice === undefined)) return undefined;
+  return slices.reduce<number>((sum, slice) => sum + (slice ?? 0), 0);
 }
 
 export interface EstimateCostOptions {

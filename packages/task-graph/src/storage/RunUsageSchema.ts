@@ -33,6 +33,8 @@ export const RunUsageSchema = {
     output: { type: ["integer", "null"] },
     cached: { type: ["integer", "null"] },
     cacheWrite: { type: ["integer", "null"] },
+    imageInput: { type: ["integer", "null"] },
+    imageCached: { type: ["integer", "null"] },
     reasoning: { type: ["integer", "null"] },
     total: { type: ["integer", "null"] },
     extra: { type: ["string", "null"] },

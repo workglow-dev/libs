@@ -34,6 +34,8 @@ describe("ModelPricing", () => {
             cacheWrite5m?: number;
             cacheWrite1h?: number;
           };
+      imageInput?: number;
+      imageCached?: number;
       cacheStoragePerHour?: number;
       batch?: ModelPricingBase;
       usageTiers?: ModelUsageTier[];

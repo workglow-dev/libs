@@ -23,8 +23,12 @@ describe("openaiEffortPolicy", () => {
     expect(openaiEffortPolicy(cfg("babbage-002"))?.supported).toEqual([]);
   });
 
-  it("treats gpt-5 and o-series as reasoning with default medium", () => {
+  it("treats gpt-5, gpt-6, and o-series as reasoning with default medium", () => {
     expect(openaiEffortPolicy(cfg("gpt-5.6-sol"))).toEqual({
+      supported: [...MODEL_EFFORTS],
+      default: "medium",
+    });
+    expect(openaiEffortPolicy(cfg("gpt-6-astra"))).toEqual({
       supported: [...MODEL_EFFORTS],
       default: "medium",
     });

@@ -6,7 +6,7 @@
 
 import { getLogger } from "@workglow/util";
 import type { Usage } from "../task/StreamTypes";
-import { mergeUsage } from "../task/StreamTypes";
+import { mergeUsage, USAGE_COUNTER_FIELDS } from "../task/StreamTypes";
 
 /** One finished execution's final token total. */
 export interface RetiredUsage {
@@ -283,8 +283,7 @@ export class GraphUsageAggregator {
  * not a decrease.
  */
 function isSmaller(next: Usage, prev: Usage): boolean {
-  const fields = ["input", "output", "cached", "cacheWrite", "reasoning", "total"] as const;
-  for (const field of fields) {
+  for (const field of USAGE_COUNTER_FIELDS) {
     const a = next[field];
     const b = prev[field];
     if (a !== undefined && b !== undefined && a < b) return true;

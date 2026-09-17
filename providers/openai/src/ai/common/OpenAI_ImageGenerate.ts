@@ -8,11 +8,16 @@ import type {
   AiProviderRunFn,
   ImageGenerateTaskInput,
   ImageGenerateTaskOutput,
+  Usage,
 } from "@workglow/ai";
 import { ImageGenerationContentPolicyError, ImageGenerationProviderError } from "@workglow/ai";
 import type { ImageValue } from "@workglow/util/media";
 
-import { dataUriToImageValue, modelIdForError } from "@workglow/ai/provider-utils";
+import {
+  dataUriToImageValue,
+  mapOpenAIImageUsage,
+  modelIdForError,
+} from "@workglow/ai/provider-utils";
 import { getClient, getModelName } from "./OpenAI_Client";
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
 
@@ -60,7 +65,7 @@ export const OpenAI_ImageGenerate_Stream: AiProviderRunFn<
         client.images.generate as unknown as (
           body: Record<string, unknown>,
           options: { signal: AbortSignal }
-        ) => Promise<{ data?: Array<{ b64_json?: string }> }>
+        ) => Promise<{ data?: Array<{ b64_json?: string }>; usage?: unknown }>
       )(
         {
           model: modelName,
@@ -82,7 +87,13 @@ export const OpenAI_ImageGenerate_Stream: AiProviderRunFn<
       }
       const image = await decodeB64Png(b64);
       emit({ type: "snapshot", data: { image } } as Parameters<typeof emit>[0]);
-      emit({ type: "finish", data: {} as ImageGenerateTaskOutput });
+      // DALL-E reports no usage at all; the mapper returns undefined for a
+      // response that omits it, so the finish stays honest rather than zeroed.
+      emit({
+        type: "finish",
+        data: {} as ImageGenerateTaskOutput,
+        usage: mapOpenAIImageUsage(resp.usage),
+      });
       return;
     } catch (err) {
       if (
@@ -117,14 +128,19 @@ export const OpenAI_ImageGenerate_Stream: AiProviderRunFn<
       { signal }
     );
 
+    // Billed usage rides the terminal `image_generation.completed` event, which
+    // also carries the final image — so it has to be read before the b64 guard
+    // below, not after it.
+    let usage: Usage | undefined;
     for await (const event of stream) {
       if (signal.aborted) return;
+      usage = mapOpenAIImageUsage((event as { usage?: unknown }).usage) ?? usage;
       const b64 = event.b64_json;
       if (!b64) continue;
       const image = await decodeB64Png(b64);
       emit({ type: "snapshot", data: { image } } as Parameters<typeof emit>[0]);
     }
-    emit({ type: "finish", data: {} as ImageGenerateTaskOutput });
+    emit({ type: "finish", data: {} as ImageGenerateTaskOutput, usage });
   } catch (err) {
     if (
       err instanceof ImageGenerationProviderError ||

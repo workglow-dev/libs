@@ -72,7 +72,7 @@ export function inferOpenAiCapabilities(model: CapabilityHints): readonly Capabi
       "model.search",
     ];
     const supportsVision =
-      /gpt-4o|gpt-4\.1|gpt-5|gpt-4-vision|gpt-4-turbo/i.test(id) || /^o\d/i.test(id);
+      /gpt-4o|gpt-4\.\d|gpt-5|gpt-6|gpt-4-vision|gpt-4-turbo/i.test(id) || /^o\d/i.test(id);
     if (supportsVision) {
       caps.push("vision-input");
     }

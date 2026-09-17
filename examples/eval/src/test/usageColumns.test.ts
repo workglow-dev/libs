@@ -17,6 +17,8 @@ describe("eval usage columns", () => {
       "output_tokens",
       "cached_tokens",
       "cache_write_tokens",
+      "image_input_tokens",
+      "image_cached_tokens",
       "total_tokens",
       "cost",
       "currency",

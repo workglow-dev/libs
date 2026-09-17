@@ -4,13 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { AiProviderRunFn, ImageEditTaskInput, ImageEditTaskOutput } from "@workglow/ai";
+import type { AiProviderRunFn, ImageEditTaskInput, ImageEditTaskOutput, Usage } from "@workglow/ai";
 import { ImageGenerationContentPolicyError, ImageGenerationProviderError } from "@workglow/ai";
 import type { ImageValue } from "@workglow/util/media";
 
 import {
   dataUriToImageValue,
   imageValueToPngBytes,
+  mapOpenAIImageUsage,
   modelIdForError,
 } from "@workglow/ai/provider-utils";
 import { getClient, getModelName } from "./OpenAI_Client";
@@ -117,17 +118,23 @@ export const OpenAI_ImageEdit_Stream: AiProviderRunFn<
       client.images.edit as unknown as (
         body: Record<string, unknown>,
         options: { signal: AbortSignal }
-      ) => Promise<AsyncIterable<{ b64_json?: string }>>
+      ) => Promise<AsyncIterable<{ b64_json?: string; usage?: unknown }>>
     )({ ...payload, stream: true, partial_images: 3 }, { signal });
 
+    // Billed usage rides the terminal `image_edit.completed` event, which also
+    // carries the final image — so it has to be read before the b64 guard below,
+    // not after it. An edit is where the image half of the prompt is largest:
+    // every input image is billed at the image-input rate.
+    let usage: Usage | undefined;
     for await (const event of stream) {
       if (signal.aborted) return;
+      usage = mapOpenAIImageUsage(event.usage) ?? usage;
       const b64 = event.b64_json;
       if (!b64) continue;
       const image = await decodeB64Png(b64);
       emit({ type: "snapshot", data: { image } } as Parameters<typeof emit>[0]);
     }
-    emit({ type: "finish", data: {} as ImageEditTaskOutput });
+    emit({ type: "finish", data: {} as ImageEditTaskOutput, usage });
   } catch (err) {
     if (
       err instanceof ImageGenerationProviderError ||

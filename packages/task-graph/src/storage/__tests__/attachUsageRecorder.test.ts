@@ -53,6 +53,8 @@ describe("attachUsageRecorder", () => {
     // really enforced.
     expect(rows[0].cached).toBe(null);
     expect(rows[0].cacheWrite).toBe(null);
+    expect(rows[0].imageInput).toBe(null);
+    expect(rows[0].imageCached).toBe(null);
   });
 
   it("persists only columns a writer can fill", async () => {
@@ -73,6 +75,8 @@ describe("attachUsageRecorder", () => {
       "cached",
       "createdAt",
       "extra",
+      "imageCached",
+      "imageInput",
       "input",
       "modelId",
       "output",

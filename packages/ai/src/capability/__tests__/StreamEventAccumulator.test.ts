@@ -407,12 +407,45 @@ describe("mergeUsage", () => {
 
   it("adds every normalized counter", () => {
     const merged = mergeUsage(
-      usage({ input: 1, output: 2, cached: 3, cacheWrite: 4, reasoning: 5, total: 6 }),
-      usage({ input: 10, output: 20, cached: 30, cacheWrite: 40, reasoning: 50, total: 60 })
+      usage({
+        input: 1,
+        output: 2,
+        cached: 3,
+        cacheWrite: 4,
+        imageInput: 7,
+        imageCached: 8,
+        reasoning: 5,
+        total: 6,
+      }),
+      usage({
+        input: 10,
+        output: 20,
+        cached: 30,
+        cacheWrite: 40,
+        imageInput: 70,
+        imageCached: 80,
+        reasoning: 50,
+        total: 60,
+      })
     );
     expect(merged).toEqual(
-      usage({ input: 11, output: 22, cached: 33, cacheWrite: 44, reasoning: 55, total: 66 })
+      usage({
+        input: 11,
+        output: 22,
+        cached: 33,
+        cacheWrite: 44,
+        imageInput: 77,
+        imageCached: 88,
+        reasoning: 55,
+        total: 66,
+      })
     );
+  });
+
+  it("omits unreported image counters rather than writing undefined keys", () => {
+    const merged = mergeUsage(usage({ input: 1 }), usage({ input: 2 }))!;
+    expect("imageInput" in merged).toBe(false);
+    expect("imageCached" in merged).toBe(false);
   });
 
   it("merges extra: numeric keys are summed, string keys are last-wins", () => {

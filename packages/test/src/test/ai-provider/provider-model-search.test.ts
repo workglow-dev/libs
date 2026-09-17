@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { asText } from "@workglow/util";
 import type { AiProviderRunFn } from "@workglow/ai";
 import { collectStream, createEmitQueue, MODEL_EFFORTS, ModelSearchTask } from "@workglow/ai";
 import { Anthropic_ModelSearch_Stream as Anthropic_ModelSearch } from "@workglow/anthropic/ai";
@@ -18,6 +17,7 @@ import {
   _testOnly as tfmp,
   TFMP_ModelSearch,
 } from "@workglow/tf-mediapipe/ai";
+import { asText } from "@workglow/util";
 import { Xai_ModelSearch_Stream as Xai_ModelSearch } from "@workglow/xai/ai";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -64,6 +64,9 @@ describe("provider model search samples", () => {
   });
 
   test("OpenAI fallback includes the latest flagship sample", async () => {
+    await expect(modelIdsForSearch(OpenAI_ModelSearch, "gpt-6-astra")).resolves.toContain(
+      "gpt-6-astra"
+    );
     await expect(modelIdsForSearch(OpenAI_ModelSearch, "gpt-5.5")).resolves.toContain("gpt-5.5");
   });
 
@@ -127,6 +130,12 @@ describe("provider model search samples", () => {
     );
     await expect(modelIdsForSearch(Anthropic_ModelSearch, "claude-sonnet-4-6")).resolves.toContain(
       "claude-sonnet-4-6"
+    );
+  });
+
+  test("DeepSeek fallback includes V4.1 Flash", async () => {
+    await expect(modelIdsForSearch(DeepSeek_ModelSearch, "deepseek-flash")).resolves.toContain(
+      "deepseek-flash"
     );
   });
 

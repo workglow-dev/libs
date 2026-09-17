@@ -29,6 +29,10 @@ export interface ModelPricingBase {
         cacheWrite5m?: number;
         cacheWrite1h?: number;
       };
+  /** USD per 1M uncached image-input tokens. */
+  imageInput?: number;
+  /** USD per 1M cached image-input tokens. */
+  imageCached?: number;
   cacheStoragePerHour?: number;
 }
 
@@ -86,6 +90,8 @@ export const FREE_LOCAL_PRICING: ModelPricing = {
   output: 0,
   cached: 0,
   cacheWrite: 0,
+  imageInput: 0,
+  imageCached: 0,
   cacheStoragePerHour: undefined,
 };
 
@@ -167,7 +173,15 @@ export function resolveModelPricingFromTable(
 }
 
 /** The rates a base card, a `batch` card and a tier card all carry. */
-const RATE_FIELDS = ["input", "output", "cached", "cacheWrite", "cacheStoragePerHour"] as const;
+const RATE_FIELDS = [
+  "input",
+  "output",
+  "cached",
+  "cacheWrite",
+  "imageInput",
+  "imageCached",
+  "cacheStoragePerHour",
+] as const;
 
 /** Currencies name the same unit however they are spelled or padded. */
 function isSameCurrency(a: string, b: string): boolean {
@@ -181,6 +195,8 @@ function mergeRates(declared: ModelPricingBase, inherited: ModelPricingBase): Mo
     output: declared.output ?? inherited.output,
     cached: declared.cached ?? inherited.cached,
     cacheWrite: declared.cacheWrite ?? inherited.cacheWrite,
+    imageInput: declared.imageInput ?? inherited.imageInput,
+    imageCached: declared.imageCached ?? inherited.imageCached,
     cacheStoragePerHour: declared.cacheStoragePerHour ?? inherited.cacheStoragePerHour,
   };
 }
@@ -212,6 +228,8 @@ function tierRatesNotDeclared(
     output: declared.output === undefined ? tier.output : undefined,
     cached: declared.cached === undefined ? tier.cached : undefined,
     cacheWrite: declared.cacheWrite === undefined ? tier.cacheWrite : undefined,
+    imageInput: declared.imageInput === undefined ? tier.imageInput : undefined,
+    imageCached: declared.imageCached === undefined ? tier.imageCached : undefined,
     cacheStoragePerHour:
       declared.cacheStoragePerHour === undefined ? tier.cacheStoragePerHour : undefined,
   };
@@ -330,6 +348,8 @@ function overlayRates(base: ModelPricingBase, over: ModelPricingBase): ModelPric
     output: over.output ?? base.output,
     cached: over.cached ?? base.cached,
     cacheWrite: over.cacheWrite ?? base.cacheWrite,
+    imageInput: over.imageInput ?? base.imageInput,
+    imageCached: over.imageCached ?? base.imageCached,
     cacheStoragePerHour: over.cacheStoragePerHour ?? base.cacheStoragePerHour,
   };
 }
@@ -373,6 +393,8 @@ export function resolveEffectiveRates(
     output: pricing.output,
     cached: pricing.cached,
     cacheWrite: pricing.cacheWrite,
+    imageInput: pricing.imageInput,
+    imageCached: pricing.imageCached,
     cacheStoragePerHour: pricing.cacheStoragePerHour,
   };
 
@@ -425,11 +447,23 @@ const RATE_PROPERTIES = {
       },
     ],
   },
+  imageInput: {
+    type: "number",
+    title: "Image Input Rate",
+    description: "USD per 1M uncached image-input tokens",
+    "x-ui-order": 6,
+  },
+  imageCached: {
+    type: "number",
+    title: "Cached Image Input Rate",
+    description: "USD per 1M cached image-input tokens",
+    "x-ui-order": 7,
+  },
   cacheStoragePerHour: {
     type: "number",
     title: "Cache Storage Per Hour",
     description: "USD per 1M token-hours stored",
-    "x-ui-order": 6,
+    "x-ui-order": 8,
   },
 } as const;
 
@@ -464,13 +498,13 @@ export const ModelPricingSchema = {
       ...RATE_CARD_SCHEMA,
       title: "Batch Rates",
       description: "Rates for a batched request. Not yet applied to cost estimates.",
-      "x-ui-order": 7,
+      "x-ui-order": 9,
     },
     usageTiers: {
       type: "array",
       title: "Usage Tiers",
       description: "Rates that replace the base ones for a prompt in a token range.",
-      "x-ui-order": 8,
+      "x-ui-order": 10,
       items: {
         type: "object",
         properties: {
@@ -486,7 +520,7 @@ export const ModelPricingSchema = {
       type: "array",
       title: "Timing Tiers",
       description: "Rates that replace the base ones inside a daily UTC window.",
-      "x-ui-order": 9,
+      "x-ui-order": 11,
       items: {
         type: "object",
         properties: {

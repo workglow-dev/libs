@@ -103,6 +103,21 @@ describe("cloud model search results", () => {
  */
 const NOT_TOKEN_BILLED = new Set(["image.generation", "audio.speech", "audio.transcription"]);
 
+/**
+ * Image models the table prices deliberately because they really are billed per
+ * token (a text bucket plus an image bucket), unlike DALL-E, which bills per
+ * image and must stay unpriced.
+ *
+ * Spelled as exact ids rather than a `^gpt-image` pattern: a pattern would also
+ * wave through a future GPT Image model that goes back to per-image billing,
+ * which is the one case this guard exists to catch.
+ */
+const TOKEN_BILLED_IMAGE_MODELS = new Set([
+  "gpt-image-2",
+  "gpt-image-2.5-sunburst",
+  "gpt-image-2.5-flare",
+]);
+
 const PRICED_PROVIDERS = [
   { name: "Anthropic", search: Anthropic_ModelSearch_Stream, resolve: getAnthropicModelPricing },
   { name: "OpenAI", search: OpenAI_ModelSearch_Stream, resolve: getOpenAiModelPricing },
@@ -126,6 +141,7 @@ describe("a rate card must match the model's billing unit", () => {
         .filter((result) =>
           ((result.record?.capabilities ?? []) as string[]).some((c) => NOT_TOKEN_BILLED.has(c))
         )
+        .filter((result) => !TOKEN_BILLED_IMAGE_MODELS.has(result.id))
         .filter((result) => resolve(result.id) !== undefined)
         .map((result) => `${result.id} (${(result.record.capabilities as string[]).join(", ")})`);
       expect(offenders).toEqual([]);
@@ -143,6 +159,113 @@ describe("a rate card must match the model's billing unit", () => {
       }
     }
     expect(seen).toContain("grok-2-image-1212");
+  });
+
+  it("OpenAI prices gpt-6-astra at the published short-context card", () => {
+    const card = getOpenAiModelPricing("gpt-6-astra");
+    expect(card).toMatchObject({
+      currency: "USD",
+      input: 10,
+      output: 50,
+      cached: 1,
+      cacheWrite: 12.5,
+    });
+    expect(getOpenAiModelPricing("openai/gpt-6-astra")).toEqual(card);
+  });
+
+  it.each([
+    ["gpt-5.6-sol", { input: 4, output: 20, cached: 0.4, cacheWrite: 5 }],
+    ["gpt-5.6-terra", { input: 2, output: 12, cached: 0.2, cacheWrite: 2.5 }],
+    ["gpt-5.6-luna", { input: 0.2, output: 1.2, cached: 0.02, cacheWrite: 0.25 }],
+    ["gpt-5.5", { input: 5, output: 30, cached: 0.5 }],
+    ["gpt-5.4", { input: 2.5, output: 15, cached: 0.25 }],
+    ["gpt-5.2", { input: 1.75, output: 14, cached: 0.175 }],
+    ["gpt-5", { input: 1.25, output: 10, cached: 0.125 }],
+    ["gpt-5-mini", { input: 0.25, output: 2, cached: 0.025 }],
+    ["gpt-5-nano", { input: 0.05, output: 0.4, cached: 0.005 }],
+  ] as const)("OpenAI prices %s at the published short-context card", (id, rates) => {
+    expect(getOpenAiModelPricing(id)).toMatchObject({ currency: "USD", ...rates });
+  });
+
+  it("DeepSeek prices V4.1 Flash under its canonical id and retired aliases", () => {
+    // deepseek-flash is DeepSeek-V4.1-Flash. The v4-flash names are retired
+    // aliases billed at the same Flash rates. Base rates are peak; off-peak
+    // is half, in the two daily windows outside 01:00–04:00 and 06:00–10:00 UTC.
+    const card = getDeepSeekModelPricing("deepseek-flash");
+    expect(card).toMatchObject({
+      currency: "USD",
+      input: 0.3,
+      output: 1.2,
+      cached: 0.006,
+    });
+    expect(card?.timingTiers).toEqual([
+      { start: "10:00", end: "01:00", pricing: { input: 0.15, output: 0.6, cached: 0.003 } },
+      { start: "04:00", end: "06:00", pricing: { input: 0.15, output: 0.6, cached: 0.003 } },
+    ]);
+    expect(getDeepSeekModelPricing("deepseek-v4-flash")).toEqual(card);
+    expect(getDeepSeekModelPricing("deepseek-v4-flash-0731")).toEqual(card);
+  });
+
+  it("OpenAI prices gpt-image models at the published text and image token rates", () => {
+    // GPT Image is billed per token: text input $5, cached text $1.25, image
+    // input $8, cached image $2, image output $30 — one published row for
+    // gpt-image-2 and the 2.5 pair alike. The halved figures belong to the batch
+    // row, not to gpt-image-2. DALL-E stays unpriced — it is per image.
+    const card = {
+      currency: "USD",
+      input: 5,
+      output: 30,
+      cached: 1.25,
+      imageInput: 8,
+      imageCached: 2,
+    };
+    expect(getOpenAiModelPricing("gpt-image-2.5-sunburst")).toEqual(card);
+    expect(getOpenAiModelPricing("gpt-image-2.5-flare")).toEqual(card);
+    expect(getOpenAiModelPricing("gpt-image-2")).toEqual(card);
+    expect(getOpenAiModelPricing("gpt-image-2.5-sunburst-2026-09-08")).toEqual(card);
+    expect(getOpenAiModelPricing("openai/gpt-image-2.5-flare")).toEqual(card);
+    expect(getOpenAiModelPricing("dall-e-3")).toBeUndefined();
+  });
+
+  it("gives each gpt-image id its own card rather than one shared object", () => {
+    // The table is exported with mutable rate fields, so three keys aliasing one
+    // object would let a consumer correcting one id's rate reprice the others.
+    const cards = [
+      getOpenAiModelPricing("gpt-image-2.5-sunburst")!,
+      getOpenAiModelPricing("gpt-image-2.5-flare")!,
+      getOpenAiModelPricing("gpt-image-2")!,
+    ];
+    expect(new Set(cards).size).toBe(cards.length);
+  });
+
+  /**
+   * OpenAI publishes a cache-write rate only from GPT-5.6 on (1.25x input);
+   * earlier models carry "no additional cache-write charge" and bill a write at
+   * the ordinary input rate. Either way the card has to state a rate, because
+   * the Responses mapper reports `cache_write_tokens` for every model and a
+   * counter spent against no rate prints a partial `~` estimate.
+   */
+  it.each([
+    ["gpt-6-astra", 10, 12.5],
+    ["gpt-5.6-sol", 4, 5],
+    ["gpt-5.6-terra", 2, 2.5],
+    ["gpt-5.6-luna", 0.2, 0.25],
+    ["gpt-5.5", 5, 5],
+    ["gpt-5.4", 2.5, 2.5],
+    ["gpt-5.4-mini", 0.75, 0.75],
+    ["gpt-5", 1.25, 1.25],
+    ["gpt-4o", 2.5, 2.5],
+    ["o3", 5, 5],
+  ] as const)("OpenAI prices a cache write on %s", (id, input, cacheWrite) => {
+    const card = getOpenAiModelPricing(id);
+    expect(card?.input).toBe(input);
+    expect(card?.cacheWrite).toBe(cacheWrite);
+  });
+
+  it("declares no cache rate on an embedding card, which cannot be cached", () => {
+    const card = getOpenAiModelPricing("text-embedding-3-small");
+    expect(card?.cacheWrite).toBeUndefined();
+    expect(card?.cached).toBeUndefined();
   });
 
   it("Gemini prices the image models it names and refuses the ones it does not", () => {

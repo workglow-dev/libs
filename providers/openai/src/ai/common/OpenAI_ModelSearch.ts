@@ -23,6 +23,9 @@ interface OpenAiModelListItem {
 }
 
 const OPENAI_FALLBACK: Array<{ label: string; value: string }> = [
+  { label: "gpt-6-astra", value: "gpt-6-astra" },
+  { label: "gpt-image-2.5-sunburst", value: "gpt-image-2.5-sunburst" },
+  { label: "gpt-image-2.5-flare", value: "gpt-image-2.5-flare" },
   { label: "gpt-image-2", value: "gpt-image-2" },
   { label: "dall-e-3", value: "dall-e-3" },
   { label: "gpt-5.6", value: "gpt-5.6" },
@@ -43,6 +46,8 @@ const OPENAI_FALLBACK: Array<{ label: string; value: string }> = [
 ];
 
 const OPENAI_IMAGE_MODELS: Array<{ value: string; capabilities: string[] }> = [
+  { value: "gpt-image-2.5-sunburst", capabilities: ["image.generation", "image.editing"] },
+  { value: "gpt-image-2.5-flare", capabilities: ["image.generation", "image.editing"] },
   { value: "gpt-image-2", capabilities: ["image.generation", "image.editing"] },
   { value: "dall-e-3", capabilities: ["image.generation"] },
 ];

@@ -5,6 +5,7 @@
  */
 
 import type { StreamUsage, Usage } from "@workglow/task-graph";
+import { USAGE_COUNTER_FIELDS } from "@workglow/task-graph";
 import { getLogger } from "@workglow/util";
 
 /**
@@ -35,13 +36,7 @@ export function toUsageCount(value: unknown): number | undefined {
  */
 export function usageOrUndefined(usage: Usage): Usage | undefined {
   const reported =
-    usage.input !== undefined ||
-    usage.output !== undefined ||
-    usage.cached !== undefined ||
-    usage.cacheWrite !== undefined ||
-    usage.reasoning !== undefined ||
-    usage.total !== undefined ||
-    usage.extra !== undefined;
+    USAGE_COUNTER_FIELDS.some((field) => usage[field] !== undefined) || usage.extra !== undefined;
   return reported ? usage : undefined;
 }
 
@@ -169,6 +164,58 @@ export function mapOpenAIResponsesUsage(raw: unknown): Usage | undefined {
     cached: toUsageCount(payload.input_tokens_details?.cached_tokens),
     cacheWrite: toUsageCount(payload.input_tokens_details?.cache_write_tokens),
     reasoning: toUsageCount(payload.output_tokens_details?.reasoning_tokens),
+    total: toUsageCount(payload.total_tokens),
+    extra: undefined,
+  });
+}
+
+/** Raw usage payload on an OpenAI **Images** response or terminal stream event. */
+interface OpenAIImageUsagePayload {
+  readonly input_tokens?: unknown;
+  readonly output_tokens?: unknown;
+  readonly total_tokens?: unknown;
+  readonly input_tokens_details?: {
+    readonly text_tokens?: unknown;
+    readonly image_tokens?: unknown;
+  } | null;
+}
+
+/**
+ * Map an OpenAI **Images** API `usage` object into {@link Usage}: the one
+ * `images.generate` / `images.edit` return, and the one the terminal
+ * `image_generation.completed` / `image_edit.completed` stream event carries.
+ *
+ * This is the only OpenAI surface that splits the prompt by modality, and GPT
+ * Image is the only OpenAI card that prices the halves apart — text input at
+ * $5/1M against image input at $8/1M — which is why it is the only mapper that
+ * fills `imageInput`. On the chat and Responses surfaces an image in the prompt
+ * is billed at the model's ordinary input rate, so its tokens belong in `input`;
+ * splitting them out there would move spend into a bucket those cards declare no
+ * rate for and turn an exact estimate into a partial one.
+ *
+ * `input_tokens_details` splits `input_tokens` disjointly into `text_tokens` and
+ * `image_tokens`, so the stated text figure becomes `input` directly and is
+ * recovered by subtraction only when the provider omits it.
+ *
+ * The payload carries no cache counters — neither a total nor a per-modality
+ * breakdown — so `cached`, `cacheWrite` and `imageCached` stay unreported. That
+ * is the wire's own silence, not a normalization choice: no OpenAI surface
+ * states a cached figure per modality, so a cached image cannot be told from a
+ * cached word on any of them.
+ */
+export function mapOpenAIImageUsage(raw: unknown): Usage | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const payload = raw as OpenAIImageUsagePayload;
+  const imageInput = toUsageCount(payload.input_tokens_details?.image_tokens);
+  const textInput = toUsageCount(payload.input_tokens_details?.text_tokens);
+  return usageOrUndefined({
+    input:
+      textInput ?? disjointInput("OpenAI Images", toUsageCount(payload.input_tokens), imageInput),
+    output: toUsageCount(payload.output_tokens),
+    cached: undefined,
+    cacheWrite: undefined,
+    ...(imageInput !== undefined ? { imageInput } : {}),
+    reasoning: undefined,
     total: toUsageCount(payload.total_tokens),
     extra: undefined,
   });
@@ -325,12 +372,5 @@ export function createEstimatedOutputUsageReporter(
 }
 
 function usageChanged(a: Usage, b: Usage): boolean {
-  return (
-    a.input !== b.input ||
-    a.output !== b.output ||
-    a.cached !== b.cached ||
-    a.cacheWrite !== b.cacheWrite ||
-    a.reasoning !== b.reasoning ||
-    a.total !== b.total
-  );
+  return USAGE_COUNTER_FIELDS.some((field) => a[field] !== b[field]);
 }

@@ -26,7 +26,7 @@ const REASONING = {
 export const openaiEffortPolicy: ModelEffortPolicyFn = makeEffortPolicy({
   rules: [
     { when: [/^text-embedding/i, /^gpt-image/i, /^dall-e/i], policy: EFFORT_POLICY_NONE },
-    { when: [/^gpt-5/i, /^o[134]/i], policy: REASONING },
+    { when: [/^gpt-5/i, /^gpt-6/i, /^o[134]/i], policy: REASONING },
   ],
   fallback: EFFORT_POLICY_NONE,
 });

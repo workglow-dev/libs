@@ -23,8 +23,10 @@ interface DeepSeekModelListItem {
 }
 
 const DEEPSEEK_FALLBACK: Array<{ label: string; value: string }> = [
+  { label: "deepseek-flash", value: "deepseek-flash" },
   { label: "deepseek-v4-pro-0813", value: "deepseek-v4-pro-0813" },
   { label: "deepseek-v4-flash", value: "deepseek-v4-flash" },
+  { label: "deepseek-v4.1-flash", value: "deepseek-v4.1-flash" },
   { label: "deepseek-v4-pro", value: "deepseek-v4-pro" },
 ];
 

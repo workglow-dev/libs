@@ -19,6 +19,8 @@ export type {
   StreamSnapshot,
   StreamTextDelta,
   Usage,
+  UsageCounterField,
+  UsagePromptField,
 } from "@workglow/task-graph";
 
 /**
@@ -26,4 +28,9 @@ export type {
  * its own token counts (`import type { Usage } from "@workglow/ai"`) without
  * depending on `@workglow/task-graph` directly.
  */
-export { USAGE_OUTPUT_KEY, mergeUsage } from "@workglow/task-graph";
+export {
+  mergeUsage,
+  USAGE_COUNTER_FIELDS,
+  USAGE_OUTPUT_KEY,
+  USAGE_PROMPT_FIELDS,
+} from "@workglow/task-graph";

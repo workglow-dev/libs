@@ -23,6 +23,8 @@ describe("cache-hit usage", () => {
       output: 0,
       cached: 0,
       cacheWrite: 0,
+      imageInput: 0,
+      imageCached: 0,
       reasoning: 0,
       total: 0,
       extra: undefined,
@@ -49,6 +51,8 @@ describe("cache-hit usage", () => {
     // the cache hit genuinely states 0 for them. That is honest, and harmless:
     // 0 is the right answer for a replayed output.
     expect(merged?.cached).toBe(0);
+    expect(merged?.imageInput).toBe(0);
+    expect(merged?.imageCached).toBe(0);
   });
 });
 
@@ -76,7 +80,7 @@ describe("mergeUsage and the estimated flag", () => {
     const merged = mergeUsage(stated, stated)!;
     // Absent, not present-and-undefined: the value is serialized whole in
     // places (stream events, cached outputs), and an explicit `undefined` would
-    // survive into shapes that only ever carried the seven counters.
+    // survive into shapes that only ever carried the original counters.
     expect("estimated" in merged).toBe(false);
   });
 

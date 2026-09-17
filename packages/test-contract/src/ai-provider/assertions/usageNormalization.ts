@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Usage } from "@workglow/ai";
+import type { Usage, UsageCounterField } from "@workglow/ai";
+import { USAGE_COUNTER_FIELDS, USAGE_PROMPT_FIELDS } from "@workglow/ai";
 import { describe, expect } from "vitest";
 
 import { it } from "../../creditExhaustedSkip";
@@ -21,18 +22,6 @@ import { it } from "../../creditExhaustedSkip";
  * A provider registers its mapper here rather than re-litigating the rule in its
  * own suite, so a new provider inherits the same guarantees.
  */
-
-/** The full set of normalized counters, used to check untouched slots. */
-const USAGE_COUNTER_FIELDS = [
-  "input",
-  "output",
-  "cached",
-  "cacheWrite",
-  "reasoning",
-  "total",
-] as const;
-
-type UsageCounterField = (typeof USAGE_COUNTER_FIELDS)[number];
 
 export interface UsageNormalizationCase {
   /** What this frame represents, e.g. "a cache-hit completion". */
@@ -96,12 +85,13 @@ export function assertUsageDisjointness(usage: Usage): void {
     ).toBe(true);
   }
   if (usage.total === undefined) return;
-  const parts = [usage.input, usage.cached, usage.cacheWrite, usage.output];
+  const parts = [...USAGE_PROMPT_FIELDS.map((field) => usage[field]), usage.output];
   if (parts.every((part) => part === undefined)) return;
   const sum = parts.reduce<number>((acc, part) => acc + (part ?? 0), 0);
-  expect(sum, `input + cached + cacheWrite + output must equal the provider's stated total`).toBe(
-    usage.total
-  );
+  expect(
+    sum,
+    `${USAGE_PROMPT_FIELDS.join(" + ")} + output must equal the provider's stated total`
+  ).toBe(usage.total);
 }
 
 export function usageNormalizationBlock(opts: UsageNormalizationOpts): void {

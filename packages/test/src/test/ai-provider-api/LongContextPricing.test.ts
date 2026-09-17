@@ -8,6 +8,7 @@ import type { ModelPricing } from "@workglow/ai";
 import { estimateCost } from "@workglow/ai";
 import { ANTHROPIC_PRICING } from "@workglow/anthropic/ai";
 import { getGeminiModelPricing } from "@workglow/google-gemini/ai";
+import { getOpenAiModelPricing } from "@workglow/openai/ai";
 import type { Usage } from "@workglow/task-graph";
 import { describe, expect, it } from "vitest";
 
@@ -60,6 +61,86 @@ describe("Gemini long-context pricing", () => {
     const pricing = getGeminiModelPricing("gemini-2.5-flash");
     expect(pricing?.usageTiers).toBeUndefined();
     expect(inputRate(pricing, 250_000)).toBeCloseTo(inputRate(pricing, 1_000), 10);
+  });
+});
+
+/**
+ * OpenAI publishes two rows for every 1.05M-context flagship: Standard rates
+ * up to 272K input tokens, then 2x input/cache and 1.5x output for the whole
+ * request above that. A card carrying only the headline underprices a 300K
+ * prompt and prints without `~`, because every counter it was handed did have
+ * a rate. Mini/nano and older GPT-5/4.1 cards stay a single row — a 400K or
+ * 1M window is not the same as a published surcharge.
+ */
+describe("OpenAI long-context pricing", () => {
+  const longContext = [
+    { id: "gpt-6-astra", short: 10, long: 20, longOutput: 75 },
+    { id: "gpt-5.6-sol", short: 4, long: 8, longOutput: 30 },
+    { id: "gpt-5.6-terra", short: 2, long: 4, longOutput: 18 },
+    { id: "gpt-5.6-luna", short: 0.2, long: 0.4, longOutput: 1.8 },
+    { id: "gpt-5.5", short: 5, long: 10, longOutput: 45 },
+    { id: "gpt-5.4", short: 2.5, long: 5, longOutput: 22.5 },
+  ] as const;
+
+  it.each(longContext)(
+    "charges $id's over-272K rates above the threshold",
+    ({ id, short, long, longOutput }) => {
+      const pricing = getOpenAiModelPricing(id);
+      expect(inputRate(pricing, 272_000)).toBeCloseTo(short, 10);
+      expect(inputRate(pricing, 272_001)).toBeCloseTo(long, 10);
+      expect(cost(pricing, 300_000, MILLION)).toBeCloseTo(
+        (300_000 * long) / MILLION + longOutput,
+        10
+      );
+    }
+  );
+
+  it.each(["gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.2", "gpt-5", "gpt-4.1"] as const)(
+    "leaves %s flat, because OpenAI publishes one row for it",
+    (id) => {
+      const pricing = getOpenAiModelPricing(id);
+      expect(pricing?.usageTiers).toBeUndefined();
+      expect(inputRate(pricing, 300_000)).toBeCloseTo(inputRate(pricing, 1_000), 10);
+    }
+  );
+
+  it("doubles the cache-write rate on the long row, as the published table does", () => {
+    // gpt-5.5 publishes no cache-write row at all, so its write bills at the
+    // ordinary input rate — which the long row doubles along with input.
+    const long = (id: string) => getOpenAiModelPricing(id)?.usageTiers?.[1]?.pricing;
+    expect(long("gpt-6-astra")?.cacheWrite).toBe(25);
+    expect(long("gpt-5.6-sol")?.cacheWrite).toBe(10);
+    expect(long("gpt-5.5")?.cacheWrite).toBe(10);
+    expect(long("gpt-5.5")?.input).toBe(10);
+  });
+
+  it("states a derived long rate at the grain it is published at", () => {
+    // 1.2 * 1.5 is 1.7999999999999998 and the published rate is $1.80. The
+    // estimate rounds either way, but the card's own number reaches any UI that
+    // renders the effective rate.
+    expect(getOpenAiModelPricing("gpt-5.6-luna")?.usageTiers?.[1]?.pricing.output).toBe(1.8);
+  });
+
+  /**
+   * A cold cache-checkpoint call bills its whole prefix as `cacheWrite`, and the
+   * mapper subtracts those tokens out of `input` — so a card with no cacheWrite
+   * rate does not merely print `~`, it prices the prefix at nothing.
+   */
+  it("prices a cold checkpoint's prefix on every flagship", () => {
+    const coldCheckpoint: Usage = {
+      input: 3,
+      output: 100,
+      cached: undefined,
+      cacheWrite: 200_000,
+      reasoning: undefined,
+      total: undefined,
+      extra: undefined,
+    };
+    for (const id of ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.5", "gpt-5.4", "gpt-4o"]) {
+      const estimate = estimateCost(coldCheckpoint, getOpenAiModelPricing(id));
+      expect(estimate?.unpriced, `${id} left a counter unpriced`).toEqual([]);
+      expect(estimate!.amount, `${id} priced the prefix at nothing`).toBeGreaterThan(0.01);
+    }
   });
 });
 

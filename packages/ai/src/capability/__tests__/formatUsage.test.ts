@@ -34,6 +34,23 @@ describe("formatUsage", () => {
     expect(formatUsage(CACHE_HIT_USAGE, "detailed")).toBe("cached");
   });
 
+  it("still reads as cached when the optional image counters are absent", () => {
+    // The image counters are optional, so a text-only constructor — every one
+    // outside this repo included — states zeros without naming them. Requiring
+    // them here turned a replay into `↑0 ↓0 cached 0 cache-write 0 …`.
+    const textOnlyZero = usage({
+      input: 0,
+      output: 0,
+      cached: 0,
+      cacheWrite: 0,
+      reasoning: 0,
+      total: 0,
+    });
+    expect(formatUsage(textOnlyZero, "directional")).toBe("cached");
+    expect(formatUsage(textOnlyZero, "cumulative")).toBe("cached");
+    expect(formatUsage(textOnlyZero, "detailed")).toBe("cached");
+  });
+
   it("splits both directions and groups thousands", () => {
     expect(formatUsage(usage({ input: 1240, output: 318 }), "directional")).toBe("↑1,240 ↓318");
   });
@@ -89,6 +106,28 @@ describe("formatUsage", () => {
     const text = formatUsage(usage({ input: 10, output: 20 }), "detailed");
     expect(text).not.toContain("cached");
     expect(text).not.toContain("cache-write");
+    expect(text).not.toContain("image");
+  });
+
+  it("counts image prompt tokens in the arrow and names the cached image slice", () => {
+    expect(
+      formatUsage(
+        usage({ input: 100, imageInput: 400, imageCached: 50, output: 10 }),
+        "directional"
+      )
+    ).toBe("↑550 (50 image cached) ↓10");
+    expect(
+      formatUsage(usage({ input: 100, cached: 20, imageCached: 50, output: 10 }), "directional")
+    ).toBe("↑170 (20 cached, 50 image cached) ↓10");
+  });
+
+  it("names image counters in detailed mode", () => {
+    const text = formatUsage(
+      usage({ input: 10, output: 20, imageInput: 30, imageCached: 40 }),
+      "detailed"
+    );
+    expect(text).toContain("image 30");
+    expect(text).toContain("image-cached 40");
   });
 });
 

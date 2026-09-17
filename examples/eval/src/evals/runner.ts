@@ -60,6 +60,8 @@ export function usageColumns(
   output_tokens: number | null;
   cached_tokens: number | null;
   cache_write_tokens: number | null;
+  image_input_tokens: number | null;
+  image_cached_tokens: number | null;
   total_tokens: number | null;
   cost: number | null;
   currency: string | null;
@@ -70,6 +72,10 @@ export function usageColumns(
     output_tokens: usage?.output ?? null,
     cached_tokens: usage?.cached ?? null,
     cache_write_tokens: usage?.cacheWrite ?? null,
+    // The image buckets are disjoint from `input`, so a row without them
+    // states a prompt smaller than the `cost` beside it was charged for.
+    image_input_tokens: usage?.imageInput ?? null,
+    image_cached_tokens: usage?.imageCached ?? null,
     total_tokens: usage?.total ?? null,
     cost: estimate?.amount ?? null,
     currency: estimate?.currency ?? null,

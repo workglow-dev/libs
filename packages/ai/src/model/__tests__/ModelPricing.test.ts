@@ -36,12 +36,16 @@ describe("model pricing", () => {
     expect(ModelPricingSchema.properties.output).toBeDefined();
     expect(ModelPricingSchema.properties.cached).toBeDefined();
     expect(ModelPricingSchema.properties.cacheWrite).toBeDefined();
+    expect(ModelPricingSchema.properties.imageInput).toBeDefined();
+    expect(ModelPricingSchema.properties.imageCached).toBeDefined();
     expect(ModelPricingSchema.properties.cacheStoragePerHour).toBeDefined();
     expect(ModelPricingSchema.properties.batch).toBeDefined();
     expect(ModelPricingSchema.properties.usageTiers).toBeDefined();
     expect(ModelPricingSchema.properties.timingTiers).toBeDefined();
     expect(ModelPricingSchema.properties.currency["x-ui-order"]).toBe(1);
     expect(ModelPricingSchema.properties.input["x-ui-order"]).toBe(2);
+    expect(ModelPricingSchema.properties.imageInput["x-ui-order"]).toBe(6);
+    expect(ModelPricingSchema.properties.imageCached["x-ui-order"]).toBe(7);
   });
 
   it("defines FREE_LOCAL_PRICING with zero rates", () => {
@@ -51,6 +55,8 @@ describe("model pricing", () => {
       output: 0,
       cached: 0,
       cacheWrite: 0,
+      imageInput: 0,
+      imageCached: 0,
       cacheStoragePerHour: undefined,
     });
   });
@@ -151,6 +157,8 @@ describe("resolveEffectiveRates", () => {
       output: 15,
       cached: 0.3,
       cacheWrite: undefined,
+      imageInput: undefined,
+      imageCached: undefined,
       cacheStoragePerHour: undefined,
     });
   });
@@ -257,6 +265,8 @@ describe("resolveEffectiveRates", () => {
       output: 15,
       cached: undefined,
       cacheWrite: 3.75,
+      imageInput: undefined,
+      imageCached: undefined,
       cacheStoragePerHour: 1,
     });
   });
@@ -280,6 +290,8 @@ describe("resolveEffectiveRates", () => {
       output: 22.5,
       cached: undefined,
       cacheWrite: undefined,
+      imageInput: undefined,
+      imageCached: undefined,
       cacheStoragePerHour: undefined,
     });
   });

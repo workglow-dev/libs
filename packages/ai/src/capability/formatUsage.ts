@@ -5,6 +5,7 @@
  */
 
 import type { Usage } from "@workglow/task-graph";
+import { USAGE_COUNTER_FIELDS, USAGE_PROMPT_FIELDS } from "@workglow/task-graph";
 import type { ModelPricing } from "../model/ModelSchema";
 import type { CostEstimate, EstimateCostOptions } from "./CostEstimate";
 import { estimateCost } from "./CostEstimate";
@@ -18,28 +19,38 @@ export type UsageDetail = "directional" | "cumulative" | "detailed";
 
 const group = (n: number): string => n.toLocaleString("en-US");
 
-const COUNTER_FIELDS = ["input", "output", "cached", "cacheWrite", "reasoning", "total"] as const;
+/**
+ * Counters only an image model ever fills. A `Usage` that omits them said
+ * nothing about image tokens, which is not the same as reporting a count — so
+ * requiring them to be a stated `0` would keep an all-zero text usage from
+ * reading as the replayed cache hit it is.
+ */
+const OPTIONAL_COUNTER_FIELDS = new Set<string>(["imageInput", "imageCached"]);
 
 /** True when the provider stated 0 for every counter — a replayed cache hit. */
 function isStatedZero(usage: Usage): boolean {
-  return COUNTER_FIELDS.every((field) => usage[field] === 0);
+  return USAGE_COUNTER_FIELDS.every((field) => {
+    const value = usage[field];
+    return value === 0 || (value === undefined && OPTIONAL_COUNTER_FIELDS.has(field));
+  });
 }
 
 function hasAnyCounter(usage: Usage): boolean {
-  return COUNTER_FIELDS.some((field) => usage[field] !== undefined);
+  return USAGE_COUNTER_FIELDS.some((field) => usage[field] !== undefined);
 }
 
 /**
- * The whole prompt. `input`, `cached` and `cacheWrite` are disjoint slices of
- * it, so the base-rate bucket alone is not the figure the `↑` arrow claims to
- * be: a warm cache-checkpoint call reports nearly its entire prompt under
- * `cached` and would render `↑3` for an 11k-token prompt.
+ * The whole prompt. `input`, `cached`, `cacheWrite`, `imageInput` and
+ * `imageCached` are disjoint slices of it, so the base-rate bucket alone is not
+ * the figure the `↑` arrow claims to be: a warm cache-checkpoint call reports
+ * nearly its entire prompt under `cached` and would render `↑3` for an 11k-token
+ * prompt.
  *
  * Sums only the counters the provider stated, so a prompt no counter reported
  * stays unreported rather than becoming a synthesized `0`.
  */
 function promptTotal(usage: Usage): number | undefined {
-  const slices = [usage.input, usage.cached, usage.cacheWrite];
+  const slices = USAGE_PROMPT_FIELDS.map((field) => usage[field]);
   if (slices.every((slice) => slice === undefined)) return undefined;
   return slices.reduce<number>((sum, slice) => sum + (slice ?? 0), 0);
 }
@@ -55,7 +66,10 @@ export function formatUsage(usage: Usage | undefined, detail: UsageDetail): stri
   if (detail === "cumulative") return [up, down].filter(Boolean).join(" ");
 
   if (detail === "directional") {
-    const cached = usage.cached === undefined ? "" : `(${group(usage.cached)} cached)`;
+    const bits: string[] = [];
+    if (usage.cached !== undefined) bits.push(`${group(usage.cached)} cached`);
+    if (usage.imageCached !== undefined) bits.push(`${group(usage.imageCached)} image cached`);
+    const cached = bits.length === 0 ? "" : `(${bits.join(", ")})`;
     return [up, cached, down].filter(Boolean).join(" ");
   }
 
@@ -64,6 +78,8 @@ export function formatUsage(usage: Usage | undefined, detail: UsageDetail): stri
   if (down) parts.push(down);
   if (usage.cached !== undefined) parts.push(`cached ${group(usage.cached)}`);
   if (usage.cacheWrite !== undefined) parts.push(`cache-write ${group(usage.cacheWrite)}`);
+  if (usage.imageInput !== undefined) parts.push(`image ${group(usage.imageInput)}`);
+  if (usage.imageCached !== undefined) parts.push(`image-cached ${group(usage.imageCached)}`);
   if (usage.reasoning !== undefined) parts.push(`reasoning ${group(usage.reasoning)}`);
   if (usage.total !== undefined) parts.push(`total ${group(usage.total)}`);
   return parts.join(" ");

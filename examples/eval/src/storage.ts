@@ -88,6 +88,8 @@ export const EvalResultSchema = {
     output_tokens: { type: ["integer", "null"] },
     cached_tokens: { type: ["integer", "null"] },
     cache_write_tokens: { type: ["integer", "null"] },
+    image_input_tokens: { type: ["integer", "null"] },
+    image_cached_tokens: { type: ["integer", "null"] },
     total_tokens: { type: ["integer", "null"] },
     cost: { type: ["number", "null"] },
     currency: { type: ["string", "null"] },

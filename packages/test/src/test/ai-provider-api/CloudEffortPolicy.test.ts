@@ -85,8 +85,12 @@ describe("geminiEffortPolicy", () => {
 });
 
 describe("deepseekEffortPolicy", () => {
-  it("treats the v4 family as all six with default high", () => {
+  it("treats the v4 family and deepseek-flash as all six with default high", () => {
     expect(deepseekEffortPolicy(cfg(DEEPSEEK, "deepseek-v4-flash"))).toEqual({
+      supported: [...MODEL_EFFORTS],
+      default: "high",
+    });
+    expect(deepseekEffortPolicy(cfg(DEEPSEEK, "deepseek-flash"))).toEqual({
       supported: [...MODEL_EFFORTS],
       default: "high",
     });

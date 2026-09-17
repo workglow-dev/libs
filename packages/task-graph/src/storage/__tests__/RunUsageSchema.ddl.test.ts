@@ -7,6 +7,7 @@
 import { getNonNullSchema, mapPostgresType } from "@workglow/storage";
 import type { JsonSchema } from "@workglow/util/schema";
 import { describe, expect, it } from "vitest";
+import { USAGE_COUNTER_FIELDS } from "../../task/StreamTypes";
 import { RunUsageSchema } from "../RunUsageSchema";
 
 /**
@@ -20,8 +21,12 @@ import { RunUsageSchema } from "../RunUsageSchema";
  * fresh databases from pre-existing ones (a counter read back as `string`
  * instead of `number`) with nothing else failing. If this test moves, the
  * README's "Nullable columns and generated DDL" operator note moves with it.
+ *
+ * Driven off the canonical counter list rather than a copy of it, so a counter
+ * added to `Usage` without a matching column fails here instead of being
+ * dropped on the way to storage.
  */
-const COUNTER_COLUMNS = ["input", "output", "cached", "cacheWrite", "reasoning", "total"] as const;
+const COUNTER_COLUMNS = USAGE_COUNTER_FIELDS;
 
 describe("RunUsageSchema generated DDL", () => {
   const ddl = (schema: JsonSchema): string =>

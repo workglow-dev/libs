@@ -4,7 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { mapOpenAIChatUsage, mapOpenAIResponsesUsage } from "@workglow/ai/provider-utils";
+import {
+  mapOpenAIChatUsage,
+  mapOpenAIImageUsage,
+  mapOpenAIResponsesUsage,
+} from "@workglow/ai/provider-utils";
 import { _testOnly as anthropicTestOnly } from "@workglow/anthropic/ai";
 import { _testOnly as deepseekTestOnly } from "@workglow/deepseek/ai";
 import { _testOnly as geminiTestOnly } from "@workglow/google-gemini/ai";
@@ -105,6 +109,80 @@ usageNormalizationBlock({
         cacheWrite: 32,
         reasoning: 18,
         total: 250,
+        extra: undefined,
+      },
+    },
+  ],
+});
+
+/**
+ * The Images API is the one OpenAI surface that states the prompt split by
+ * modality, and GPT Image the one card that prices the halves apart — so it is
+ * the only mapper that fills `imageInput`. It reports no cache counters at all,
+ * which is why `cached`, `cacheWrite` and `imageCached` stay absent here rather
+ * than being derived from the totals it does state.
+ */
+usageNormalizationBlock({
+  provider: "OpenAI (Images shape)",
+  mapUsage: mapOpenAIImageUsage,
+  sparseFrame: { input_tokens: 22, output_tokens: 1056 },
+  sparseReports: ["input", "output"],
+  zeroFrame: { input_tokens: 0, output_tokens: 0 },
+  cases: [
+    {
+      name: "a text-and-image prompt split by input_tokens_details",
+      frame: {
+        input_tokens: 1560,
+        output_tokens: 1056,
+        total_tokens: 2616,
+        input_tokens_details: { text_tokens: 60, image_tokens: 1500 },
+      },
+      expected: {
+        input: 60,
+        output: 1056,
+        cached: undefined,
+        cacheWrite: undefined,
+        imageInput: 1500,
+        reasoning: undefined,
+        total: 2616,
+        extra: undefined,
+      },
+    },
+    {
+      name: "recovering the text half by subtraction when only image_tokens is stated",
+      frame: {
+        input_tokens: 1560,
+        output_tokens: 1056,
+        total_tokens: 2616,
+        input_tokens_details: { image_tokens: 1500 },
+      },
+      expected: {
+        input: 60,
+        output: 1056,
+        cached: undefined,
+        cacheWrite: undefined,
+        imageInput: 1500,
+        reasoning: undefined,
+        total: 2616,
+        extra: undefined,
+      },
+    },
+    {
+      name: "a prompt with no image in it, without inventing an image counter",
+      frame: {
+        input_tokens: 22,
+        output_tokens: 1056,
+        total_tokens: 1078,
+        input_tokens_details: { text_tokens: 22, image_tokens: 0 },
+      },
+      expected: {
+        input: 22,
+        output: 1056,
+        cached: undefined,
+        cacheWrite: undefined,
+        imageInput: 0,
+        reasoning: undefined,
+        total: 1078,
         extra: undefined,
       },
     },

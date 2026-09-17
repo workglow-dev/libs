@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { TaskOutput, Usage } from "@workglow/task-graph";
-import { USAGE_OUTPUT_KEY } from "@workglow/task-graph";
+import type { TaskOutput, Usage, UsageCounterField } from "@workglow/task-graph";
+import { USAGE_COUNTER_FIELDS, USAGE_OUTPUT_KEY } from "@workglow/task-graph";
 import type { SpanAttributes } from "@workglow/util";
 import { getLogger, getTelemetryProvider } from "@workglow/util";
 
@@ -22,6 +22,25 @@ export function readUsage(output: TaskOutput | undefined): Usage | undefined {
 }
 
 /**
+ * The span attribute each normalized counter is reported under.
+ *
+ * Keyed by {@link UsageCounterField} rather than written out as a chain of
+ * `if`s, so a counter added to {@link Usage} fails to compile here instead of
+ * quietly going unreported — which leaves the span's `total_tokens` unable to
+ * reconcile against the buckets beside it.
+ */
+const USAGE_ATTRIBUTE_NAMES: Record<UsageCounterField, string> = {
+  input: "gen_ai.usage.input_tokens",
+  output: "gen_ai.usage.output_tokens",
+  cached: "gen_ai.usage.cached_input_tokens",
+  cacheWrite: "gen_ai.usage.cache_write_input_tokens",
+  imageInput: "gen_ai.usage.image_input_tokens",
+  imageCached: "gen_ai.usage.cached_image_input_tokens",
+  reasoning: "gen_ai.usage.reasoning_tokens",
+  total: "gen_ai.usage.total_tokens",
+};
+
+/**
  * Flattens {@link Usage} into OpenTelemetry gen-ai semantic-convention span
  * attributes. Unreported counters are omitted rather than zeroed, so a
  * consumer can tell "billed nothing" from "told us nothing".
@@ -29,16 +48,10 @@ export function readUsage(output: TaskOutput | undefined): Usage | undefined {
 function usageAttributes(usage: Usage, modelId: string | undefined): SpanAttributes {
   const attributes: SpanAttributes = {};
   if (modelId !== undefined) attributes["gen_ai.request.model"] = modelId;
-  if (usage.input !== undefined) attributes["gen_ai.usage.input_tokens"] = usage.input;
-  if (usage.output !== undefined) attributes["gen_ai.usage.output_tokens"] = usage.output;
-  if (usage.cached !== undefined) attributes["gen_ai.usage.cached_input_tokens"] = usage.cached;
-  if (usage.cacheWrite !== undefined) {
-    attributes["gen_ai.usage.cache_write_input_tokens"] = usage.cacheWrite;
+  for (const field of USAGE_COUNTER_FIELDS) {
+    const value = usage[field];
+    if (value !== undefined) attributes[USAGE_ATTRIBUTE_NAMES[field]] = value;
   }
-  if (usage.reasoning !== undefined) {
-    attributes["gen_ai.usage.reasoning_tokens"] = usage.reasoning;
-  }
-  if (usage.total !== undefined) attributes["gen_ai.usage.total_tokens"] = usage.total;
   if (usage.extra) {
     for (const [key, value] of Object.entries(usage.extra)) {
       attributes[`gen_ai.usage.extra.${key}`] = value;

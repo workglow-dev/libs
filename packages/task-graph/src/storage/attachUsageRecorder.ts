@@ -51,6 +51,8 @@ export function attachUsageRecorder(
         output: row.usage.output ?? null,
         cached: row.usage.cached ?? null,
         cacheWrite: row.usage.cacheWrite ?? null,
+        imageInput: row.usage.imageInput ?? null,
+        imageCached: row.usage.imageCached ?? null,
         reasoning: row.usage.reasoning ?? null,
         total: row.usage.total ?? null,
         extra: row.usage.extra ? JSON.stringify(row.usage.extra) : null,

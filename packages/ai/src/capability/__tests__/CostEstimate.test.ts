@@ -40,6 +40,35 @@ describe("estimateCost", () => {
     expect(estimate?.stated).toBe(false);
   });
 
+  it("prices imageInput and imageCached as their own buckets", () => {
+    const imagePricing: ModelPricing = {
+      currency: "USD",
+      input: 5,
+      output: 30,
+      cached: 1.25,
+      imageInput: 8,
+      imageCached: 2,
+    };
+    const estimate = estimateCost(
+      usage({
+        input: 1_000_000,
+        output: 1_000_000,
+        cached: 1_000_000,
+        imageInput: 1_000_000,
+        imageCached: 1_000_000,
+      }),
+      imagePricing
+    );
+    expect(estimate?.amount).toBeCloseTo(5 + 30 + 1.25 + 8 + 2, 10);
+    expect(estimate?.unpriced).toEqual([]);
+  });
+
+  it("names imageInput as unpriced when spent without a rate", () => {
+    const estimate = estimateCost(usage({ input: 1_000_000, imageInput: 500_000 }), pricing);
+    expect(estimate?.amount).toBeCloseTo(3, 10);
+    expect(estimate?.unpriced).toEqual(["imageInput"]);
+  });
+
   it("never prices reasoning or total, and never lists them as unpriced", () => {
     // reasoning is inside output and total covers everything; pricing either
     // would count the same tokens twice.
@@ -147,6 +176,24 @@ describe("estimateCost and pricing tiers", () => {
     // even though the plain-input counter alone is under the threshold.
     const estimate = estimateCost(usage({ input: 150_000, cached: 100_000 }), tiered);
     expect(estimate?.amount).toBeCloseTo((150_000 * 6 + 100_000 * 0.6) / 1_000_000, 10);
+  });
+
+  it("selects a usage tier from the whole prompt, image tokens included", () => {
+    const tiered: ModelPricing = {
+      currency: "USD",
+      input: 3,
+      output: 15,
+      cached: undefined,
+      cacheWrite: undefined,
+      cacheStoragePerHour: undefined,
+      imageInput: 8,
+      usageTiers: [
+        { maxInputTokens: 200_000, pricing: { input: 3, imageInput: 8 } },
+        { minInputTokens: 200_000, pricing: { input: 6, imageInput: 16 } },
+      ],
+    };
+    const estimate = estimateCost(usage({ input: 150_000, imageInput: 100_000 }), tiered);
+    expect(estimate?.amount).toBeCloseTo((150_000 * 6 + 100_000 * 16) / 1_000_000, 10);
   });
 
   it("reports a counter as unpriced when the tier that applies drops its rate", () => {

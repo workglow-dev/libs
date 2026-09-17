@@ -82,17 +82,30 @@ export type StreamSnapshot<Output = Record<string, any>> = {
  * - `input` / `output` — prompt and completion tokens.
  * - `cached` — prompt tokens served from a provider-side cache (read).
  * - `cacheWrite` — prompt tokens written into that cache.
+ * - `imageInput` — uncached image prompt tokens, billed at the image-input rate.
+ * - `imageCached` — image prompt tokens served from a provider-side cache.
  * - `input`, `cached` and `cacheWrite` are **disjoint**: `input` is the portion
  *   billed at the base input rate and never includes cache reads or writes, so
- *   `input + cached + cacheWrite` is the full prompt. Providers reporting a
+ *   `input + cached + cacheWrite` is the text prompt. Providers reporting a
  *   grand total plus a breakdown line are normalized by subtraction.
+ * - `imageInput` and `imageCached` are the same split for image prompt tokens,
+ *   disjoint from each other and from the text buckets. Together they are the
+ *   image portion of the prompt. Omitted when the provider reports no image
+ *   tokens — the same "not reported" as `undefined` on the other counters.
+ * - The two image counters are **billing** buckets, not modality labels. A
+ *   provider that bills an image in the prompt at its ordinary input rate
+ *   reports those tokens under `input`, even when it also states the modality
+ *   split: moving them here would put spend in a bucket the rate card declares
+ *   no rate for, and turn an exact estimate into a partial one. They are for a
+ *   provider whose card prices image input apart from text input.
  * - `reasoning` — output tokens spent on hidden reasoning, when reported
  *   separately. **`output` includes `reasoning`**: no provider charges a
  *   distinct reasoning rate, so it is a visibility breakdown of `output`, not a
  *   sibling of it. Providers reporting them disjointly are normalized by
  *   addition.
  * - `total` — the provider's own total, when it reports one. Never synthesized.
- *   When present it satisfies `input + cached + cacheWrite + output === total`.
+ *   When present it satisfies
+ *   `input + cached + cacheWrite + imageInput + imageCached + output === total`.
  * - `extra` — provider-specific counters that have no normalized slot.
  *
  * **Subtract only what the provider stated.** When `cached` is unreported,
@@ -105,6 +118,14 @@ export interface Usage {
   readonly output: number | undefined;
   readonly cached: number | undefined;
   readonly cacheWrite: number | undefined;
+  /**
+   * Image prompt tokens billed at the image-input rate. Optional so a text-only
+   * constructor is not forced to name counters no image model will fill;
+   * omitted means not reported, same as `undefined` on the other fields.
+   */
+  readonly imageInput?: number;
+  /** Image prompt tokens served from cache. See {@link imageInput}. */
+  readonly imageCached?: number;
   readonly reasoning: number | undefined;
   readonly total: number | undefined;
   readonly extra: Readonly<Record<string, number | string>> | undefined;
@@ -121,6 +142,45 @@ export interface Usage {
    */
   readonly estimated?: true;
 }
+
+/**
+ * Every normalized counter on {@link Usage}, in reporting order.
+ *
+ * Exported because walking all of them is not a one-off: rendering, cost
+ * estimation, telemetry, the stored row and the provider conformance suite each
+ * need the full list. A counter added to the interface but missed by one of
+ * those lists does not fail to compile — it silently stops being reported — so
+ * derive the list from here rather than restating it.
+ */
+export const USAGE_COUNTER_FIELDS = [
+  "input",
+  "output",
+  "cached",
+  "cacheWrite",
+  "imageInput",
+  "imageCached",
+  "reasoning",
+  "total",
+] as const;
+
+export type UsageCounterField = (typeof USAGE_COUNTER_FIELDS)[number];
+
+/**
+ * The disjoint slices that together make up one prompt — which is what a
+ * provider's context threshold measures and what an `↑` arrow reports.
+ *
+ * `output` is not prompt, `reasoning` is contained in `output`, and `total`
+ * covers the whole request, so none of the three belongs here.
+ */
+export const USAGE_PROMPT_FIELDS = [
+  "input",
+  "cached",
+  "cacheWrite",
+  "imageInput",
+  "imageCached",
+] as const;
+
+export type UsagePromptField = (typeof USAGE_PROMPT_FIELDS)[number];
 
 /**
  * Reserved output-port name that {@link Usage} is surfaced on. Not a declared
@@ -141,6 +201,8 @@ export const CACHE_HIT_USAGE: Usage = {
   output: 0,
   cached: 0,
   cacheWrite: 0,
+  imageInput: 0,
+  imageCached: 0,
   reasoning: 0,
   total: 0,
   extra: undefined,
@@ -261,6 +323,8 @@ function mergeUsageExtra(
 export function mergeUsage(a: Usage | undefined, b: Usage | undefined): Usage | undefined {
   if (!a) return b;
   if (!b) return a;
+  const imageInput = addUsageField(a.imageInput, b.imageInput);
+  const imageCached = addUsageField(a.imageCached, b.imageCached);
   return {
     input: addUsageField(a.input, b.input),
     output: addUsageField(a.output, b.output),
@@ -269,6 +333,10 @@ export function mergeUsage(a: Usage | undefined, b: Usage | undefined): Usage | 
     reasoning: addUsageField(a.reasoning, b.reasoning),
     total: addUsageField(a.total, b.total),
     extra: mergeUsageExtra(a.extra, b.extra),
+    // Omit unreported image counters so a text-only total does not grow a
+    // key the seven original counters never carried.
+    ...(imageInput !== undefined ? { imageInput } : {}),
+    ...(imageCached !== undefined ? { imageCached } : {}),
     // Spread conditionally so a stated total carries no key at all, rather
     // than an explicit `estimated: undefined`.
     ...(a.estimated || b.estimated ? { estimated: true as const } : {}),
