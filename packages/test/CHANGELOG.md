@@ -1,5 +1,11 @@
 # @workglow/test
 
+## 0.6.4
+
+### Features
+
+- enhance FetchUrlTask and FileLoaderTask to support array of URLs for entitlements.
+
 ## 0.6.3
 
 ### Features
