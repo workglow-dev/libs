@@ -1,5 +1,19 @@
 # @workglow/job-queue
 
+## 0.6.6
+
+### Features
+
+- enhance job queue stream handling and memory management
+
+### Bug Fixes
+
+- update callback type in queue storage to support asynchronous handling
+
+### Refactors
+
+- unify callback type in queue storage interfaces for consistency
+
 ## 0.6.5
 
 _No changes in this package._

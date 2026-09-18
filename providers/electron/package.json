@@ -2,7 +2,7 @@
   "name": "@workglow/electron",
   "type": "module",
   "sideEffects": false,
-  "version": "0.6.5",
+  "version": "0.6.6",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

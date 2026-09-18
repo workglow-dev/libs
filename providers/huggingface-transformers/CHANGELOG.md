@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.6
+
+### Features
+
+- add HFT model file size guard and related error handling
+
+### Chores
+
+- format
+
 ## 0.6.5
 
 _No changes in this package._

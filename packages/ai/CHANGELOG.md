@@ -1,5 +1,15 @@
 # @workglow/ai
 
+## 0.6.6
+
+### Features
+
+- implement withoutToolExecutors function to strip execute methods from tools
+
+### Chores
+
+- format
+
 ## 0.6.5
 
 ### Features

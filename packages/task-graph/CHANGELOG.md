@@ -1,5 +1,9 @@
 # @workglow/task-graph
 
+## 0.6.6
+
+_No changes in this package._
+
 ## 0.6.5
 
 ### Features
