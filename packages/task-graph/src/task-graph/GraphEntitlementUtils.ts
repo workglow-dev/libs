@@ -117,8 +117,12 @@ export function computeGraphEntitlements(
  * it, backfilled with its schema defaults. Mirrors `Task.setInput`'s
  * precedence — an explicit value beats a declared default — so this is what
  * the task would really see, not an approximation of it.
+ *
+ * Exported because a compound task declaring its own entitlements needs the
+ * same view of its input to project into its subgraph — see
+ * `GraphAsTask.entitlements()`.
  */
-function knownInput(task: ITask): Record<string, unknown> {
+export function knownInput(task: ITask): Record<string, unknown> {
   const known: Record<string, unknown> = { ...task.runInputData };
   const schema = task.inputSchema();
   if (typeof schema === "boolean") return known;

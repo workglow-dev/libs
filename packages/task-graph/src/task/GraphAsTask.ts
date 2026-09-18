@@ -9,7 +9,11 @@ import { CycleError } from "@workglow/util/graph";
 import type { DataPortSchema, SchemaNode } from "@workglow/util/schema";
 import { compileSchema } from "@workglow/util/schema";
 import { registerGraphWrapperFactory } from "../task-graph/Conversions";
-import { computeGraphEntitlements } from "../task-graph/GraphEntitlementUtils";
+import {
+  computeGraphEntitlements,
+  knownInput,
+  withStaticInputProjection,
+} from "../task-graph/GraphEntitlementUtils";
 import { computeGraphInputSchema, computeGraphOutputSchema } from "../task-graph/GraphSchemaUtils";
 import { bridgeSubGraphTaskEvents } from "../task-graph/SubGraphEventBridge";
 import type { TaskGraph } from "../task-graph/TaskGraph";
@@ -180,12 +184,26 @@ export class GraphAsTask<
 
   /**
    * Aggregates entitlements from all tasks in the subgraph.
+   *
+   * The subgraph is projected with this task's own input first. A child whose
+   * declaration depends on its input — `FileLoaderTask` classifying its `url`
+   * — otherwise sees nothing here and declares the fail-closed superset (an
+   * unscoped `network:private`), which no scoped grant can satisfy. The graph
+   * pre-flight never hit that because `withStaticInputProjection` had already
+   * seeded the subgraph before reading this aggregate; the runtime check that
+   * `hasDynamicEntitlements` triggers has no such outer projection, so a
+   * compound task denied itself the moment its input was finally known.
+   *
+   * The projection restores every task it touches before returning, so this
+   * stays an evaluation-time view — nothing executes against a seeded value.
    */
   public override entitlements(): TaskEntitlements {
     if (!this.hasChildren()) {
       return (this.constructor as typeof Task).entitlements();
     }
-    return computeGraphEntitlements(this.subGraph);
+    return withStaticInputProjection(this.subGraph, knownInput(this), () =>
+      computeGraphEntitlements(this.subGraph)
+    );
   }
 
   public override resetInputData(): void {
