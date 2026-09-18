@@ -749,7 +749,11 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
     // the consumer in order and surfaces as a throw.
     const droppedThrough = this.streamLogDroppedThrough.get(key) ?? 0;
     if (sinceSeq < droppedThrough) {
-      callback({
+      // `void`, not awaited: this method is synchronous by contract (it returns
+      // the unsubscribe function), and replay has no live producer to pace —
+      // unlike `publishStreamChunk`, where awaiting the subscriber is the only
+      // backpressure there is. What replay delivers is bounded by the log cap.
+      void callback({
         jobId,
         seq: sinceSeq + 1,
         event: {
@@ -770,7 +774,9 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
       };
     }
     const log = this.streamLog.get(key);
-    if (log) for (const r of log) if (r.seq > sinceSeq) callback(r);
+    // `void` for the same reason as the refusal above: replay is a bounded
+    // catch-up with nothing live behind it to slow down.
+    if (log) for (const r of log) if (r.seq > sinceSeq) void callback(r);
     return () => {
       const s = this.streamSubscribers.get(key);
       if (!s) return;

@@ -124,7 +124,7 @@ export class TelemetryQueueStorage<Input, Output> implements IQueueStorage<Input
   public readonly subscribeToStream?: (
     jobId: unknown,
     sinceSeq: number,
-    callback: (row: StreamChunkRow) => void
+    callback: (row: StreamChunkRow) => void | Promise<void>
   ) => () => void;
 
   add(job: JobStorageFormat<Input, Output>): Promise<unknown> {
