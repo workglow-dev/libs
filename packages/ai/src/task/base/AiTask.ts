@@ -124,7 +124,11 @@ export function withoutToolExecutors<Input extends TaskInput>(input: Input): Inp
   if (!Array.isArray(tools)) return input;
   let stripped = false;
   const plain = tools.map((tool) => {
-    if (tool !== null && typeof tool === "object" && typeof (tool as { execute?: unknown }).execute === "function") {
+    if (
+      tool !== null &&
+      typeof tool === "object" &&
+      typeof (tool as { execute?: unknown }).execute === "function"
+    ) {
       stripped = true;
       const { execute: _execute, ...rest } = tool as Record<string, unknown>;
       return rest;

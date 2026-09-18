@@ -16,7 +16,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const MODEL_URL = "https://huggingface.co/Test/big-model/resolve/main/onnx/model_q4f16.onnx_data";
 
 function responseOf(contentLength: string | undefined, init?: ResponseInit): Response {
-  const headers = new Headers(contentLength === undefined ? {} : { "content-length": contentLength });
+  const headers = new Headers(
+    contentLength === undefined ? {} : { "content-length": contentLength }
+  );
   const response = new Response(new ReadableStream<Uint8Array>({ start: (c) => c.close() }), {
     status: 200,
     ...init,

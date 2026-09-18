@@ -228,7 +228,9 @@ export class HftModelFileTooLargeError extends Error {
 const DEFAULT_MAX_MODEL_FILE_BYTES = 2 * 1024 * 1024 * 1024 - 4 * 1024 * 1024;
 
 function isNodeRuntime(): boolean {
-  return typeof process !== "undefined" && process.versions != null && process.versions.node != null;
+  return (
+    typeof process !== "undefined" && process.versions != null && process.versions.node != null
+  );
 }
 
 let _maxModelFileBytes: number = isNodeRuntime()

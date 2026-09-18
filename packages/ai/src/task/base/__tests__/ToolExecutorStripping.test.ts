@@ -29,7 +29,10 @@ describe("withoutToolExecutors", () => {
   });
 
   test("keeps every model-facing field of the definition", () => {
-    const stripped = withoutToolExecutors({ model: "m1", tools: [{ ...toolWithExecutor, taskType: "BuildTask" }] });
+    const stripped = withoutToolExecutors({
+      model: "m1",
+      tools: [{ ...toolWithExecutor, taskType: "BuildTask" }],
+    });
     expect(stripped.tools[0]).toEqual({
       name: "build_workflow",
       description: "Builds a workflow",
