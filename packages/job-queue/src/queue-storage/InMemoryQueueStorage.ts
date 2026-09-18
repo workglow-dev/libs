@@ -735,10 +735,13 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
       this.streamSubscribers.set(key, subs);
     }
     subs.add(callback);
-    // Replay already-published rows after registering; a row published during
-    // replay (impossible in this single-threaded impl) would arrive live and the
-    // consumer's reassembler dedups by seq. An expired log was swept above, so
-    // it replays as if empty.
+    const unsubscribe = (): void => {
+      const s = this.streamSubscribers.get(key);
+      if (!s) return;
+      s.delete(callback);
+      if (s.size === 0) this.streamSubscribers.delete(key);
+    };
+
     // A replay the log can no longer serve is reported, never approximated:
     // the rows below `droppedThrough` were evicted for size, and delivering
     // the surviving suffix would splice a body back together across the hole
@@ -763,23 +766,17 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
           },
         },
       });
-      return () => {
-        const s = this.streamSubscribers.get(key);
-        if (!s) return;
-        s.delete(callback);
-        if (s.size === 0) this.streamSubscribers.delete(key);
-      };
+      return unsubscribe;
     }
+
+    // Replay already-published rows after registering; a row published during
+    // replay (impossible in this single-threaded impl) would arrive live and
+    // the consumer's reassembler dedups by seq. An expired log was swept
+    // above, so it replays as if empty. Not awaited, for the same reason as
+    // the refusal: replay is a bounded catch-up with nothing live behind it.
     const log = this.streamLog.get(key);
-    // Not awaited, for the same reason as the refusal above: replay is a
-    // bounded catch-up with nothing live behind it to slow down.
     if (log) for (const r of log) if (r.seq > sinceSeq) callback(r);
-    return () => {
-      const s = this.streamSubscribers.get(key);
-      if (!s) return;
-      s.delete(callback);
-      if (s.size === 0) this.streamSubscribers.delete(key);
-    };
+    return unsubscribe;
   }
 
   /**
