@@ -47,6 +47,36 @@ export const IN_MEMORY_QUEUE_STORAGE = createServiceToken<IQueueStorage<any, any
 const STREAM_LOG_RETENTION_MS = 30_000;
 
 /**
+ * Cap on the bytes one job's replay log may retain.
+ *
+ * The log exists so a late subscriber can replay what it missed, and it was
+ * appended to unconditionally — which for a streamed BODY means the whole
+ * payload lives on the heap until the retention deadline. A multi-GB archive
+ * fetched through the queue therefore cost a second copy of itself in memory,
+ * measured at ~1 byte retained per byte downloaded, long after the graph that
+ * consumed it had finished.
+ *
+ * Replay is worth memory proportional to a token stream, not to a file. Past
+ * this cap the OLDEST rows are dropped (the newest are what a resuming
+ * subscriber with a cursor still needs) and the drop is RECORDED, so a replay
+ * that would have needed them fails loudly instead of handing back a body with
+ * a hole in it — see {@link InMemoryQueueStorage.subscribeToStream}.
+ */
+const STREAM_LOG_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Bytes a row costs the log. Binary deltas are the only events whose size is
+ * unbounded, so they are measured exactly; everything else is charged a flat
+ * overhead, which keeps a long stream of tiny events bounded too.
+ */
+function streamRowBytes(event: StreamEventLike): number {
+  const delta = (event as { binaryDelta?: unknown }).binaryDelta;
+  if (ArrayBuffer.isView(delta)) return delta.byteLength + 64;
+  if (delta instanceof ArrayBuffer) return delta.byteLength + 64;
+  return 64;
+}
+
+/**
  * In-memory implementation of a job queue that manages asynchronous tasks.
  * Supports job scheduling, status tracking, result caching, and prefix-based filtering.
  */
@@ -70,8 +100,19 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
    * deadline passes. See {@link STREAM_LOG_RETENTION_MS}.
    */
   private readonly streamLogExpiry = new Map<string, number>();
+  /** Per-job bytes currently retained in {@link streamLog}. */
+  private readonly streamLogBytes = new Map<string, number>();
+  /**
+   * Per-job highest `seq` dropped from the log to stay under
+   * {@link STREAM_LOG_MAX_BYTES}. A subscriber asking to replay from at or
+   * after this point lost nothing; one asking from before it cannot be served.
+   */
+  private readonly streamLogDroppedThrough = new Map<string, number>();
   /** Per-job live stream subscribers. */
-  private readonly streamSubscribers = new Map<string, Set<(row: StreamChunkRow) => void>>();
+  private readonly streamSubscribers = new Map<
+    string,
+    Set<(row: StreamChunkRow) => void | Promise<void>>
+  >();
   /**
    * Per-job monotonic stream `seq` counter. The carrier owns it (not the
    * worker) so the sequence is continuous across attempts: a retry claimed by a
@@ -655,20 +696,39 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
     const log = this.streamLog.get(key);
     if (log) log.push(row);
     else this.streamLog.set(key, [row]);
+    this.streamLogBytes.set(key, (this.streamLogBytes.get(key) ?? 0) + streamRowBytes(event));
+    this.trimStreamLog(key);
     // A terminal event bounds the log's lifetime: stamp (or extend) the
     // retention deadline so the finished stream stays replayable for the
     // grace window and is then dropped by the lazy sweep.
     if (event.type === "finish" || event.type === "error") {
       this.streamLogExpiry.set(key, Date.now() + STREAM_LOG_RETENTION_MS);
     }
+    // Awaited, not fired and forgotten: this publish runs inside the emitting
+    // job's own awaited dispatch, so a subscriber that returns a promise is
+    // the only thing that can pace the producer. Resolving as soon as the row
+    // is appended lets a fast producer outrun a slow consumer and pile the
+    // whole stream up in the consumer's queue. A subscriber's failure is
+    // isolated — one bad consumer never fails the producing job.
     const subs = this.streamSubscribers.get(key);
-    if (subs) for (const cb of subs) cb(row);
+    if (subs && subs.size > 0) {
+      await Promise.all(
+        [...subs].map(async (cb) => {
+          try {
+            await cb(row);
+          } catch {
+            // A subscriber's own failure is its business; delivery to the
+            // rest, and the job, carry on.
+          }
+        })
+      );
+    }
   }
 
   public subscribeToStream(
     jobId: unknown,
     sinceSeq: number,
-    callback: (row: StreamChunkRow) => void
+    callback: (row: StreamChunkRow) => void | Promise<void>
   ): () => void {
     this.sweepExpiredStreamLogs();
     const key = String(jobId);
@@ -682,6 +742,33 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
     // replay (impossible in this single-threaded impl) would arrive live and the
     // consumer's reassembler dedups by seq. An expired log was swept above, so
     // it replays as if empty.
+    // A replay the log can no longer serve is reported, never approximated:
+    // the rows below `droppedThrough` were evicted for size, and delivering
+    // the surviving suffix would splice a body back together across the hole
+    // and present it as complete. An error at the next expected seq reaches
+    // the consumer in order and surfaces as a throw.
+    const droppedThrough = this.streamLogDroppedThrough.get(key) ?? 0;
+    if (sinceSeq < droppedThrough) {
+      callback({
+        jobId,
+        seq: sinceSeq + 1,
+        event: {
+          type: "error",
+          error: {
+            message:
+              `Stream replay unavailable for job ${key}: rows through seq ${droppedThrough} ` +
+              `were dropped after the replay log passed ${STREAM_LOG_MAX_BYTES} bytes. ` +
+              `Subscribe before the body streams, or consume it as it arrives.`,
+          },
+        },
+      });
+      return () => {
+        const s = this.streamSubscribers.get(key);
+        if (!s) return;
+        s.delete(callback);
+        if (s.size === 0) this.streamSubscribers.delete(key);
+      };
+    }
     const log = this.streamLog.get(key);
     if (log) for (const r of log) if (r.seq > sinceSeq) callback(r);
     return () => {
@@ -705,6 +792,8 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
       if (deadline <= now) {
         this.streamLogExpiry.delete(key);
         this.streamLog.delete(key);
+        this.streamLogBytes.delete(key);
+        this.streamLogDroppedThrough.delete(key);
       }
     }
   }
@@ -714,8 +803,37 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
     const key = String(jobId);
     this.streamLog.delete(key);
     this.streamLogExpiry.delete(key);
+    this.streamLogBytes.delete(key);
+    this.streamLogDroppedThrough.delete(key);
     this.streamSubscribers.delete(key);
     this.streamSeq.delete(key);
+  }
+
+  /**
+   * Evict the oldest rows until the job's log is back under
+   * {@link STREAM_LOG_MAX_BYTES}, recording how far the eviction reached.
+   *
+   * The row just appended is never evicted, so a single event larger than the
+   * cap still delivers and the log simply holds that one row: a cap is a
+   * memory bound, not a reason to lose the event a subscriber is waiting on.
+   */
+  private trimStreamLog(key: string): void {
+    let bytes = this.streamLogBytes.get(key) ?? 0;
+    if (bytes <= STREAM_LOG_MAX_BYTES) return;
+    const log = this.streamLog.get(key);
+    if (!log) return;
+    let dropped = this.streamLogDroppedThrough.get(key) ?? 0;
+    let cut = 0;
+    while (cut < log.length - 1 && bytes > STREAM_LOG_MAX_BYTES) {
+      bytes -= streamRowBytes(log[cut]!.event);
+      dropped = log[cut]!.seq;
+      cut++;
+    }
+    if (cut > 0) {
+      log.splice(0, cut);
+      this.streamLogDroppedThrough.set(key, dropped);
+    }
+    this.streamLogBytes.set(key, bytes);
   }
 
   /**

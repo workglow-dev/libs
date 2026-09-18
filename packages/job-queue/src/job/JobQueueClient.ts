@@ -616,20 +616,29 @@ export class JobQueueClient<Input, Output> {
     // Resume from the last seq already delivered so a re-subscribe replays only
     // the gap, not the whole log.
     const sinceSeq = this.jobStreamCursor.get(jobId) ?? 0;
+    // Filled by the dispatch callback below during a `push`, drained by the
+    // subscriber that drove it. One push can dispatch several events (a row
+    // that closes a gap flushes its contiguous successors), so it is a list.
+    let dispatched: Promise<void>[] = [];
     const reassembler = new StreamReassembler((event: StreamEventLike, seq: number) => {
       // The cursor takes the row's REAL seq, not a local dispatch count: a
       // gap-skip jumps `seq` past dropped rows, and a counted cursor would lag
       // behind the true position forever (re-replaying the skipped range on
       // every re-subscribe).
       this.jobStreamCursor.set(jobId, seq);
-      // Fire-and-forget: the channel replays an already-durably-published
-      // event, so there is no live producer left to pace through this path
-      // (unlike the fast path's `handleJobStream`, which the emitting job's
-      // promise chain runs through). Still caught so a dispatch failure never
-      // becomes an unhandled rejection now that dispatch is async.
-      this.dispatchStreamEvent(jobId, event).catch((err) => {
-        getLogger().error("channel stream dispatch failed", { jobId, error: err });
-      });
+      // Collected rather than fired and forgotten, so the carrier can await
+      // it. An IN-PROCESS carrier publishes inside the emitting job's own
+      // awaited dispatch, which makes this path the live producer's only
+      // pacing signal — dropping the promise there let a fetch outrun its
+      // consumer and queue the entire body in `pending`. A carrier replaying
+      // already-published rows has no producer to pace and ignores it, which
+      // is the case this was originally written for. Still caught so a
+      // dispatch failure never becomes an unhandled rejection.
+      dispatched.push(
+        this.dispatchStreamEvent(jobId, event).catch((err) => {
+          getLogger().error("channel stream dispatch failed", { jobId, error: err });
+        })
+      );
       // A terminal stream event means the stream is genuinely done: tear the
       // channel subscription down now (this is the normal teardown path, driven
       // by the stream itself rather than the racy job-completion signal) and
@@ -645,7 +654,12 @@ export class JobQueueClient<Input, Output> {
     const preRegistered = () => {};
     this.jobStreamUnsubscribers.set(jobId, preRegistered);
     const unsub = subscribe.call(this.messageQueue, jobId, sinceSeq, (row: StreamChunkRow) => {
+      dispatched = [];
       reassembler.push(row);
+      if (dispatched.length === 0) return;
+      const awaiting = dispatched;
+      dispatched = [];
+      return awaiting.length === 1 ? awaiting[0] : Promise.all(awaiting).then(() => undefined);
     });
     if (this.jobStreamUnsubscribers.get(jobId) !== preRegistered) {
       // Teardown fired during the synchronous replay. The stream state is

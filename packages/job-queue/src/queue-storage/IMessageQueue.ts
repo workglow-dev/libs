@@ -67,10 +67,17 @@ export interface IMessageQueue<Body> {
    * OPTIONAL — subscribe to a job's stream side-stream. Any already-published
    * rows with `seq > sinceSeq` are replayed before live delivery (the
    * reconnect-gap story). Returns an unsubscribe function.
+   *
+   * A carrier that delivers SYNCHRONOUSLY from a live producer — an
+   * in-process one, whose publish runs inside the emitting job's own awaited
+   * dispatch — must await what `callback` returns, so the consumer paces the
+   * producer. Without that the producer is paced only by the append and a
+   * slow consumer's queue grows with the whole stream. A carrier replaying
+   * rows published earlier has no producer to pace and may ignore it.
    */
   subscribeToStream?(
     jobId: unknown,
     sinceSeq: number,
-    callback: (row: StreamChunkRow) => void
+    callback: (row: StreamChunkRow) => void | Promise<void>
   ): () => void;
 }
