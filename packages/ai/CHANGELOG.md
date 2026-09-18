@@ -1,5 +1,11 @@
 # @workglow/ai
 
+## 0.6.5
+
+### Features
+
+- add image input and cached tokens to usage tracking
+
 ## 0.6.4
 
 _No changes in this package._

@@ -1,5 +1,9 @@
 # @workglow/storage
 
+## 0.6.5
+
+_No changes in this package._
+
 ## 0.6.4
 
 _No changes in this package._
