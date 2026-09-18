@@ -24,6 +24,12 @@
   --ok: #2c8b58;
   --run: #a2740b;
   --fail: #c33c39;
+  /* The alert bar's own pair. `--fail` is tuned to be read AS text on the page
+     background, so it is the wrong background to put text ON — in the dark
+     theme it is light enough that white would fall under 3:1. Stated per theme
+     instead, each pair checked for contrast. */
+  --alert-bg: #c33c39;
+  --alert-ink: #ffffff;
   --idle: #8b95a3;
   --shadow: 0 1px 2px rgba(16, 22, 30, 0.05), 0 8px 24px -16px rgba(16, 22, 30, 0.28);
   --screen: #0f1620;
@@ -89,6 +95,8 @@
   --ok: #4cbb7f;
   --run: #d9a63a;
   --fail: #ef6b66;
+  --alert-bg: #7c2320;
+  --alert-ink: #ffe7e5;
   --idle: #6d7a89;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px -18px rgba(0, 0, 0, 0.7);
   --screen: #131b25;
@@ -124,6 +132,40 @@ textarea {
 }
 
 /* ---------- shell ---------- */
+/*
+ * The page: an optional alert bar, then the layout.
+ *
+ * A column flex rather than the layout owning the viewport itself, so the bar
+ * PUSHES the layout down instead of covering the top of it. The viewport
+ * height and the floor live here now; `.app` takes what is left.
+ */
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-height: 560px;
+}
+
+/*
+ * The CLI has stopped answering — the one condition that disables every
+ * control on the page, so it is announced above all of them rather than inside
+ * a column that scrolls. Full bleed and red: this is not a field-level error.
+ */
+.alertbar {
+  flex: 0 0 auto;
+  background: var(--alert-bg);
+  color: var(--alert-ink);
+  padding: 9px 16px;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  /* Above the rails' own backgrounds when a resize handle sits near the seam. */
+  position: relative;
+  z-index: 5;
+}
+.alertbar strong {
+  font-weight: 600;
+}
+
 .app {
   /* Both rail widths are drag state, written back as inline custom properties
      on this element. The values here are the fallback for a first paint that
@@ -133,8 +175,10 @@ textarea {
   display: grid;
   grid-template-columns: var(--rail-l) minmax(0, 1fr) var(--rail-r);
   grid-template-areas: "rail main status";
-  height: 100dvh;
-  min-height: 560px;
+  /* Whatever the bar leaves. `min-height: 0` so the grid's own children can
+     scroll instead of stretching this past the bottom of the window. */
+  flex: 1 1 auto;
+  min-height: 0;
   /* Containing block for the two resize handles, which sit on the seams rather
      than inside the rails (the status rail scrolls; a child of it would ride
      the scroll instead of holding the edge). */
@@ -820,6 +864,53 @@ h2.sec:first-child {
   background: var(--panel);
   border-color: var(--accent);
 }
+/*
+ * A text field and its expand button.
+ *
+ * The button sits inside the field's top-right corner rather than beside it, so
+ * the control keeps the full column width — a form two rails in from the left
+ * has none to give away — and stays in the same place when the input becomes a
+ * text box.
+ */
+.fexp {
+  position: relative;
+  min-width: 0;
+}
+.fexp input[type="text"],
+.fexp textarea {
+  padding-right: 28px;
+}
+.fexpb {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-3);
+  font-size: var(--fs-12);
+  line-height: 1;
+  cursor: pointer;
+}
+.fexpb:hover:not(:disabled) {
+  background: var(--sunk);
+  color: var(--ink);
+}
+.fexpb:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+/* Still legible, because its title explains why it cannot be pressed. */
+.fexpb:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .fc .hint {
   font-size: var(--fs-11);
   color: var(--ink-3);

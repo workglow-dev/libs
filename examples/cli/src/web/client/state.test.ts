@@ -9,6 +9,7 @@ import type { RunEvent } from "../../run-events/RunEventTypes";
 import type { WebCommandNode } from "../commandTree";
 import {
   FULL_ITERATION_TRACKING_MAX,
+  allGroupKeys,
   appendChatAsk,
   applyRecord,
   chatTranscript,
@@ -332,5 +333,52 @@ describe("the console's view of a conversation", () => {
     state = reduceRunEvent(state, { k: "text", id: "tool", delta: "not the answer" });
 
     expect(chatTranscript(state)).toEqual([{ role: "user", text: "hello", pending: false }]);
+  });
+});
+
+describe("allGroupKeys", () => {
+  const leaf = (name: string, path: readonly string[]): WebCommandNode => ({
+    name,
+    path,
+    description: "",
+    children: [],
+    args: [],
+    options: [],
+  });
+  const group = (
+    name: string,
+    path: readonly string[],
+    children: readonly WebCommandNode[]
+  ): WebCommandNode => ({ name, path, description: "", children, args: [], options: [] });
+
+  const tree = [
+    group(
+      "messages",
+      ["messages"],
+      [leaf("list", ["messages", "list"]), leaf("reply", ["messages", "reply"])]
+    ),
+    group(
+      "review",
+      ["review"],
+      [group("startups", ["review", "startups"], [leaf("show", ["review", "startups", "show"])])]
+    ),
+  ];
+
+  it("names every group at every depth, and no leaf", () => {
+    expect([...allGroupKeys(tree)].sort()).toEqual(["messages", "review", "review.startups"]);
+  });
+
+  /**
+   * The case the rail depends on: a nested group kept only because a
+   * grandchild matched still has to be drawn open, or the search answers with a
+   * folder the reader has to click twice to see into.
+   */
+  it("reaches a group whose only match is a grandchild", () => {
+    const keys = allGroupKeys(filterCommandTree(tree, "show"));
+    expect([...keys].sort()).toEqual(["review", "review.startups"]);
+  });
+
+  it("is empty for a tree of leaves, so a flat rail opens nothing", () => {
+    expect([...allGroupKeys([leaf("init", ["init"])])]).toEqual([]);
   });
 });

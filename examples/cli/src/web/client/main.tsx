@@ -49,6 +49,7 @@ import {
   emptyRunView,
   filterCommandTree,
   isChatRequest,
+  allGroupKeys,
   openPathsFor,
   stackedPane,
   type RunViewState,
@@ -175,7 +176,13 @@ function App(): JSX.Element {
       .then((result) => {
         setCommands(result.commands);
         setBinaryName(result.binaryName);
-        setOpen(new Set(result.commands.map((command) => command.path.join("."))));
+        // Every group starts SHUT. Opening the top level was fine for a CLI
+        // with a handful of them and became a scroll for one with nine job
+        // groups and a hundred leaves under them — the rail opened past the
+        // bottom of the window, so the groups furthest down were invisible
+        // exactly like the collapsed ones, only after more scrolling. Selecting
+        // a command still reveals its ancestors, and the filter opens what it
+        // matches, so nothing is reachable only by clicking a caret.
       })
       .catch((cause: Error) => setError(cause.message));
     void listRuns()
@@ -444,348 +451,369 @@ function App(): JSX.Element {
   }, [onRun, tab]);
 
   const filtered = useMemo(() => filterCommandTree(commands, filter), [commands, filter]);
+  // While a filter is on, the rail draws every surviving group open: a search
+  // that answers with closed folders has not answered. `open` itself is left
+  // alone, so clearing the filter restores the tree as the reader left it.
+  const shown = useMemo(
+    () => (filter.trim() === "" ? open : allGroupKeys(filtered)),
+    [filter, open, filtered]
+  );
   const errors = node ? formErrors(fields, values) : [];
   const elapsed = run ? Math.max(0, (run.endedAt ?? (now || run.startedAt)) - run.startedAt) : 0;
   const crumbs = node ? [binaryName, ...node.path] : [binaryName];
 
   return (
-    <div
-      className="app"
-      data-pane={pane}
-      style={`--rail-l:${rails.left}px;--rail-r:${rails.right}px`}
-    >
-      <aside className="rail rail-l" aria-label="Commands">
-        <div className="brand">
-          <div className="mark">w</div>
-          <div>
-            <div className="brand-t">{binaryName}</div>
-            <div className="brand-s">{window.location.host}</div>
-          </div>
-        </div>
-        <div className="searchbox">
-          <input
-            id="filter"
-            type="text"
-            placeholder="Filter commands   /"
-            value={filter}
-            onInput={(event) => setFilter((event.target as HTMLInputElement).value)}
-          />
-        </div>
-        <CommandTree
-          nodes={filtered}
-          open={open}
-          selectedPath={node?.path ?? []}
-          onToggle={(key) =>
-            setOpen((current) => {
-              const next = new Set(current);
-              if (next.has(key)) next.delete(key);
-              else next.add(key);
-              return next;
-            })
-          }
-          onSelect={selectNode}
-        />
-      </aside>
-
-      <RailResizer
-        side="left"
-        width={rails.left}
-        otherWidth={rails.right}
-        onResize={(width) => resizeRail("left", width)}
-      />
-
-      {pendingRun ? (
-        <div
-          className="modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="confirm-title"
-          aria-describedby="confirm-body"
-        >
-          <div className="modal-b">
-            <h3 id="confirm-title">Confirm</h3>
-            <p id="confirm-body">{pendingRun.confirm}</p>
-            <code className="modal-c">
-              <span className="pr">$ </span>
-              {pendingRun.line}
-            </code>
-            <div className="acts">
-              <button className="ghost" onClick={() => setPendingRun(undefined)}>
-                Cancel
-              </button>
-              <button
-                className="btn danger"
-                onClick={() => {
-                  const request = pendingRun;
-                  setPendingRun(undefined);
-                  startInvocation(request.dryRun);
-                }}
-              >
-                Run anyway
-              </button>
-            </div>
-          </div>
+    <div className="shell">
+      {/*
+        Page-level, and in flow rather than floating: the whole layout moves
+        down so nothing it might have covered is hidden, and the one condition
+        that disables every button on the page is the first thing on it.
+        `role="alert"` so a screen reader is told without having to find it.
+      */}
+      {!cli.online ? (
+        <div className="alertbar" role="alert">
+          <strong>{binaryName} is not responding.</strong> Anything that would talk to it is
+          disabled until it answers again.
         </div>
       ) : null}
-
-      <main className="main">
-        <header className="topbar">
-          <button
-            type="button"
-            className="back"
-            aria-label="Back to commands"
-            onClick={() => setPane(stackedPane("back"))}
-          >
-            ←
-          </button>
-          <div className="crumb">
-            {crumbs.map((segment, index) => (
-              <>
-                {index > 0 ? <span className="sep">›</span> : null}
-                {index === crumbs.length - 1 && node ? (
-                  <b key={segment}>{segment}</b>
-                ) : (
-                  <span className="dim" key={segment}>
-                    {segment}
-                  </span>
-                )}
-              </>
-            ))}
-          </div>
-          <div className="spacer" />
-          <div className="ctl">
-            <div className="tgl" role="group" aria-label="Row order">
-              <button aria-pressed={sortByStatus} onClick={() => setSortByStatus(true)}>
-                CLI order
-              </button>
-              <button aria-pressed={!sortByStatus} onClick={() => setSortByStatus(false)}>
-                Graph order
-              </button>
+      <div
+        className="app"
+        data-pane={pane}
+        style={`--rail-l:${rails.left}px;--rail-r:${rails.right}px`}
+      >
+        <aside className="rail rail-l" aria-label="Commands">
+          <div className="brand">
+            <div className="mark">w</div>
+            <div>
+              <div className="brand-t">{binaryName}</div>
+              <div className="brand-s">{window.location.host}</div>
             </div>
-            <div className="tgl" role="group" aria-label="Theme">
-              {(["light", "auto", "dark"] as const).map((candidate) => (
-                <button
-                  key={candidate}
-                  aria-pressed={theme === candidate}
-                  onClick={() => setTheme(candidate)}
-                >
-                  {candidate}
+          </div>
+          <div className="searchbox">
+            <input
+              id="filter"
+              type="text"
+              placeholder="Filter commands   /"
+              value={filter}
+              onInput={(event) => setFilter((event.target as HTMLInputElement).value)}
+            />
+          </div>
+          <CommandTree
+            nodes={filtered}
+            open={shown}
+            selectedPath={node?.path ?? []}
+            onToggle={(key) =>
+              setOpen((current) => {
+                const next = new Set(current);
+                if (next.has(key)) next.delete(key);
+                else next.add(key);
+                return next;
+              })
+            }
+            onSelect={selectNode}
+          />
+        </aside>
+
+        <RailResizer
+          side="left"
+          width={rails.left}
+          otherWidth={rails.right}
+          onResize={(width) => resizeRail("left", width)}
+        />
+
+        {pendingRun ? (
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-title"
+            aria-describedby="confirm-body"
+          >
+            <div className="modal-b">
+              <h3 id="confirm-title">Confirm</h3>
+              <p id="confirm-body">{pendingRun.confirm}</p>
+              <code className="modal-c">
+                <span className="pr">$ </span>
+                {pendingRun.line}
+              </code>
+              <div className="acts">
+                <button className="ghost" onClick={() => setPendingRun(undefined)}>
+                  Cancel
                 </button>
+                <button
+                  className="btn danger"
+                  onClick={() => {
+                    const request = pendingRun;
+                    setPendingRun(undefined);
+                    startInvocation(request.dryRun);
+                  }}
+                >
+                  Run anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <main className="main">
+          <header className="topbar">
+            <button
+              type="button"
+              className="back"
+              aria-label="Back to commands"
+              onClick={() => setPane(stackedPane("back"))}
+            >
+              ←
+            </button>
+            <div className="crumb">
+              {crumbs.map((segment, index) => (
+                <>
+                  {index > 0 ? <span className="sep">›</span> : null}
+                  {index === crumbs.length - 1 && node ? (
+                    <b key={segment}>{segment}</b>
+                  ) : (
+                    <span className="dim" key={segment}>
+                      {segment}
+                    </span>
+                  )}
+                </>
               ))}
             </div>
+            <div className="spacer" />
+            <div className="ctl">
+              <div className="tgl" role="group" aria-label="Row order">
+                <button aria-pressed={sortByStatus} onClick={() => setSortByStatus(true)}>
+                  CLI order
+                </button>
+                <button aria-pressed={!sortByStatus} onClick={() => setSortByStatus(false)}>
+                  Graph order
+                </button>
+              </div>
+              <div className="tgl" role="group" aria-label="Theme">
+                {(["light", "auto", "dark"] as const).map((candidate) => (
+                  <button
+                    key={candidate}
+                    aria-pressed={theme === candidate}
+                    onClick={() => setTheme(candidate)}
+                  >
+                    {candidate}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </header>
+
+          <div className="tabs" role="tablist">
+            {(["options", "run", "result"] as const).map((candidate) => (
+              <button
+                key={candidate}
+                className="tab"
+                role="tab"
+                aria-selected={tab === candidate}
+                disabled={candidate !== "options" && !run}
+                onClick={() => setTab(candidate)}
+              >
+                <span>
+                  {candidate === "options" ? "Options" : candidate === "run" ? "Run" : "Result"}
+                </span>
+                {candidate === "run" && run ? (
+                  <span className="pill">{view.state === "running" ? "live" : view.state}</span>
+                ) : null}
+              </button>
+            ))}
           </div>
-        </header>
 
-        <div className="tabs" role="tablist">
-          {(["options", "run", "result"] as const).map((candidate) => (
-            <button
-              key={candidate}
-              className="tab"
-              role="tab"
-              aria-selected={tab === candidate}
-              disabled={candidate !== "options" && !run}
-              onClick={() => setTab(candidate)}
-            >
-              <span>
-                {candidate === "options" ? "Options" : candidate === "run" ? "Run" : "Result"}
-              </span>
-              {candidate === "run" && run ? (
-                <span className="pill">{view.state === "running" ? "live" : view.state}</span>
-              ) : null}
-            </button>
-          ))}
-        </div>
+          <div className="body">
+            {/* A CLI that has stopped answering is announced by the banner above
+              the whole layout, not here: this column scrolls, and the notice
+              sat below the tabs of whichever command happened to be open. */}
+            {cli.online && cli.restarted ? (
+              <div className="wrap" style="color:var(--fail)">
+                {binaryName} restarted. It is reachable again, but it does not know about runs
+                started before the restart.
+              </div>
+            ) : null}
+            {error ? (
+              <div className="wrap" style="color:var(--fail)">
+                {error}
+              </div>
+            ) : null}
+            {view.humanRequest && run && isChatRequest(view.humanRequest) ? (
+              <ChatTranscript
+                entries={chatTranscript(view)}
+                message={view.humanRequest.message}
+                canAnswer={cli.online}
+                onSend={(text) => {
+                  if (!cli.online) return;
+                  void answerHuman(run.id, {
+                    requestId: view.humanRequest!.requestId,
+                    action: "accept",
+                    content: { message: text },
+                    done: true,
+                  });
+                  setView((current) => ({
+                    ...appendChatAsk(current, text),
+                    humanRequest: undefined,
+                  }));
+                }}
+                onEnd={() => {
+                  if (!cli.online) return;
+                  void answerHuman(run.id, {
+                    requestId: view.humanRequest!.requestId,
+                    action: "decline",
+                    content: undefined,
+                    done: true,
+                  });
+                  setView((current) => ({ ...current, humanRequest: undefined }));
+                }}
+              />
+            ) : null}
+            {view.humanRequest && run && !isChatRequest(view.humanRequest) ? (
+              <HumanPrompt
+                request={view.humanRequest}
+                canAnswer={cli.online}
+                onAnswer={(action, content) => {
+                  if (!cli.online) return;
+                  void answerHuman(run.id, {
+                    requestId: view.humanRequest!.requestId,
+                    action,
+                    content,
+                    done: true,
+                  });
+                  setView((current) => ({ ...current, humanRequest: undefined }));
+                }}
+              />
+            ) : null}
+            {tab === "options" && node && node.children.length > 0 ? (
+              // Read back off the full tree, not the selected object: the rail
+              // hands over the node it drew, and while a filter is on that node
+              // is pruned to the matches — a group's page lists what is under
+              // the group, not what someone last typed in the box.
+              <GroupView
+                node={findCommandNode(commands, node.path) ?? node}
+                onSelect={selectChild}
+              />
+            ) : null}
+            {tab === "options" && node && node.children.length === 0 ? (
+              <OptionsForm
+                binaryName={binaryName}
+                path={node.path}
+                description={node.description}
+                fields={fields}
+                values={values}
+                errors={errors}
+                badges={node.badges}
+                note={node.note}
+                runsInOrder={node.runsInOrder}
+                runsIn={node.runsIn}
+                onChange={onFieldChange}
+                onRun={onRun}
+                canRun={cli.online}
+              />
+            ) : null}
+            {tab === "options" && !node ? (
+              <div className="wrap">
+                <p className="lede">
+                  Pick a command on the left. Its options come from the same schemas the terminal
+                  prompts from, and the line at the bottom is exactly what will run.
+                </p>
+              </div>
+            ) : null}
+            {tab === "run" && run ? (
+              <RunConsole
+                cli={run.cli}
+                state={view}
+                elapsedMs={elapsed}
+                tick={tick}
+                sortByStatus={sortByStatus}
+                selectedId={selected}
+                connected={connected}
+                mapView={mapView}
+                onMapView={setMapView}
+                onSelect={setSelected}
+                canAbort={cli.online}
+                onAbort={() => {
+                  if (cli.online) void abortRun(run.id);
+                }}
+              />
+            ) : null}
+            {tab === "result" && run ? (
+              <ResultTab run={run} state={view} panels={panels} onAction={prefillFrom} />
+            ) : null}
+          </div>
 
-        <div className="body">
-          {!cli.online ? (
-            <div className="wrap" style="color:var(--fail)">
-              {binaryName} is not responding. Anything that would talk to it is disabled until it
-              answers again.
-            </div>
-          ) : null}
-          {cli.online && cli.restarted ? (
-            <div className="wrap" style="color:var(--fail)">
-              {binaryName} restarted. It is reachable again, but it does not know about runs started
-              before the restart.
-            </div>
-          ) : null}
-          {error ? (
-            <div className="wrap" style="color:var(--fail)">
-              {error}
-            </div>
-          ) : null}
-          {view.humanRequest && run && isChatRequest(view.humanRequest) ? (
-            <ChatTranscript
-              entries={chatTranscript(view)}
-              message={view.humanRequest.message}
-              canAnswer={cli.online}
-              onSend={(text) => {
-                if (!cli.online) return;
-                void answerHuman(run.id, {
-                  requestId: view.humanRequest!.requestId,
-                  action: "accept",
-                  content: { message: text },
-                  done: true,
-                });
-                setView((current) => ({
-                  ...appendChatAsk(current, text),
-                  humanRequest: undefined,
-                }));
-              }}
-              onEnd={() => {
-                if (!cli.online) return;
-                void answerHuman(run.id, {
-                  requestId: view.humanRequest!.requestId,
-                  action: "decline",
-                  content: undefined,
-                  done: true,
-                });
-                setView((current) => ({ ...current, humanRequest: undefined }));
-              }}
-            />
-          ) : null}
-          {view.humanRequest && run && !isChatRequest(view.humanRequest) ? (
-            <HumanPrompt
-              request={view.humanRequest}
-              canAnswer={cli.online}
-              onAnswer={(action, content) => {
-                if (!cli.online) return;
-                void answerHuman(run.id, {
-                  requestId: view.humanRequest!.requestId,
-                  action,
-                  content,
-                  done: true,
-                });
-                setView((current) => ({ ...current, humanRequest: undefined }));
-              }}
-            />
-          ) : null}
-          {tab === "options" && node && node.children.length > 0 ? (
-            // Read back off the full tree, not the selected object: the rail
-            // hands over the node it drew, and while a filter is on that node
-            // is pruned to the matches — a group's page lists what is under
-            // the group, not what someone last typed in the box.
-            <GroupView node={findCommandNode(commands, node.path) ?? node} onSelect={selectChild} />
-          ) : null}
-          {tab === "options" && node && node.children.length === 0 ? (
-            <OptionsForm
-              binaryName={binaryName}
-              path={node.path}
-              description={node.description}
-              fields={fields}
-              values={values}
-              errors={errors}
-              badges={node.badges}
-              note={node.note}
-              runsInOrder={node.runsInOrder}
-              runsIn={node.runsIn}
-              onChange={onFieldChange}
-              onRun={onRun}
-              canRun={cli.online}
-            />
-          ) : null}
-          {tab === "options" && !node ? (
-            <div className="wrap">
-              <p className="lede">
-                Pick a command on the left. Its options come from the same schemas the terminal
-                prompts from, and the line at the bottom is exactly what will run.
-              </p>
-            </div>
-          ) : null}
-          {tab === "run" && run ? (
-            <RunConsole
-              cli={run.cli}
-              state={view}
-              elapsedMs={elapsed}
-              tick={tick}
-              sortByStatus={sortByStatus}
-              selectedId={selected}
-              connected={connected}
-              mapView={mapView}
-              onMapView={setMapView}
-              onSelect={setSelected}
-              canAbort={cli.online}
-              onAbort={() => {
-                if (cli.online) void abortRun(run.id);
-              }}
-            />
-          ) : null}
-          {tab === "result" && run ? (
-            <ResultTab run={run} state={view} panels={panels} onAction={prefillFrom} />
-          ) : null}
-        </div>
-
-        <footer className="statusbar">
-          <span className="live">
-            {/* Liveness of the CLI itself outranks the run stream: with the
+          <footer className="statusbar">
+            <span className="live">
+              {/* Liveness of the CLI itself outranks the run stream: with the
                 process gone the stream is moot, and "reconnecting" would read
                 as a network hiccup rather than as a CLI that has stopped. */}
-            <span className={`dot ${cli.online ? (connected ? "ok" : "fail") : "fail"}`} />{" "}
-            {!cli.online
-              ? `${binaryName} not responding`
-              : cli.restarted
-                ? `${binaryName} restarted — earlier runs are gone`
-                : connected
-                  ? "connected"
-                  : "reconnecting"}
-          </span>
-          <span>{run ? `run ${run.id.slice(0, 8)}` : "no run"}</span>
-          <span className="spacer" />
-          <span>No page reloads — the document is mounted once and patched per event</span>
-        </footer>
-      </main>
+              <span className={`dot ${cli.online ? (connected ? "ok" : "fail") : "fail"}`} />{" "}
+              {!cli.online
+                ? `${binaryName} not responding`
+                : cli.restarted
+                  ? `${binaryName} restarted — earlier runs are gone`
+                  : connected
+                    ? "connected"
+                    : "reconnecting"}
+            </span>
+            <span>{run ? `run ${run.id.slice(0, 8)}` : "no run"}</span>
+            <span className="spacer" />
+            <span>No page reloads — the document is mounted once and patched per event</span>
+          </footer>
+        </main>
 
-      <RailResizer
-        side="right"
-        width={rails.right}
-        otherWidth={rails.left}
-        onResize={(width) => resizeRail("right", width)}
-      />
+        <RailResizer
+          side="right"
+          width={rails.right}
+          otherWidth={rails.left}
+          onResize={(width) => resizeRail("right", width)}
+        />
 
-      {/* Status lives on its own rail so the command tree keeps the left one:
+        {/* Status lives on its own rail so the command tree keeps the left one:
           runs first, then whatever the CLI contributed (fetch state, database
           size, …). Read on a slow poll; see the effect above. */}
-      <aside className="rail rail-r" aria-label="Status">
-        <div className="railsec">
-          <h4>Runs</h4>
-          {runs.length === 0 ? <div className="cmd-d">Nothing has run yet.</div> : null}
-          {runs.slice(0, 6).map((summary) => (
-            <button key={summary.id} className="runitem" onClick={() => attach(summary)}>
-              <span
-                className={`dot ${summary.state === "running" ? "run" : summary.state === "completed" ? "ok" : "fail"}`}
-              />
-              <span className="lbl">{summary.cli.replace(`${binaryName} `, "")}</span>
-              <span className="t">
-                {summary.endedAt
-                  ? `${((summary.endedAt - summary.startedAt) / 1000).toFixed(1)}s`
-                  : "…"}
-              </span>
-            </button>
-          ))}
-        </div>
-        {widgets.map((widget) => (
-          <div className="railsec" key={widget.id}>
-            <h4>{widget.title}</h4>
-            {widget.items.map((item) =>
-              item.kind === "text" ? (
-                <div className={`sline${item.tone ? ` t-${item.tone}` : ""}`} key={item.label}>
-                  <span className="sl-l">{item.label}</span>
-                  <span className="sl-v">{item.value}</span>
-                </div>
-              ) : (
-                <div className="meter" key={item.label}>
-                  <span>
-                    {item.value} / {item.max} {item.label}
-                  </span>
-                  <span className="bar">
-                    <i style={`width:${Math.min(100, (item.value / (item.max || 1)) * 100)}%`} />
-                  </span>
-                </div>
-              )
-            )}
+        <aside className="rail rail-r" aria-label="Status">
+          <div className="railsec">
+            <h4>Runs</h4>
+            {runs.length === 0 ? <div className="cmd-d">Nothing has run yet.</div> : null}
+            {runs.slice(0, 6).map((summary) => (
+              <button key={summary.id} className="runitem" onClick={() => attach(summary)}>
+                <span
+                  className={`dot ${summary.state === "running" ? "run" : summary.state === "completed" ? "ok" : "fail"}`}
+                />
+                <span className="lbl">{summary.cli.replace(`${binaryName} `, "")}</span>
+                <span className="t">
+                  {summary.endedAt
+                    ? `${((summary.endedAt - summary.startedAt) / 1000).toFixed(1)}s`
+                    : "…"}
+                </span>
+              </button>
+            ))}
           </div>
-        ))}
-      </aside>
+          {widgets.map((widget) => (
+            <div className="railsec" key={widget.id}>
+              <h4>{widget.title}</h4>
+              {widget.items.map((item) =>
+                item.kind === "text" ? (
+                  <div className={`sline${item.tone ? ` t-${item.tone}` : ""}`} key={item.label}>
+                    <span className="sl-l">{item.label}</span>
+                    <span className="sl-v">{item.value}</span>
+                  </div>
+                ) : (
+                  <div className="meter" key={item.label}>
+                    <span>
+                      {item.value} / {item.max} {item.label}
+                    </span>
+                    <span className="bar">
+                      <i style={`width:${Math.min(100, (item.value / (item.max || 1)) * 100)}%`} />
+                    </span>
+                  </div>
+                )
+              )}
+            </div>
+          ))}
+        </aside>
+      </div>
     </div>
   );
 }

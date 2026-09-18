@@ -97,6 +97,80 @@ function SearchWidget({
   );
 }
 
+/**
+ * A one-line field that can become a text box.
+ *
+ * Some string options carry prose — a reply to a reader, a commit message, a
+ * reason kept with a grant — and the form has no way to know which: the type is
+ * `string` either way, and `WebField` has no multiline variant to declare. The
+ * existing heuristics (`object`, `array`, a description over 90 characters)
+ * catch the fields whose SHAPE says so and miss every field whose CONTENT does.
+ *
+ * So the choice is given to whoever is typing, rather than guessed at. The
+ * button is the whole affordance: no annotation to add, no schema to change,
+ * and every string field in every downstream CLI gets it for free.
+ *
+ * A value that already contains a newline stays expanded and cannot be
+ * collapsed — a single-line input would render only the first line while
+ * quietly holding the rest, which reads as data loss.
+ */
+function ExpandableText({
+  field,
+  value,
+  onChange,
+}: {
+  field: FieldWithWidget;
+  value: string;
+  onChange: (next: string) => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const multiline = value.includes("\n");
+  const expanded = open || multiline;
+
+  return (
+    <div className={`fexp${expanded ? " open" : ""}`}>
+      {expanded ? (
+        <textarea
+          value={value}
+          placeholder={field.placeholder}
+          // Focused on expand so the click lands the caret in the box it just
+          // opened, rather than leaving it in an input that is no longer there.
+          ref={(node) => {
+            if (open && node && document.activeElement !== node) node.focus();
+          }}
+          onInput={(event) => onChange((event.target as HTMLTextAreaElement).value)}
+        />
+      ) : (
+        <input
+          type="text"
+          value={value}
+          placeholder={field.placeholder}
+          onInput={(event) => onChange((event.target as HTMLInputElement).value)}
+        />
+      )}
+      <button
+        type="button"
+        className="fexpb"
+        // Disabled rather than hidden: a control that vanishes once the value
+        // wraps looks like a bug, and the title says why it will not collapse.
+        disabled={multiline}
+        title={
+          multiline
+            ? "This value has line breaks, so it stays a text box"
+            : expanded
+              ? "Collapse to one line"
+              : "Expand to a text box"
+        }
+        aria-label={expanded ? `Collapse ${field.key}` : `Expand ${field.key}`}
+        aria-expanded={expanded}
+        onClick={() => setOpen(!open)}
+      >
+        {expanded ? "\u2921" : "\u2922"}
+      </button>
+    </div>
+  );
+}
+
 function Control({
   field,
   value,
@@ -149,14 +223,19 @@ function Control({
       />
     );
   }
-  return (
-    <input
-      type={field.type === "number" || field.type === "integer" ? "number" : "text"}
-      value={String(value ?? "")}
-      placeholder={field.placeholder}
-      onInput={(event) => onChange((event.target as HTMLInputElement).value)}
-    />
-  );
+  // Numbers keep the plain stepper: there is no long form of a number, and a
+  // text box for one would only invite a value the parser rejects.
+  if (field.type === "number" || field.type === "integer") {
+    return (
+      <input
+        type="number"
+        value={String(value ?? "")}
+        placeholder={field.placeholder}
+        onInput={(event) => onChange((event.target as HTMLInputElement).value)}
+      />
+    );
+  }
+  return <ExpandableText field={field} value={String(value ?? "")} onChange={onChange} />;
 }
 
 function FieldRows({

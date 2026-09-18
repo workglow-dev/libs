@@ -155,3 +155,41 @@ describe("validateInvocation", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * A multi-line value used to render with a literal newline in it. That is legal
+ * shell, but the console draws the line in a `<code>` element, so the break
+ * folded into a space: what you read — and what selecting the line copied —
+ * was a command that would have run a different string.
+ */
+describe("multi-line values", () => {
+  const lineFor = (value: string) =>
+    renderCliLine("workglow", { path: ["agent", "chat"], args: [], options: { system: value } });
+
+  it("keeps the whole invocation on one line", () => {
+    const line = lineFor("first\nsecond");
+    expect(line).toBe("workglow agent chat --system $'first\\nsecond'");
+    expect(line).not.toContain("\n");
+  });
+
+  it("escapes what ANSI-C quoting would otherwise re-interpret", () => {
+    // A backslash stays one backslash, a quote closes nothing, and a tab is
+    // written rather than left invisible.
+    expect(lineFor("a\\b\nc")).toBe("workglow agent chat --system $'a\\\\b\\nc'");
+    expect(lineFor("it's\nhere")).toBe("workglow agent chat --system $'it\\'s\\nhere'");
+    expect(lineFor("col\tone\nrow")).toBe("workglow agent chat --system $'col\\tone\\nrow'");
+    expect(lineFor("a\r\nb")).toBe("workglow agent chat --system $'a\\r\\nb'");
+  });
+
+  it("leaves single-line values on the double-quoted form", () => {
+    expect(lineFor("just one line")).toBe('workglow agent chat --system "just one line"');
+    expect(lineFor("plain")).toBe("workglow agent chat --system plain");
+  });
+
+  /** The run itself is unaffected: `spawn` takes the argv, not the rendered line. */
+  it("does not quote what is handed to spawn", () => {
+    expect(
+      composeArgv({ path: ["agent", "chat"], args: [], options: { system: "first\nsecond" } })
+    ).toEqual(["agent", "chat", "--system", "first\nsecond"]);
+  });
+});

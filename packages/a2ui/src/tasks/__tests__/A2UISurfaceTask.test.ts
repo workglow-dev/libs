@@ -70,7 +70,14 @@ describe("A2UISurfaceTask", () => {
     expect(A2UISurfaceTask.title).toBeTruthy();
   });
 
-  it("is registered by importing the package entry, under its own type", async () => {
+  // Vitest only: this compares the registered class against the one imported
+  // relatively above, and the two are only the same object when both specifiers
+  // resolve to the same module. Vitest rewrites `@workglow/*` to the package's
+  // `src`, so they do. Bun resolves the entry through `exports` to `dist` while
+  // the relative import stays on `src`, giving two structurally identical
+  // classes that are not identical objects — the identity this asserts cannot
+  // exist there. Registration itself is unaffected; only the comparison is.
+  it.skipIf(typeof Bun !== "undefined")("is registered by importing the package entry, under its own type", async () => {
     await import("@workglow/a2ui/tasks");
     expect(TaskRegistry.all.get("A2UISurfaceTask")).toBe(A2UISurfaceTask);
   });

@@ -41,8 +41,38 @@ export function composeArgv(invocation: WebInvocation): string[] {
   return argv;
 }
 
+/**
+ * Characters that cannot survive being shown on one line.
+ *
+ * A newline inside double quotes is legal shell, but the console draws this
+ * line in a `<code>` element, where HTML folds it into a space — so the command
+ * you read is not the command that would run, and selecting it copies the
+ * flattened version. A tab has the same problem and is invisible besides.
+ */
+const NEEDS_ANSI_C = /[\n\r\t]/;
+
+/**
+ * One argument, as you would have typed it.
+ *
+ * A value carrying a line break is written in ANSI-C form (`$'a\nb'`), which
+ * keeps the whole invocation on one line and round-trips exactly through a
+ * copy, a paste and a shell. That form is bash, zsh and ksh rather than POSIX
+ * `sh` — a deliberate trade, because the portable alternative is a literal
+ * newline, and this line is read on screen at least as often as it is pasted.
+ */
 function quote(value: string): string {
   if (value === "") return '""';
+  if (NEEDS_ANSI_C.test(value)) {
+    // Backslashes first: escaping them after the others would double the
+    // backslashes this function just introduced.
+    const escaped = value
+      .replace(/\\/g, "\\\\")
+      .replace(/'/g, "\\'")
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\r")
+      .replace(/\t/g, "\\t");
+    return `$'${escaped}'`;
+  }
   return NEEDS_QUOTING.test(value) ? `"${value.replace(/(["\\$`])/g, "\\$1")}"` : value;
 }
 

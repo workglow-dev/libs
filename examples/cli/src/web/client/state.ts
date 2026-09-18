@@ -419,6 +419,27 @@ export function filterCommandTree(
   return nodes.filter(matches).map(prune);
 }
 
+/**
+ * Every group key in a tree.
+ *
+ * A FILTERED rail is a result list rather than a tree to walk: the groups that
+ * survive are there because something inside them matched, so leaving them shut
+ * would answer a search with a row of closed folders. The rail draws with this
+ * while a filter is on, and with the reader's own open set otherwise — so
+ * clearing the filter returns the tree exactly as they left it rather than
+ * expanded by a search they have finished with.
+ */
+export function allGroupKeys(nodes: readonly WebCommandNode[]): Set<string> {
+  const keys = new Set<string>();
+  const walk = (node: WebCommandNode): void => {
+    if (node.children.length === 0) return;
+    keys.add(node.path.join("."));
+    for (const child of node.children) walk(child);
+  };
+  for (const node of nodes) walk(node);
+  return keys;
+}
+
 /** Every ancestor key of a path, which is what the rail has to open. */
 export function openPathsFor(path: readonly string[]): string[] {
   return path.slice(0, -1).map((_, index) => path.slice(0, index + 1).join("."));
