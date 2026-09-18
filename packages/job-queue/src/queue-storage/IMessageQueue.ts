@@ -68,16 +68,18 @@ export interface IMessageQueue<Body> {
    * rows with `seq > sinceSeq` are replayed before live delivery (the
    * reconnect-gap story). Returns an unsubscribe function.
    *
-   * A carrier that delivers SYNCHRONOUSLY from a live producer — an
-   * in-process one, whose publish runs inside the emitting job's own awaited
-   * dispatch — must await what `callback` returns, so the consumer paces the
-   * producer. Without that the producer is paced only by the append and a
-   * slow consumer's queue grows with the whole stream. A carrier replaying
-   * rows published earlier has no producer to pace and may ignore it.
+   * `callback` returns `unknown` so an ordinary `(row) => rows.push(row)` still
+   * type-checks, but a subscriber MAY return a promise to ask for
+   * backpressure. A carrier that delivers SYNCHRONOUSLY from a live producer —
+   * an in-process one, whose publish runs inside the emitting job's own
+   * awaited dispatch — must await it, so the consumer paces the producer.
+   * Without that the producer is paced only by the append and a slow
+   * consumer's queue grows with the whole stream. A carrier replaying rows
+   * published earlier has no producer to pace and may ignore it.
    */
   subscribeToStream?(
     jobId: unknown,
     sinceSeq: number,
-    callback: (row: StreamChunkRow) => void | Promise<void>
+    callback: (row: StreamChunkRow) => unknown
   ): () => void;
 }

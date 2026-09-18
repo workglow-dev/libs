@@ -122,7 +122,7 @@ class WrappedMessageQueue<Input, Output> implements IMessageQueue<JobStorageForm
   readonly subscribeToStream?: (
     jobId: unknown,
     sinceSeq: number,
-    callback: (row: StreamChunkRow) => void | Promise<void>
+    callback: (row: StreamChunkRow) => unknown
   ) => () => void;
 
   /**

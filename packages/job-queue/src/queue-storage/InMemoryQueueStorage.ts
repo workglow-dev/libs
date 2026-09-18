@@ -109,10 +109,7 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
    */
   private readonly streamLogDroppedThrough = new Map<string, number>();
   /** Per-job live stream subscribers. */
-  private readonly streamSubscribers = new Map<
-    string,
-    Set<(row: StreamChunkRow) => void | Promise<void>>
-  >();
+  private readonly streamSubscribers = new Map<string, Set<(row: StreamChunkRow) => unknown>>();
   /**
    * Per-job monotonic stream `seq` counter. The carrier owns it (not the
    * worker) so the sequence is continuous across attempts: a retry claimed by a
@@ -728,7 +725,7 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
   public subscribeToStream(
     jobId: unknown,
     sinceSeq: number,
-    callback: (row: StreamChunkRow) => void | Promise<void>
+    callback: (row: StreamChunkRow) => unknown
   ): () => void {
     this.sweepExpiredStreamLogs();
     const key = String(jobId);
@@ -749,11 +746,11 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
     // the consumer in order and surfaces as a throw.
     const droppedThrough = this.streamLogDroppedThrough.get(key) ?? 0;
     if (sinceSeq < droppedThrough) {
-      // `void`, not awaited: this method is synchronous by contract (it returns
-      // the unsubscribe function), and replay has no live producer to pace —
+      // Not awaited: this method is synchronous by contract (it returns the
+      // unsubscribe function), and replay has no live producer to pace —
       // unlike `publishStreamChunk`, where awaiting the subscriber is the only
       // backpressure there is. What replay delivers is bounded by the log cap.
-      void callback({
+      callback({
         jobId,
         seq: sinceSeq + 1,
         event: {
@@ -774,9 +771,9 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
       };
     }
     const log = this.streamLog.get(key);
-    // `void` for the same reason as the refusal above: replay is a bounded
-    // catch-up with nothing live behind it to slow down.
-    if (log) for (const r of log) if (r.seq > sinceSeq) void callback(r);
+    // Not awaited, for the same reason as the refusal above: replay is a
+    // bounded catch-up with nothing live behind it to slow down.
+    if (log) for (const r of log) if (r.seq > sinceSeq) callback(r);
     return () => {
       const s = this.streamSubscribers.get(key);
       if (!s) return;
