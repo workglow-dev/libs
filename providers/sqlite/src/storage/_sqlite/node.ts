@@ -39,6 +39,14 @@ export interface NodeSqliteOptions {
   readonly timeout?: number;
 }
 
+/**
+ * Whether `err` is a runtime refusing extension loading outright, as opposed to
+ * a genuine failure to open the database.
+ */
+function isOmitLoadExtensionError(err: unknown): boolean {
+  return err instanceof Error && /SQLITE_OMIT_LOAD_EXTENSION/i.test(err.message);
+}
+
 /** Keys {@link NodeSqliteOptions} forwards to `DatabaseSync`. */
 const ALLOWED_OPTIONS: ReadonlySet<string> = new Set([
   "readOnly",
@@ -375,22 +383,38 @@ export class NodeSqliteDatabase implements SqliteApi.Database {
     assertKnownOptions(options);
     const { DatabaseSync } = assertLoaded();
     const resolved = filename ?? ":memory:";
+    const build = (allowExtension: boolean) => ({
+      // better-sqlite3 permits loadExtension unconditionally; node:sqlite
+      // gates it behind this flag, so default it on to keep parity (the
+      // sqlite-vector extension in SqliteAiVectorStorage depends on it).
+      allowExtension,
+      ...options,
+      // node:sqlite turns foreign keys on; SQLite's own default (and every
+      // driver these databases were written under) leaves them off.
+      enableForeignKeyConstraints: options?.enableForeignKeyConstraints ?? false,
+      // node:sqlite defaults busy_timeout to 0, so a contended write fails
+      // immediately with SQLITE_BUSY instead of waiting for the lock.
+      timeout: options?.timeout ?? SQLITE_BUSY_TIMEOUT_MS,
+    });
     try {
-      this.#inner = new DatabaseSync(resolved, {
-        // better-sqlite3 permits loadExtension unconditionally; node:sqlite
-        // gates it behind this flag, so default it on to keep parity (the
-        // sqlite-vector extension in SqliteAiVectorStorage depends on it).
-        allowExtension: true,
-        ...options,
-        // node:sqlite turns foreign keys on; SQLite's own default (and every
-        // driver these databases were written under) leaves them off.
-        enableForeignKeyConstraints: options?.enableForeignKeyConstraints ?? false,
-        // node:sqlite defaults busy_timeout to 0, so a contended write fails
-        // immediately with SQLITE_BUSY instead of waiting for the lock.
-        timeout: options?.timeout ?? SQLITE_BUSY_TIMEOUT_MS,
-      });
+      this.#inner = new DatabaseSync(resolved, build(true));
     } catch (err) {
-      rethrow(err);
+      // Not every runtime's SQLite is built with extension loading. Bun's is
+      // not (`SQLITE_OMIT_LOAD_EXTENSION`), and it rejects the option at open
+      // time rather than at `loadExtension()` — so asking for it unconditionally
+      // fails every database, including the overwhelming majority that never
+      // load an extension. Drop the request and open anyway; a caller that does
+      // want the vector extension still gets a clear error from `loadExtension`
+      // itself, which is where that failure belongs.
+      if (options?.allowExtension === undefined && isOmitLoadExtensionError(err)) {
+        try {
+          this.#inner = new DatabaseSync(resolved, build(false));
+        } catch (retryErr) {
+          rethrow(retryErr);
+        }
+      } else {
+        rethrow(err);
+      }
     }
     // The handle is open from here on, and a constructor that throws never
     // hands anyone a `close()` to call — so every failure below releases it
