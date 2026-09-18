@@ -187,6 +187,87 @@ export function getHftFetchStallTimeoutMs(): number {
 }
 
 /**
+ * Thrown when a model file is bigger than the largest single `ArrayBuffer` the
+ * runtime will hand out.
+ *
+ * transformers.js `readResponse` does `new Uint8Array(content-length)` before
+ * it reads a single byte, so a file over that ceiling can never be loaded —
+ * not from the network and not from an already-warm Cache Storage entry.
+ * Chrome refuses a single allocation a little under 2 GiB (measured: 1.998
+ * GiB), and it does not always fail politely: with other weight shards already
+ * resident the renderer is OOM-killed instead of throwing, which leaves the
+ * download sitting at a fixed percentage forever with no error to report.
+ *
+ * Checking `content-length` up front turns that into an ordinary failed task.
+ * The error is unretryable by nature — the same file will be the same size on
+ * the next attempt — so callers should treat it as a configuration problem
+ * rather than offering a retry.
+ */
+export class HftModelFileTooLargeError extends Error {
+  public override readonly name = "ModelFileTooLargeError";
+  constructor(
+    public readonly url: string,
+    public readonly size: number,
+    public readonly limit: number
+  ) {
+    const gb = (n: number): string => `${(n / 1e9).toFixed(2)} GB`;
+    super(
+      `Model file too large for this runtime: ${url.split("/").pop()} is ${gb(size)}, ` +
+        `above the ${gb(limit)} single-allocation ceiling. This model cannot be loaded here; ` +
+        `choose one whose weights are split into smaller files.`
+    );
+  }
+}
+
+/**
+ * 2 GiB less a 4 MiB margin. V8 refuses a single `ArrayBuffer` at roughly 2
+ * GiB, and the exact cutoff moves with what the heap is already holding, so
+ * the margin keeps the check on the right side of it. Node and Electron's main
+ * process have a far higher ceiling, so they are not capped by default.
+ */
+const DEFAULT_MAX_MODEL_FILE_BYTES = 2 * 1024 * 1024 * 1024 - 4 * 1024 * 1024;
+
+function isNodeRuntime(): boolean {
+  return typeof process !== "undefined" && process.versions != null && process.versions.node != null;
+}
+
+let _maxModelFileBytes: number = isNodeRuntime()
+  ? Number.POSITIVE_INFINITY
+  : DEFAULT_MAX_MODEL_FILE_BYTES;
+
+/**
+ * Override the largest model file this runtime will accept.
+ * `Infinity` disables the check.
+ */
+export function setHftMaxModelFileBytes(bytes: number): void {
+  _maxModelFileBytes = bytes > 0 ? bytes : DEFAULT_MAX_MODEL_FILE_BYTES;
+}
+
+export function getHftMaxModelFileBytes(): number {
+  return _maxModelFileBytes;
+}
+
+/**
+ * Throw {@link HftModelFileTooLargeError} when `response` declares a body this
+ * runtime cannot buffer. A response with no usable `content-length` is let
+ * through: transformers.js grows its buffer as it reads in that case, so there
+ * is no up-front allocation to guard.
+ *
+ * @internal Exported for unit tests.
+ */
+export function assertFileFitsInMemory(response: Response): void {
+  if (!response.ok) return;
+  const limit = _maxModelFileBytes;
+  if (!Number.isFinite(limit)) return;
+  const header = response.headers.get("content-length");
+  if (!header || !/^\d+$/.test(header)) return;
+  const size = Number.parseInt(header, 10);
+  if (size > limit) {
+    throw new HftModelFileTooLargeError(response.url || "model file", size, limit);
+  }
+}
+
+/**
  * Wrap `response.body` so that every read is bounded by the stall timeout and
  * the whole transfer is cancelled by `signal`.
  *
@@ -375,7 +456,10 @@ export function abortableFetch(url: string, options?: RequestInit): Promise<Resp
   });
 
   if (!stall) {
-    return request.then((response) => wrapAbortableResponse(response, combinedSignal));
+    return request.then((response) => {
+      assertFileFitsInMemory(response);
+      return wrapAbortableResponse(response, combinedSignal);
+    });
   }
 
   // Headers-phase watchdog: a fetch whose connection dies before the response
@@ -399,6 +483,9 @@ export function abortableFetch(url: string, options?: RequestInit): Promise<Resp
   return Promise.race([request, headersStall]).then(
     (response) => {
       clearHeadersTimer();
+      // Before transformers.js sees it: a body this runtime cannot allocate
+      // must fail here, while there is still a stack to fail on.
+      assertFileFitsInMemory(response);
       return wrapAbortableResponse(response, combinedSignal, stall);
     },
     (error: unknown) => {
