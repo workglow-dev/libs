@@ -103,6 +103,37 @@ export interface AiTaskInput extends TaskInput {
  * Model resolution is handled automatically by the TaskRunner before execution.
  * By the time execute() is called, input.model is always a ModelConfig object.
  */
+/**
+ * A copy of `input` whose tool definitions carry no `execute` function.
+ *
+ * A job input is handed to the queue and, for a worker-backed provider, crosses
+ * `postMessage` — structured clone, which throws `DataCloneError` on a function
+ * and takes the whole run down with it. A host tool's `execute` is a live
+ * closure over main-thread state (the conversation store, an abort signal,
+ * report callbacks), so it can never be cloned — and it never needs to be: a
+ * provider reads only the model-facing half of a definition, and tools are
+ * executed by `AgentTask` on the thread that owns them.
+ *
+ * Returns `input` untouched when there is nothing to strip, so the common path
+ * allocates nothing.
+ *
+ * @internal Exported for unit tests.
+ */
+export function withoutToolExecutors<Input extends TaskInput>(input: Input): Input {
+  const tools = (input as { tools?: unknown }).tools;
+  if (!Array.isArray(tools)) return input;
+  let stripped = false;
+  const plain = tools.map((tool) => {
+    if (tool !== null && typeof tool === "object" && typeof (tool as { execute?: unknown }).execute === "function") {
+      stripped = true;
+      const { execute: _execute, ...rest } = tool as Record<string, unknown>;
+      return rest;
+    }
+    return tool;
+  });
+  return stripped ? ({ ...input, tools: plain } as Input) : input;
+}
+
 export class AiTask<
   Input extends AiTaskInput = AiTaskInput,
   Output extends TaskOutput = TaskOutput,
@@ -306,7 +337,7 @@ export class AiTask<
       taskType: runtype,
       requires: taskClass.requires,
       aiProvider: model.provider,
-      taskInput: input as Input & { model: ModelConfig },
+      taskInput: withoutToolExecutors(input) as Input & { model: ModelConfig },
     };
 
     const taskTimeoutMs = (this.config as TaskConfig).timeout;
