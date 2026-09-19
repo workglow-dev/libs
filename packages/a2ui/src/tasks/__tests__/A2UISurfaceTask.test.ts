@@ -77,10 +77,13 @@ describe("A2UISurfaceTask", () => {
   // the relative import stays on `src`, giving two structurally identical
   // classes that are not identical objects — the identity this asserts cannot
   // exist there. Registration itself is unaffected; only the comparison is.
-  it.skipIf(typeof Bun !== "undefined")("is registered by importing the package entry, under its own type", async () => {
-    await import("@workglow/a2ui/tasks");
-    expect(TaskRegistry.all.get("A2UISurfaceTask")).toBe(A2UISurfaceTask);
-  });
+  it.skipIf(typeof Bun !== "undefined")(
+    "is registered by importing the package entry, under its own type",
+    async () => {
+      await import("@workglow/a2ui/tasks");
+      expect(TaskRegistry.all.get("A2UISurfaceTask")).toBe(A2UISurfaceTask);
+    }
+  );
 
   it("presents a valid batch and reports the action", async () => {
     const connector = new RecordingConnector("action", {
