@@ -72,6 +72,7 @@
     "@workglow/test-contract": "workspace:*",
     "@workglow/tf-mediapipe": "workspace:*",
     "@workglow/triggers": "workspace:*",
+    "@workglow/typesafeai": "workspace:*",
     "@workglow/util": "workspace:*",
     "@workglow/web-search": "workspace:*",
     "@workglow/xai": "workspace:*",

@@ -59,7 +59,7 @@ export function isBrowserLike(): boolean {
 
 export interface ValidateProviderBaseUrlArgs {
   /** Discriminator used only for error messages. */
-  readonly vendor: "openai" | "anthropic" | "xai" | "deepseek";
+  readonly vendor: "openai" | "anthropic" | "xai" | "deepseek" | "typesafe";
   /**
    * Allow-list of acceptable hostnames or hostname suffixes. Matching is
    * label-boundary: a hostname matches if it equals the entry, or if it ends

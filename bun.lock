@@ -387,6 +387,7 @@
         "@workglow/test-contract": "workspace:*",
         "@workglow/tf-mediapipe": "workspace:*",
         "@workglow/triggers": "workspace:*",
+        "@workglow/typesafeai": "workspace:*",
         "@workglow/util": "workspace:*",
         "@workglow/web-search": "workspace:*",
         "@workglow/xai": "workspace:*",
@@ -972,6 +973,27 @@
         "@workglow/util": "workspace:*",
       },
     },
+    "providers/typesafeai": {
+      "name": "@workglow/typesafeai",
+      "version": "0.6.6",
+      "dependencies": {
+        "@typesafe-ai/sdk": "catalog:",
+      },
+      "devDependencies": {
+        "@workglow/ai": "workspace:*",
+        "@workglow/job-queue": "workspace:*",
+        "@workglow/storage": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+      },
+      "peerDependencies": {
+        "@workglow/ai": "workspace:*",
+        "@workglow/job-queue": "workspace:*",
+        "@workglow/storage": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+      },
+    },
     "providers/xai": {
       "name": "@workglow/xai",
       "version": "0.6.6",
@@ -1028,6 +1050,7 @@
     "@types/dom-chromium-ai": "^0.0.17",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
+    "@typesafe-ai/sdk": "^0.6.0",
     "aws-sdk-client-mock": "^4.1.0",
     "commander": "^15.0.0",
     "electron": "^44.4.1",
@@ -1663,6 +1686,8 @@
 
     "@types/sinonjs__fake-timers": ["@types/sinonjs__fake-timers@15.0.1", "", {}, "sha512-Ko2tjWJq8oozHzHV+reuvS5KYIRAokHnGbDwGh/J64LntgpbuylF74ipEL24HCyRjf9FOlBiBHWBR1RlVKsI1w=="],
 
+    "@typesafe-ai/sdk": ["@typesafe-ai/sdk@0.6.0", "", {}, "sha512-IddX+Q0XM+VagOUZFeP7wZjaO4SHMdvnh2zEBdrZZnXedWI3BNK1lKhMx3ayrkFWvVLbVcUHJy6AVZlY+e6Jaw=="],
+
     "@typescript/typescript-aix-ppc64": ["@typescript/typescript-aix-ppc64@7.0.2", "", { "os": "aix", "cpu": "ppc64" }, "sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ=="],
 
     "@typescript/typescript-darwin-arm64": ["@typescript/typescript-darwin-arm64@7.0.2", "", { "os": "darwin", "cpu": "arm64" }, "sha512-gowzar9MwS/aRWp6f3a4KUqzRjAZjOsmGNCM6LcTgXum+dBfgsBVMN+AgvOCCbguXyick6LJhpBszxMebJ8syA=="],
@@ -1810,6 +1835,8 @@
     "@workglow/tf-mediapipe": ["@workglow/tf-mediapipe@workspace:providers/tf-mediapipe"],
 
     "@workglow/triggers": ["@workglow/triggers@workspace:packages/triggers"],
+
+    "@workglow/typesafeai": ["@workglow/typesafeai@workspace:providers/typesafeai"],
 
     "@workglow/util": ["@workglow/util@workspace:packages/util"],
 

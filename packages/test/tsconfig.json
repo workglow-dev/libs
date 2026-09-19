@@ -48,6 +48,7 @@
     { "path": "../../providers/postgres" },
     { "path": "../../providers/sqlite" },
     { "path": "../../providers/supabase" },
-    { "path": "../../providers/tf-mediapipe" }
+    { "path": "../../providers/tf-mediapipe" },
+    { "path": "../../providers/typesafeai" }
   ]
 }

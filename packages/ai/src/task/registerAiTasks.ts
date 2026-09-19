@@ -43,6 +43,7 @@ import { QueryExpanderTask } from "./QueryExpanderTask";
 import { RerankerTask } from "./RerankerTask";
 import { StructuralParserTask } from "./StructuralParserTask";
 import { StructuredGenerationTask } from "./StructuredGenerationTask";
+import { SystemOneTask } from "./SystemOneTask";
 import { TextChunkerTask } from "./TextChunkerTask";
 import { TextClassificationTask } from "./TextClassificationTask";
 import { TextEmbeddingTask } from "./TextEmbeddingTask";
@@ -103,6 +104,7 @@ export const registerAiTasks = () => {
     RerankerTask,
     StructuralParserTask,
     StructuredGenerationTask,
+    SystemOneTask,
     TextChunkerTask,
     TextClassificationTask,
     TextEmbeddingTask,

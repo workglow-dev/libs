@@ -37,6 +37,9 @@ export const CAPABILITIES = {
   "vision.hand-landmarks": "Hand keypoints",
   "vision.pose-landmarks": "Body pose keypoints",
   "vision.gesture": "Hand gesture recognition",
+  // Judgment (typed answers to named questions, not generated text)
+  "judgment.systemone":
+    "Evaluate state against named typed questions (choice / score / noul) in one call",
   // Modifiers (combine with a base capability)
   "tool-use": "Function/tool calling — emit structured tool invocations from input text",
   "json-mode": "Structured-output JSON conformance — emit JSON matching a schema",

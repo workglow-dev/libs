@@ -14,6 +14,7 @@ import { _testOnly as deepseekTestOnly } from "@workglow/deepseek/ai";
 import { _testOnly as geminiTestOnly } from "@workglow/google-gemini/ai";
 import { _testOnly as ollamaTestOnly } from "@workglow/ollama/ai";
 import { _testOnly as openrouterTestOnly } from "@workglow/openrouter/ai";
+import { _testOnly as typesafeaiTestOnly } from "@workglow/typesafeai/ai";
 import { describe, expect, it } from "vitest";
 
 import { usageNormalizationBlock } from "@workglow/test-contract/ai-provider";
@@ -23,6 +24,7 @@ const { mapDeepSeekUsage } = deepseekTestOnly;
 const { mapGeminiUsage } = geminiTestOnly;
 const { mapOllamaUsage } = ollamaTestOnly;
 const { mapOpenRouterUsage } = openrouterTestOnly;
+const { addTypeSafeAiUsage, mapTypeSafeAiUsage } = typesafeaiTestOnly;
 
 /**
  * Holds every provider's usage mapper to one normalization contract. The rule
@@ -344,6 +346,67 @@ usageNormalizationBlock({
       },
     },
   ],
+});
+
+usageNormalizationBlock({
+  provider: "TypeSafe (System One)",
+  mapUsage: mapTypeSafeAiUsage,
+  sparseFrame: { input_tokens: 312 },
+  sparseReports: ["input"],
+  zeroFrame: { input_tokens: 0, output_tokens: 0 },
+  cases: [
+    {
+      name: "a system-one evaluation",
+      frame: { input_tokens: 312, output_tokens: 48 },
+      expected: {
+        input: 312,
+        output: 48,
+        cached: undefined,
+        cacheWrite: undefined,
+        reasoning: undefined,
+        // TypeSafe quotes no total and has no prompt cache. `total` is never
+        // synthesized by addition, so it stays unreported.
+        total: undefined,
+        extra: undefined,
+      },
+    },
+    {
+      name: "a response carrying no usage block at all",
+      frame: undefined,
+      expected: undefined,
+    },
+  ],
+});
+
+/**
+ * A rerank scores each candidate in its own request, so what the task reports
+ * has to be the sum of them. One request's counters would understate the run by
+ * the size of the shortlist.
+ */
+describe("TypeSafe usage accumulates across a fan-out", () => {
+  it("sums the counters both requests reported", () => {
+    const total = addTypeSafeAiUsage(
+      mapTypeSafeAiUsage({ input_tokens: 10, output_tokens: 2 }),
+      mapTypeSafeAiUsage({ input_tokens: 15, output_tokens: 3 })
+    );
+    expect(total?.input).toBe(25);
+    expect(total?.output).toBe(5);
+  });
+
+  // Losing a stated figure to an absent one is the same zero-vs-absent mistake
+  // in the other direction.
+  it("carries a counter only one side reported", () => {
+    const total = addTypeSafeAiUsage(
+      mapTypeSafeAiUsage({ input_tokens: 10 }),
+      mapTypeSafeAiUsage({ input_tokens: 5, output_tokens: 7 })
+    );
+    expect(total?.input).toBe(15);
+    expect(total?.output).toBe(7);
+  });
+
+  it("leaves a run in which nothing was reported unreported", () => {
+    expect(addTypeSafeAiUsage(undefined, undefined)).toBeUndefined();
+  });
 });
 
 describe("usage normalization rejects non-numeric wire values", () => {

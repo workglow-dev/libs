@@ -30,6 +30,7 @@
  *   xai-api-key        → XAI_API_KEY
  *   openrouter-api-key → OPENROUTER_API_KEY
  *   deepseek-api-key   → DEEPSEEK_API_KEY
+ *   typesafe-api-key   → TYPESAFE_API_KEY
  */
 
 import {

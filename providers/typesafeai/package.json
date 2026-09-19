@@ -1,0 +1,88 @@
+{
+  "name": "@workglow/typesafeai",
+  "type": "module",
+  "sideEffects": false,
+  "version": "0.6.6",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/workglow-dev/libs.git",
+    "directory": "providers/typesafeai"
+  },
+  "bugs": {
+    "url": "https://github.com/workglow-dev/libs/issues"
+  },
+  "description": "TypeSafe (System One) provider for @workglow/ai.",
+  "homepage": "https://workglow.dev",
+  "scripts": {
+    "watch": "concurrently -c 'auto' 'bun:watch-*'",
+    "watch-code": "bun build --watch --no-clear-screen --sourcemap=external --packages=external --root ./src --outdir ./dist ./src/ai.ts ./src/ai-runtime.ts",
+    "watch-browser": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/ai.browser.ts ./src/ai-runtime.browser.ts",
+    "watch-types": "tsc --watch --preserveWatchOutput",
+    "build-package": "concurrently -c 'auto' -n 'code,browser,types' 'bun run build-code' 'bun run build-browser' 'bun run build-types'",
+    "build-js": "concurrently -m 12 --timings -c 'auto' -n 'code,browser' 'bun run build-code' 'bun run build-browser'",
+    "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
+    "build-code": "bun build --sourcemap=external --packages=external --root ./src --outdir ./dist ./src/ai.ts ./src/ai-runtime.ts",
+    "build-browser": "bun build --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/ai.browser.ts ./src/ai-runtime.browser.ts",
+    "build-types": "rm -f tsconfig.tsbuildinfo && tsc"
+  },
+  "exports": {
+    "./ai": {
+      "browser": {
+        "types": "./dist/ai.d.ts",
+        "import": "./dist/ai.browser.js"
+      },
+      "types": "./dist/ai.d.ts",
+      "import": "./dist/ai.js"
+    },
+    "./ai-runtime": {
+      "browser": {
+        "types": "./dist/ai-runtime.d.ts",
+        "import": "./dist/ai-runtime.browser.js"
+      },
+      "types": "./dist/ai-runtime.d.ts",
+      "import": "./dist/ai-runtime.js"
+    }
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "catalog:"
+  },
+  "peerDependencies": {
+    "@workglow/ai": "workspace:*",
+    "@workglow/job-queue": "workspace:*",
+    "@workglow/storage": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@workglow/ai": {
+      "optional": false
+    },
+    "@workglow/job-queue": {
+      "optional": false
+    },
+    "@workglow/storage": {
+      "optional": false
+    },
+    "@workglow/task-graph": {
+      "optional": false
+    },
+    "@workglow/util": {
+      "optional": false
+    }
+  },
+  "devDependencies": {
+    "@workglow/ai": "workspace:*",
+    "@workglow/job-queue": "workspace:*",
+    "@workglow/storage": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*"
+  },
+  "files": [
+    "dist",
+    "src/**/*.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

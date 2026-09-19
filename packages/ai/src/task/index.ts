@@ -59,6 +59,7 @@ export * from "./QueryExpanderTask";
 export * from "./RerankerTask";
 export * from "./StructuralParserTask";
 export * from "./StructuredGenerationTask";
+export * from "./SystemOneTask";
 export * from "./TextChunkerTask";
 export * from "./TextClassificationTask";
 export * from "./TextEmbeddingTask";

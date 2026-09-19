@@ -75,6 +75,7 @@
     "@mediapipe/tasks-audio": "^1.0.1",
     "@mediapipe/tasks-genai": "^0.10.29",
     "@anthropic-ai/sdk": "^0.126.0",
+    "@typesafe-ai/sdk": "^0.6.0",
     "electron": "^44.4.1",
     "@google/genai": "^2.22.0",
     "node-llama-cpp": "^3.21.1",

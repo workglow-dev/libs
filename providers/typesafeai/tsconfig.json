@@ -1,0 +1,27 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*"],
+  "references": [
+    {
+      "path": "../../packages/util"
+    },
+    {
+      "path": "../../packages/task-graph"
+    },
+    {
+      "path": "../../packages/storage"
+    },
+    {
+      "path": "../../packages/job-queue"
+    },
+    {
+      "path": "../../packages/ai"
+    }
+  ]
+}

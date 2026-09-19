@@ -19,6 +19,7 @@ import { _testOnly as openai } from "@workglow/openai/ai";
 import { _testOnly as openrouter } from "@workglow/openrouter/ai";
 import { _testOnly as sdCpp } from "@workglow/stable-diffusion-server/ai";
 import { _testOnly as tfmp } from "@workglow/tf-mediapipe/ai";
+import { _testOnly as typesafeai } from "@workglow/typesafeai/ai";
 import { _testOnly as xai } from "@workglow/xai/ai";
 import { describe, expect, it } from "vitest";
 
@@ -142,6 +143,15 @@ const PROVIDER_CASES: readonly {
     inferred: inferEach(["deepseek-v4-flash"], (id) =>
       new deepseek.DeepSeekQueuedProvider(deepseek.DEEPSEEK_RUN_FNS).inferCapabilities(
         model("DEEPSEEK", id)
+      )
+    ),
+  },
+  {
+    name: "typesafeai",
+    registered: servesOf(typesafeai.TYPESAFEAI_RUN_FN_SPECS),
+    inferred: inferEach(["jev-latest", "jev-1.13.0"], (id) =>
+      new typesafeai.TypeSafeAiQueuedProvider(typesafeai.TYPESAFEAI_RUN_FNS).inferCapabilities(
+        model("TYPESAFEAI", id)
       )
     ),
   },
@@ -364,6 +374,15 @@ const PRICED_CASES: readonly {
     ),
     namedByTable: [],
   },
+  {
+    name: "typesafeai",
+    models: pricedEach(
+      "TYPESAFEAI",
+      ["jev-latest", "jev-1.13.0"],
+      () => new typesafeai.TypeSafeAiQueuedProvider(typesafeai.TYPESAFEAI_RUN_FNS)
+    ),
+    namedByTable: [],
+  },
 ];
 
 /**
@@ -378,6 +397,7 @@ const KNOWN_UNPRICED: Readonly<Record<string, readonly string[]>> = {
   "google-gemini": ["gemini-embedding-001"],
   xai: [],
   deepseek: [],
+  typesafeai: [],
 };
 
 describe("a rate card matches the model's billing unit", () => {
