@@ -49,8 +49,8 @@
     "@huggingface/transformers": "catalog:",
     "@huggingface/transformers-structured-output": "catalog:",
     "commander": "catalog:",
-    "hyparquet": "^1.31.0",
-    "hyparquet-compressors": "^1.1.1"
+    "hyparquet": "^1.31.1",
+    "hyparquet-compressors": "^1.1.2"
   },
   "publishConfig": {
     "access": "public"
