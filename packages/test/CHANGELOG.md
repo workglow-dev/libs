@@ -1,5 +1,20 @@
 # @workglow/test
 
+## 0.6.7
+
+### Features
+
+- integrate TypeSafe AI provider and enhance capabilities
+- add support for Needle v3 model in Cactus
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `miniflare`: ^5.20260918.0-alpha
+
 ## 0.6.6
 
 ### Features

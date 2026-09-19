@@ -1,5 +1,11 @@
 # @workglow/job-queue
 
+## 0.6.7
+
+### Refactors
+
+- streamline unsubscribe logic in InMemoryQueueStorage
+
 ## 0.6.6
 
 ### Features

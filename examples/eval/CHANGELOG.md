@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.7
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `hyparquet`: ^1.31.1
+- `hyparquet-compressors`: ^1.1.2
+
 ## 0.6.6
 
 _No changes in this package._

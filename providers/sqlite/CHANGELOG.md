@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.7
+
+### Features
+
+- improve SQLite database extension loading handling errors
+
 ## 0.6.6
 
 _No changes in this package._

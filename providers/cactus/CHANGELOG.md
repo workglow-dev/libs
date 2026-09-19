@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.7
+
+### Features
+
+- add support for Needle v3 model in Cactus
+
 ## 0.6.6
 
 _No changes in this package._

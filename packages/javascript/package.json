@@ -4,7 +4,7 @@
   "sideEffects": [
     "./dist/task.js"
   ],
-  "version": "0.6.6",
+  "version": "0.6.7",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

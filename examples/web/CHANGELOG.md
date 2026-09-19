@@ -1,5 +1,15 @@
 # @workglow/web
 
+## 0.6.7
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `jsdom`: ^30.1.0
+
 ## 0.6.6
 
 _No changes in this package._

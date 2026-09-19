@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.7
+
+### Features
+
+- enhance command line argument handling for multi-line values
+
+### Bug Fixes
+
+- format
+
 ## 0.6.6
 
 _No changes in this package._
