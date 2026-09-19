@@ -47,6 +47,30 @@ describe("Cactus_ModelCatalog module-load guards", () => {
     }
   });
 
+  it("includes a Needle v3 catalog entry with a single .cact asset", () => {
+    const v3 = CACTUS_CATALOG.find((entry) => entry.generation === 3);
+    expect(v3).toBeDefined();
+    expect(v3?.model_id).toBe("needle-v3");
+    expect(v3?.hf_repo).toBe("Cactus-Compute/needle3");
+    expect(v3 && "cact" in v3.assets).toBe(true);
+    if (v3 && "cact" in v3.assets) {
+      expect(v3.assets.cact.filename).toBe("needle3.cact");
+      expect(v3.assets.cact.size).toBeGreaterThan(0);
+    }
+    expect(assetSpecsOf(v3!).length).toBe(1);
+  });
+
+  it("keeps the v2 and v3 .cact assets distinct", () => {
+    const v2 = CACTUS_CATALOG.find((entry) => entry.generation === 2);
+    const v3 = CACTUS_CATALOG.find((entry) => entry.generation === 3);
+    const [v2Asset] = assetSpecsOf(v2!);
+    const [v3Asset] = assetSpecsOf(v3!);
+    // Same extension, different container: a shared filename or digest would
+    // mean one generation's bytes are cached under the other's key.
+    expect(v2Asset.filename).not.toBe(v3Asset.filename);
+    expect(v2Asset.sha256).not.toBe(v3Asset.sha256);
+  });
+
   it("includes a Needle v2 catalog entry with a single .cact asset", () => {
     const v2 = CACTUS_CATALOG.find((entry) => entry.generation === 2);
     expect(v2).toBeDefined();

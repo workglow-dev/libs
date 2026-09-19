@@ -10,7 +10,9 @@ import {
   CACTUS_DEFAULT_REVISION,
   CACTUS_NEEDLE_26M,
   CACTUS_NEEDLE_V2,
+  CACTUS_NEEDLE_V3,
   CACTUS_V2_HF_REPO,
+  CACTUS_V3_HF_REPO,
 } from "./Cactus_Constants";
 import { CACTUS_HASH_PLACEHOLDER } from "./Cactus_Integrity";
 
@@ -61,7 +63,19 @@ export interface CactusV2CatalogEntry extends CactusCatalogEntryBase {
   };
 }
 
-export type CactusCatalogEntry = CactusV1CatalogEntry | CactusV2CatalogEntry;
+/**
+ * Needle 3 ships the same single-`.cact` shape as v2, but the containers are
+ * not interchangeable: `NeedleV3Wasm.load` refuses v2 bytes and vice versa, so
+ * the generation stays an explicit discriminant rather than a size heuristic.
+ */
+export interface CactusV3CatalogEntry extends CactusCatalogEntryBase {
+  readonly generation: 3;
+  readonly assets: {
+    readonly cact: CactusAssetSpec;
+  };
+}
+
+export type CactusCatalogEntry = CactusV1CatalogEntry | CactusV2CatalogEntry | CactusV3CatalogEntry;
 
 /**
  * Asserts that `s` is a lowercase hex SHA-256 (64 hex chars).
@@ -132,15 +146,34 @@ export const CACTUS_CATALOG: readonly CactusCatalogEntry[] = [
     },
     capabilities: ["tool-use"],
   },
+  {
+    model_id: CACTUS_NEEDLE_V3,
+    title: "Needle 3",
+    description:
+      "Needle v3 tool-routing transformer. Single 35 MB .cact image (weights, geometry, tokenizer). Reasons before answering. Runs via WASM in browser and Node/Bun.",
+    hf_repo: CACTUS_V3_HF_REPO,
+    revision: CACTUS_DEFAULT_REVISION,
+    generation: 3,
+    assets: {
+      // MAINTAINER: regenerate hashes after bumping `revision` by running
+      //   bun run --filter @workglow/cactus hash-catalog -- --write
+      cact: {
+        filename: "needle3.cact",
+        sha256: "c9d915eca282ed42d1a09b143b592adb4cc6744ffe2d294adf5cfc5548170c38",
+        size: 35335380,
+      },
+    },
+    capabilities: ["tool-use"],
+  },
 ] as const;
 
 export function getCactusCatalogEntry(model_id: string): CactusCatalogEntry | undefined {
   return CACTUS_CATALOG.find((e) => e.model_id === model_id);
 }
 
-/** Asset specs for download/cache: v1 is weights, vocab, config; v2 is the .cact image. */
+/** Asset specs for download/cache: v1 is weights, vocab, config; v2 and v3 are the .cact image. */
 export function assetSpecsOf(entry: CactusCatalogEntry): readonly CactusAssetSpec[] {
-  if (entry.generation === 2) {
+  if (entry.generation === 2 || entry.generation === 3) {
     return [entry.assets.cact];
   }
   return [entry.assets.weights, entry.assets.vocab, entry.assets.config];

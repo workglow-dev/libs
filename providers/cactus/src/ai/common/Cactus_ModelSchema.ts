@@ -11,6 +11,7 @@ import {
   CACTUS_DEFAULT_MODELS_DIR,
   CACTUS_NEEDLE_26M,
   CACTUS_NEEDLE_V2,
+  CACTUS_NEEDLE_V3,
   LOCAL_CACTUS,
 } from "./Cactus_Constants";
 
@@ -27,7 +28,7 @@ export const CactusModelSchema = {
       properties: {
         model_id: {
           type: "string",
-          enum: [CACTUS_NEEDLE_26M, CACTUS_NEEDLE_V2],
+          enum: [CACTUS_NEEDLE_26M, CACTUS_NEEDLE_V2, CACTUS_NEEDLE_V3],
           description: "Catalog id of the Cactus model.",
         },
         models_dir: {

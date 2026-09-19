@@ -136,6 +136,58 @@ describe("Cactus_ToolCalling output parsing", () => {
     expect(finishText).toContain("lookup_weather");
   });
 
+  it("parses a v3 payload that follows a <think> reasoning block", async () => {
+    const { names } = await runToolCalling({
+      run: () =>
+        `<think>The user wants weather for Paris, so lookup_weather with city Paris.</think>` +
+        `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`,
+    });
+    expect(names).toEqual(["lookup_weather"]);
+  });
+
+  it("ignores a tool_call the model only discussed inside its reasoning", async () => {
+    // v3 reasons before nearly every answer, so reasoning that quotes the
+    // markers must not be mistaken for an emitted call.
+    const { names } = await runToolCalling({
+      run: () =>
+        `<think>I could answer with <tool_call>[{"name":"book_flight","arguments":{"origin":"LHR"}}]</tool_call> but the user asked about weather.</think>` +
+        `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`,
+    });
+    expect(names).toEqual(["lookup_weather"]);
+  });
+
+  it("treats a v3 reasoning-only completion as no calls", async () => {
+    const { names } = await runToolCalling({
+      run: () => `<think>None of these tools answer the question.</think>`,
+    });
+    expect(names).toEqual([]);
+  });
+
+  it("treats a v3 abstention payload of [] as no calls", async () => {
+    const { names } = await runToolCalling({
+      run: () => `<think>No tool fits.</think><tool_call>[]</tool_call>`,
+    });
+    expect(names).toEqual([]);
+  });
+
+  it("accepts v3 run_stream(text) single-argument callback shape", async () => {
+    // v3 changed the callback: it passes the decoded delta alone, where v1
+    // and v2 pass (tokenId, piece).
+    const { names, textDeltas } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb("<tool_call>[");
+        cb('{"name":"lookup_weather","arguments":{"city":"Paris"}}');
+        cb("]</tool_call>");
+        return `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`;
+      },
+    });
+    expect(names).toEqual(["lookup_weather"]);
+    expect(textDeltas.join("")).toBe(
+      `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`
+    );
+  });
+
   it("accepts v2 run_stream(tokenId, piece) callback shape", async () => {
     const { names, textDeltas } = await runToolCalling({
       run: () => "unused",

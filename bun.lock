@@ -1033,7 +1033,7 @@
     "electron": "^44.4.1",
     "fake-indexeddb": "^6.2.5",
     "js-tiktoken": "^1.0.21",
-    "needle-rs": "^0.2.1",
+    "needle-rs": "^0.3.0",
     "node-llama-cpp": "^3.21.1",
     "ollama": "^0.6.3",
     "openai": "^7.17.0",
@@ -2277,7 +2277,7 @@
 
     "nanoid": ["nanoid@5.1.16", "", { "bin": { "nanoid": "bin/nanoid.js" } }, "sha512-kVrnsrJqMR8+oLJnGEmSWw9BivK5mt7H3FZatVRjrc5wGqFYuBxX1yG7+A7Gi5AefkX6t/oCkizcQgpu0cY1dQ=="],
 
-    "needle-rs": ["needle-rs@0.2.1", "", {}, "sha512-e/xjM/4t2IyKAYS5Nqg5jqYqYsPpa2sFKQHa7UbWZEHql1ok2ERUp4U+3Bf9RdWrqsQ5DGWVOVQGcqpw9tbg7Q=="],
+    "needle-rs": ["needle-rs@0.3.0", "", {}, "sha512-yyMR7qNZVq6SfCj6xQvcK5M5e2EKWIfacLu9hOh3H5S6urOlvM5KDB4bL4eqy5ez13TRo4Uhr8UMq+gYRkZvZQ=="],
 
     "negotiator": ["negotiator@1.1.0", "", { "dependencies": { "content-type": "^2.1.0" } }, "sha512-NMPBRMJgiQHjbd8phG3Vebdx4kZ1H121rbl5IkMqeOsahptB9BKo/d7oJ3zTXqTgagn2bWlNSXkh0QUGM31RYg=="],
 

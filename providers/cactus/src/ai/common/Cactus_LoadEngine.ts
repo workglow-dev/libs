@@ -10,7 +10,8 @@ export type NeedleSdkModule = typeof import("needle-rs");
 
 export type NeedleEngine =
   | NonNullable<ReturnType<NeedleSdkModule["NeedleWasm"]["load"]>>
-  | NonNullable<ReturnType<NeedleSdkModule["NeedleV2Wasm"]["load"]>>;
+  | NonNullable<ReturnType<NeedleSdkModule["NeedleV2Wasm"]["load"]>>
+  | NonNullable<ReturnType<NeedleSdkModule["NeedleV3Wasm"]["load"]>>;
 
 /**
  * Builds the engine for a catalog entry from bytes already fetched and
@@ -25,6 +26,22 @@ export function loadCactusEngine(
   entry: CactusCatalogEntry,
   files: Readonly<Record<string, Uint8Array>>
 ): NeedleEngine {
+  if (entry.generation === 3) {
+    const bytes = files[entry.assets.cact.filename];
+    if (!bytes) {
+      throw new Error(
+        `Missing Cactus v3 asset ${entry.assets.cact.filename} for model ${entry.model_id}`
+      );
+    }
+    // `load` rejects a v2 container rather than misreading it, so an undefined
+    // here means the bytes are not a v3 image — a catalog/asset mismatch.
+    const engine = sdk.NeedleV3Wasm.load(bytes);
+    if (!engine) {
+      throw new Error(`needle-rs NeedleV3Wasm.load returned undefined for model ${entry.model_id}`);
+    }
+    return engine;
+  }
+
   if (entry.generation === 2) {
     const bytes = files[entry.assets.cact.filename];
     if (!bytes) {
@@ -55,9 +72,9 @@ export function loadCactusEngine(
 export interface LoadedCactusModel {
   readonly engine: NeedleEngine;
   /**
-   * Parsed `config.json` for a v1 model, or `null` for v2 — whose geometry and
-   * tokenizer travel inside the `.cact` image — and for a config that failed
-   * to parse.
+   * Parsed `config.json` for a v1 model, or `null` for v2 and v3 — whose
+   * geometry and tokenizer travel inside the `.cact` image — and for a config
+   * that failed to parse.
    */
   readonly configJson: unknown;
 }

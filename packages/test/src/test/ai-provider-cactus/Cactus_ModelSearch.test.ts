@@ -24,7 +24,7 @@ describe("Cactus_ModelSearch", () => {
       }
     );
     const ids = finishData?.results.map((r) => r.id) ?? [];
-    expect(ids).toEqual(expect.arrayContaining(["needle-26m", "needle-v2"]));
+    expect(ids).toEqual(expect.arrayContaining(["needle-26m", "needle-v2", "needle-v3"]));
     // An empty query returns the whole catalog — assert against it rather than
     // a literal count, so adding a model does not fail an unrelated test.
     expect(ids).toEqual(CACTUS_CATALOG.map((entry) => entry.model_id));

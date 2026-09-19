@@ -38,8 +38,12 @@ function promptText(input: ToolCallingTaskInput): string {
 }
 
 /**
- * Both `NeedleWasm` and `NeedleV2Wasm` expose `run_stream`; `run` is the
- * fallback for a test double or a future build that does not.
+ * `NeedleWasm`, `NeedleV2Wasm` and `NeedleV3Wasm` all expose `run_stream`;
+ * `run` is the fallback for a test double or a future build that does not.
+ *
+ * The callback signature spans both shapes on purpose: v1 and v2 pass
+ * `(tokenId, piece)`, v3 passes the decoded delta alone. `needleStreamPiece`
+ * resolves which one arrived.
  */
 interface NeedleRunnable {
   readonly run_stream?: (
