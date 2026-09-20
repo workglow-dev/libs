@@ -1,0 +1,14 @@
+{
+  // `scripts/` is in no other CI type gate — `typecheck:budget` globs
+  // packages|providers and `typecheck:tests` globs packages/*/tsconfig.test.json
+  // — while it holds vitest.config.ts's resolution logic, which decides what
+  // every suite in the repo resolves a `@workglow/*` specifier to.
+  "extends": "./tsconfig.json",
+  "include": ["scripts/**/*.ts", "vitest.config.ts"],
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  }
+}

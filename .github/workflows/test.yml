@@ -188,10 +188,12 @@ jobs:
         with:
           name: build-output
           path: .
+      # Invokes the script rather than restating the variable: one definition
+      # of "the dist target". An inline `env:` block here is how a workflow
+      # edit silently demotes this job to a duplicate source run — nothing
+      # in-process can notice, since an unset target resolves to `source`.
       - name: Run unit tests against the built bundles
-        env:
-          WORKGLOW_TEST_TARGET: dist
-        run: bun run test:vitest:unit -- ${{ env.TEST_CHANGED }}
+        run: bun run test:vitest:dist -- ${{ env.TEST_CHANGED }}
   test-vitest-integration:
     runs-on: ubuntu-latest
     needs: build
