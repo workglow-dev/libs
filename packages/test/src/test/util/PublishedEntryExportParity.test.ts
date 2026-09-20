@@ -4,6 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// @vitest-environment node
+//
+// The tag is what keeps this file off the Bun runner, which is the point of it
+// here rather than any DOM: the target this sweep branches on is handed down by
+// `vitest.config.ts`'s `test.env`, and `bun test` never reads that config. Under
+// Bun the validated value would simply be absent, and the anti-vacuity case
+// below would fail on the plumbing instead of on anything under test. `node` is
+// vitest's default environment, so the tag costs nothing there.
+
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -128,6 +137,16 @@ const { pairs, unmapped } = collectEntryPairs();
 const checkable = pairs.filter((pair) => !(pair.specifier in UNCHECKABLE));
 
 /**
+ * Whether this run exercises the built bundles.
+ *
+ * The VALIDATED target handed down by `vitest.config.ts`'s `test.env`, not
+ * re-derived: `packages/test` is a composite program rooted at `./src` and
+ * cannot import `scripts/lib/*`, so a second `=== "dist"` comparison here would
+ * be exactly the silent-typo bug `resolveTestTarget` exists to remove.
+ */
+const RUNS_AGAINST_BUNDLES = process.env.WORKGLOW_TEST_TARGET === "dist";
+
+/**
  * Every published entry, imported twice — once by the specifier a consumer
  * writes, once by the source file it was built from — with the export NAME sets
  * compared.
@@ -139,11 +158,18 @@ const checkable = pairs.filter((pair) => !(pair.specifier in UNCHECKABLE));
  * the only observable that says the entry point is intact, and the source file
  * is the only available statement of what it should be.
  *
- * Under the default `source` target both sides resolve to the same module, so
- * this passes trivially — a green source run is not a bundle check. The run
- * that means something is `test-vitest-dist` (`WORKGLOW_TEST_TARGET=dist`),
- * where the left side is the real bundle; hence a unit-tier file, since that is
- * the tier the dist job runs.
+ * Under the default `source` target the source-resolving plugin rewrites
+ * `import(specifier)` to exactly the path `sourceCounterpart()` computes, so
+ * both sides ARE the same module and every case asserts `X === X`. Those cases
+ * are therefore SKIPPED under source, so the report distinguishes "checked"
+ * from "not applicable" rather than showing ~90 green rows that compared
+ * nothing. The run that means something is `test-vitest-dist`
+ * (`WORKGLOW_TEST_TARGET=dist`), where the left side is the real bundle; hence
+ * a unit-tier file, since that is the tier the dist job runs.
+ *
+ * Skipping loses no loading: `PublishedEntryImports.test.ts` imports every
+ * published specifier unconditionally, and that file DOES carry signal under
+ * source — it is what proves each entry resolves and evaluates at all.
  */
 describe("published entry export parity", () => {
   it("enumerates every workspace manifest, so an empty sweep cannot pass", () => {
@@ -169,7 +195,16 @@ describe("published entry export parity", () => {
     }
   });
 
-  it.each(checkable.map((pair) => [pair.specifier, pair.sourcePath] as const))(
+  it("is handed a validated target, so the skip cannot swallow the dist sweep", () => {
+    // If the `test.env` plumbing broke, `RUNS_AGAINST_BUNDLES` would be false
+    // in every job: every case below would report skipped and
+    // `test-vitest-dist` would go green having compared nothing at all.
+    expect(["source", "dist"]).toContain(process.env.WORKGLOW_TEST_TARGET);
+  });
+
+  it
+    .skipIf(!RUNS_AGAINST_BUNDLES)
+    .each(checkable.map((pair) => [pair.specifier, pair.sourcePath] as const))(
     "%s exports the same names as its source",
     async (specifier, sourcePath) => {
       const [published, source] = await Promise.all([

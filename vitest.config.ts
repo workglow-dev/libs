@@ -212,6 +212,12 @@ const projects = listTestProjects(discovered).map((p) => {
       ...shared,
       name: p.name,
       root,
+      // The VALIDATED target, handed down rather than re-derived. A suite that
+      // read `process.env` itself sees `undefined` on a default run — the
+      // resolution `resolveTestTarget` exists to perform — so a case that skips
+      // unless the target is `dist` would skip in every job, reporting green
+      // having compared nothing.
+      env: { WORKGLOW_TEST_TARGET: target },
       exclude: [...shared.exclude, ...bunOnly],
       typecheck: {
         ...shared.typecheck,

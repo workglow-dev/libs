@@ -4,6 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// @vitest-environment node
+//
+// The tag is what keeps this file off the Bun runner, which is the point of it
+// here rather than any DOM: the target this sweep branches on is handed down by
+// `vitest.config.ts`'s `test.env`, and `bun test` never reads that config. Under
+// Bun the validated value would simply be absent, and the anti-vacuity case
+// below would fail on the plumbing instead of on anything under test. `node` is
+// vitest's default environment, so the tag costs nothing there.
+
 import { AiProvider, getAiProviderRegistry } from "@workglow/ai";
 import { AiProvider as WorkerAiProvider } from "@workglow/ai/worker";
 import { readdirSync, readFileSync } from "node:fs";
