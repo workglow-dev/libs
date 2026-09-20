@@ -1,6 +1,6 @@
 # @workglow/bootstrap
 
-## 0.3.45
+## 0.6.7
 
 ### Features
 
