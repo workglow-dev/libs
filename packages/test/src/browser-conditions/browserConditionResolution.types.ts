@@ -116,7 +116,7 @@ export type WorkglowWorkerRegistry = typeof WorkglowWorker.AiProviderRegistry;
 
 /**
  * The meta-package's vendor shims, which are the two-hop case: `packages/workglow`'s
- * own `tsgo` run compiles `src/openai.browser.ts` under NODE conditions, so the
+ * own `tsc` run compiles `src/openai.browser.ts` under NODE conditions, so the
  * browser path THROUGH the shim is checked nowhere else. Here the emitted
  * `dist/openai.browser.d.ts` is a pass-through that gets re-resolved under
  * `browser` at the provider hop.

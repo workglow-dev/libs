@@ -592,7 +592,7 @@ function buildsSourceEntry(buildScriptText: string, stem: string): boolean {
  * Implementation targets no `build*` script builds a source entry for.
  *
  * The source-entry rule below proves only the DECLARATION half. `build-types`
- * runs `tsgo` over the package's whole `src` tree, so every source file yields
+ * runs `tsc` over the package's whole `src` tree, so every source file yields
  * a `.d.ts` whether or not anything lists it; the `.js` half comes from the
  * hand-written entry lists in each package's `build-code` / `build-browser` /
  * `build-*` scripts, which nothing read. Add `providers/foo/src/ai.browser.ts`
@@ -895,7 +895,7 @@ describe("workspace exports maps", () => {
     // pair naming each other correctly while nothing emits either file.
     //
     // A source entry beside them is NECESSARY for either half and sufficient for
-    // only one: `build-types` runs `tsgo` over the package's whole `src` tree, so
+    // only one: `build-types` runs `tsc` over the package's whole `src` tree, so
     // the existence of the file is exactly what makes the `.d.ts` appear, but the
     // `.js` comes from a hand-written entry list in a `build*` script that this
     // check never reads. `buildEntryViolations` is what covers that half; keep
@@ -1561,7 +1561,7 @@ describe("exports map violation detection", () => {
       expect(
         buildEntryViolations("providers/openai/package.json", openaiExports, {
           "build-code": "bun build --packages=external --outdir ./dist ./src/ai.ts",
-          "build-types": "tsgo",
+          "build-types": "tsc",
         })
       ).toEqual([
         'providers/openai/package.json exports["./ai"]: "./dist/ai.browser.js" is declared but ' +
@@ -1575,7 +1575,7 @@ describe("exports map violation detection", () => {
         buildEntryViolations("providers/openai/package.json", openaiExports, {
           "build-code": "bun build --packages=external --outdir ./dist ./src/ai.ts",
           "build-browser": "bun build --target=browser --outdir ./dist ./src/ai.browser.ts",
-          "build-types": "tsgo",
+          "build-types": "tsc",
         })
       ).toEqual([]);
     });
@@ -1629,7 +1629,7 @@ describe("exports map violation detection", () => {
         buildEntryViolations(
           "p/package.json",
           { ".": { types: "./dist/node.d.ts", import: "./dist/node.js" } },
-          { test: "vitest run ./src/node.ts", "build-types": "tsgo" }
+          { test: "vitest run ./src/node.ts", "build-types": "tsc" }
         )
       ).toEqual([
         'p/package.json exports["."]: "./dist/node.js" is declared but no build* script names ' +
