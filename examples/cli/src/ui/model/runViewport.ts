@@ -10,13 +10,20 @@ import type { CensusList, CensusNode } from "./runCensus";
  * How a run's rows are fitted into the terminal, independent of what draws
  * them.
  *
- * Two rules shape everything here.
+ * Three rules shape everything here.
  *
  * **The live region never shrinks.** A block whose height tracks its content
  * drags the footer up the screen every time a list gets shorter, and a footer
  * that moves is a footer nobody can read. The region grows to fit what arrives
  * and then holds that height ({@link stickyRegionHeight}) until the terminal
  * itself changes size.
+ *
+ * **A list shows the work in flight.** Rows sort completed → running →
+ * pending, so a list of a graph that runs in order is a timeline, and the only
+ * part of it worth a row is where the frontier is. {@link listWindow} puts the
+ * window there and lets it walk forward as tasks land, rather than pinning
+ * either end — the head is work that finished minutes ago and the tail is work
+ * that has not started.
  *
  * **Depth pays for the overflow.** When the tree wants more rows than the
  * terminal has, the rows that go are the innermost ones — a Map's per-item
@@ -31,6 +38,16 @@ export const MAX_VISIBLE_LIST_ROWS = 6;
 
 /** A truncated list always keeps at least this many rows — an empty parent says nothing. */
 export const MIN_VISIBLE_LIST_ROWS = 1;
+
+/**
+ * Settled rows the window keeps above the frontier when it can spare them.
+ *
+ * One is enough: the row above a running task is the one that just finished,
+ * which is the context that says the pipeline is moving rather than stuck. Any
+ * more is history the summary line already reports, bought with rows of work
+ * that has not happened yet.
+ */
+export const LEAD_CONTEXT_ROWS = 1;
 
 /** Guard on the shrink loop; a plan is not worth an unbounded search. */
 const MAX_SHRINK_STEPS = 2000;
@@ -58,15 +75,94 @@ export function listCap(plan: RunViewportPlan, listKey: string): number {
   return plan.caps.get(listKey) ?? MAX_VISIBLE_LIST_ROWS;
 }
 
+/** The shape a row needs to be placed in a window; a real row carries far more. */
+export interface StatusLike {
+  readonly status: string;
+}
+
+/** Where a row sits relative to the work in flight. */
+export type RowPhase = "settled" | "active" | "waiting";
+
+const ACTIVE_STATUSES = new Set(["PROCESSING", "STREAMING", "ABORTING", "RUNNING"]);
+const SETTLED_STATUSES = new Set(["COMPLETED", "FAILED", "ABORTED", "DISABLED"]);
+
 /**
- * The slice of a list that is drawn: the tail.
- *
- * Rows are sorted completed-first, so the tail is the work in flight. A list
- * that dropped its tail would animate a spinner nobody can see.
+ * Read case-insensitively because two vocabularies reach this: a task reports
+ * `PROCESSING` and a Map iteration slot reports `running`. Where a row goes on
+ * screen is the same question for both, so it gets the same answer.
  */
-export function visibleSlice<T>(rows: readonly T[], cap: number): readonly T[] {
-  if (cap >= rows.length) return rows;
-  return rows.slice(rows.length - Math.max(0, cap));
+export function rowPhase(status: string): RowPhase {
+  const key = status.toUpperCase();
+  if (ACTIVE_STATUSES.has(key)) return "active";
+  if (SETTLED_STATUSES.has(key)) return "settled";
+  return "waiting";
+}
+
+/** A list split into what is drawn and what is summarised at either end. */
+export interface ListWindow<T> {
+  readonly visible: readonly T[];
+  /** Rows above the window — settled work, in the main. */
+  readonly before: readonly T[];
+  /** Rows below it — work that has not started, and any failure that sorts last. */
+  readonly after: readonly T[];
+}
+
+const NOTHING: readonly never[] = [];
+
+/**
+ * Where a window of `size` rows starts, given where the work is.
+ *
+ * The anchor is the running rows. Everything before them has happened and
+ * everything after them has not, so a window that holds them holds the only
+ * rows whose glyphs are going to change. A span wider than the window keeps its
+ * head: those started first and are the likeliest to finish next.
+ *
+ * With nothing running the anchor is the row that runs next, which is what a
+ * graph looks like in the moment before it starts and between two steps. With
+ * nothing left to run the window is the tail — the end of a finished list is
+ * the last thing it did, and failures sort there.
+ */
+function windowStart<T extends StatusLike>(rows: readonly T[], size: number): number {
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (rowPhase(rows[i].status) !== "active") continue;
+    if (first < 0) first = i;
+    last = i;
+  }
+  if (first < 0) {
+    const next = rows.findIndex((row) => rowPhase(row.status) === "waiting");
+    if (next < 0) return rows.length - size;
+    first = next;
+    last = next;
+  }
+  const span = last - first + 1;
+  const lead = span >= size ? 0 : Math.min(LEAD_CONTEXT_ROWS, size - span, first);
+  return Math.max(0, Math.min(first - lead, rows.length - size));
+}
+
+/**
+ * The slice of a list that is drawn, and the rows held back above and below it.
+ *
+ * Hiding rows is only worth doing when it buys more rows than the lines
+ * announcing them spend: a list one row over its cap would otherwise draw a
+ * summary line saying "1 more" in the space that row would have occupied. At
+ * the break-even point the real rows win.
+ */
+export function listWindow<T extends StatusLike>(rows: readonly T[], cap: number): ListWindow<T> {
+  const whole: ListWindow<T> = { visible: rows, before: NOTHING, after: NOTHING };
+  const size = Math.max(0, Math.min(Math.floor(cap), rows.length));
+  if (size >= rows.length) return whole;
+  // A list with no room left is one summary line, not two: there is no window
+  // for the rows to be on either side of.
+  if (size === 0) return { visible: NOTHING, before: rows, after: NOTHING };
+
+  const start = windowStart(rows, size);
+  const before = rows.slice(0, start);
+  const after = rows.slice(start + size);
+  const lines = (before.length > 0 ? 1 : 0) + (after.length > 0 ? 1 : 0);
+  if (before.length + after.length <= lines) return whole;
+  return { visible: rows.slice(start, start + size), before, after };
 }
 
 interface ListInfo {
@@ -93,12 +189,12 @@ function nodeRows(node: CensusNode, caps: Map<string, number>): number {
 }
 
 function listRows(list: CensusList, caps: Map<string, number>): number {
-  const cap = caps.get(list.key) ?? MAX_VISIBLE_LIST_ROWS;
-  const visible = visibleSlice(list.nodes, cap);
+  const view = listWindow(list.nodes, caps.get(list.key) ?? MAX_VISIBLE_LIST_ROWS);
   let total = 0;
-  for (const node of visible) total += nodeRows(node, caps);
-  // The line that says what was hidden is itself a row.
-  if (visible.length < list.nodes.length) total += 1;
+  for (const node of view.visible) total += nodeRows(node, caps);
+  // Each line that says what was hidden is itself a row.
+  if (view.before.length > 0) total += 1;
+  if (view.after.length > 0) total += 1;
   return total;
 }
 
@@ -117,7 +213,7 @@ function visibleListKeys(root: CensusList, caps: Map<string, number>): Set<strin
     if (keys.has(list.key)) return;
     keys.add(list.key);
     const cap = caps.get(list.key) ?? MAX_VISIBLE_LIST_ROWS;
-    for (const node of visibleSlice(list.nodes, cap)) {
+    for (const node of listWindow(list.nodes, cap).visible) {
       for (const child of node.lists) walk(child);
     }
   };
@@ -131,8 +227,10 @@ function countHidden(root: CensusList, caps: Map<string, number>): number {
   for (const key of visibleListKeys(root, caps)) {
     const info = infos.get(key);
     if (!info) continue;
-    const cap = caps.get(key) ?? MAX_VISIBLE_LIST_ROWS;
-    hidden += Math.max(0, info.list.nodes.length - cap);
+    // From the window rather than from the cap: a list that kept every row
+    // because the summary line was not worth its own space hides nothing.
+    const view = listWindow(info.list.nodes, caps.get(key) ?? MAX_VISIBLE_LIST_ROWS);
+    hidden += view.before.length + view.after.length;
   }
   return hidden;
 }
@@ -208,8 +306,11 @@ export function stickyRegionHeight(args: {
 /**
  * Rows of content scrolled off the top of a tail-pinned region.
  *
- * The region shows the end of the content, because the end is the live work.
- * Everything earlier is above the fold, and the gutter is what says so.
+ * A last resort, for the rows {@link planRunViewport} could not price — a
+ * wrapped label, a subgraph drawn before the census saw it. It gives them back
+ * off the top because each list's window already put the work in flight below
+ * its settled context, so the top is the cheapest end to lose. The gutter is
+ * what says rows went.
  */
 export function tailScrollOffset(naturalRows: number, visibleRows: number): number {
   return Math.max(0, Math.floor(naturalRows) - Math.max(0, Math.floor(visibleRows)));
@@ -250,13 +351,24 @@ export function scrollGutter(args: {
   );
 }
 
+/** Marks a summary line for rows held back above the window. */
+export const HIDDEN_ABOVE_GLYPH = "▲";
+
+/** And below it — the two ends of a window need telling apart. */
+export const HIDDEN_BELOW_GLYPH = "▼";
+
 /**
- * What a truncated sibling list is not showing, as one line.
+ * What a truncated sibling list is not showing at one end, as one line.
  *
  * Reports by outcome rather than by position: "42 done" is the fact an operator
- * wants, and "rows 1–42" is the fact a scrollbar already carries.
+ * wants, and "rows 1–42" is the fact a scrollbar already carries. The glyph is
+ * what says which end, since the same counts read very differently above the
+ * window ("42 done" — work behind us) and below it ("6 more" — work to come).
  */
-export function hiddenSiblingsLine(hiddenStatuses: readonly string[], glyph: string = "▲"): string {
+export function hiddenSiblingsLine(
+  hiddenStatuses: readonly string[],
+  glyph: string = HIDDEN_ABOVE_GLYPH
+): string {
   if (hiddenStatuses.length === 0) return "";
   let done = 0;
   let failed = 0;

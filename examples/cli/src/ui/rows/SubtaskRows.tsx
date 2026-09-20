@@ -16,7 +16,7 @@ import {
   ownershipWrapperStatus,
   runAggregateProgress,
 } from "../model/runRowModel";
-import { hiddenSiblingsLine } from "../model/runViewport";
+import { HIDDEN_ABOVE_GLYPH, HIDDEN_BELOW_GLYPH, hiddenSiblingsLine } from "../model/runViewport";
 import type { CliTaskLine, IterationSlotRow } from "../taskGraphCliSubscriptions";
 import { mergeLiveIterationGraphs, visibleIterationSlots } from "../taskGraphCliSubscriptions";
 import { iterationGroupKey, iterationListKey } from "../useRunCensus";
@@ -38,13 +38,18 @@ import { useTaskUsageLine } from "./useTaskUsageLine";
  */
 const MAX_SUBTASK_DEPTH = 2;
 
-/** One line naming the siblings a list is holding back. */
+/** One line naming the siblings a list is holding back at one end of its window. */
 function HiddenSiblingsLine({
   hidden,
+  glyph = HIDDEN_ABOVE_GLYPH,
 }: {
   readonly hidden: readonly CliTaskLine[];
+  readonly glyph?: string;
 }): React.ReactElement | null {
-  const text = hiddenSiblingsLine(hidden.map((row) => row.status));
+  const text = hiddenSiblingsLine(
+    hidden.map((row) => row.status),
+    glyph
+  );
   if (!text) return null;
   return <Text dimColor>{text}</Text>;
 }
@@ -244,7 +249,7 @@ export function SubtaskRows({
   variant = "compact",
 }: SubtaskRowsProps): React.ReactElement | null {
   const showChrome = variant === "chrome";
-  const { visible, hidden } = useVisibleRows(listKey, rows);
+  const { visible, before, after } = useVisibleRows(listKey, rows);
 
   if (rows.length === 0 && !(showChrome && overallProgress !== undefined)) return null;
 
@@ -256,7 +261,7 @@ export function SubtaskRows({
           progress={runAggregateProgress(overallProgress, rows)}
         />
       )}
-      <HiddenSiblingsLine hidden={hidden} />
+      <HiddenSiblingsLine hidden={before} />
       {visible.map((t) => (
         <SubtaskRow
           key={t.id}
@@ -267,6 +272,7 @@ export function SubtaskRows({
           depth={depth}
         />
       ))}
+      <HiddenSiblingsLine hidden={after} glyph={HIDDEN_BELOW_GLYPH} />
     </Box>
   );
 

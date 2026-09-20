@@ -30,9 +30,12 @@ interface MeasuredSize {
  * rows arrive, holds when they leave (the extra rows are simply blank), and
  * comes back down only when the window itself does.
  *
- * When content still overflows, the region shows its tail — the live work sorts
- * last — and draws a one-column gutter beside it. The gutter costs no rows,
- * which matters most exactly when rows are what ran out.
+ * The plan sizes the rows to the region, so what is left to clip here is what
+ * the plan could not see: a label that wrapped, a subgraph the rows drew before
+ * the census walked it. The region gives that back off the top, where the rows
+ * are the settled context above each list's window rather than the work in
+ * flight inside it, and draws a one-column gutter beside what remains. The
+ * gutter costs no rows, which matters most exactly when rows are what ran out.
  */
 export function ScrollRegion({
   budgetRows,
