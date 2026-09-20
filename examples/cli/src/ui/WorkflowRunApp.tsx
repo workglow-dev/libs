@@ -14,7 +14,7 @@ import { RunViewportProvider, useVisibleRows } from "./components/RunViewport";
 import { ScrollRegion } from "./components/ScrollRegion";
 import { HumanInteractionHost } from "./HumanInteractionHost";
 import { runAggregateProgress } from "./model/runRowModel";
-import { hiddenSiblingsLine, planRunViewport } from "./model/runViewport";
+import { HIDDEN_BELOW_GLYPH, hiddenSiblingsLine, planRunViewport } from "./model/runViewport";
 import { ChatTaskRow } from "./rows/ChatTaskRow";
 import { DefaultTaskRow } from "./rows/DefaultTaskRow";
 import { pickRenderer } from "./rows/pickRenderer";
@@ -140,11 +140,15 @@ function RootTaskRows({
   readonly rows: readonly CliTaskLine[];
   readonly iterationSlots: ReadonlyMap<string, IterationSlotRow[]>;
 }): React.ReactElement {
-  const { visible, hidden } = useVisibleRows("", rows);
-  const hiddenLine = hiddenSiblingsLine(hidden.map((row) => row.status));
+  const { visible, before, after } = useVisibleRows("", rows);
+  const beforeLine = hiddenSiblingsLine(before.map((row) => row.status));
+  const afterLine = hiddenSiblingsLine(
+    after.map((row) => row.status),
+    HIDDEN_BELOW_GLYPH
+  );
   return (
     <Box flexDirection="column">
-      {hiddenLine ? <Text dimColor>{hiddenLine}</Text> : null}
+      {beforeLine ? <Text dimColor>{beforeLine}</Text> : null}
       {visible.map((t) => {
         const taskInstance = graph.getTasks().find((x) => String(x.id) === t.id);
         // Every id in rows comes from graph.getTasks(), so this lookup should
@@ -166,6 +170,7 @@ function RootTaskRows({
           />
         );
       })}
+      {afterLine ? <Text dimColor>{afterLine}</Text> : null}
     </Box>
   );
 }

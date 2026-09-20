@@ -407,11 +407,18 @@ terminal runs. Three load-bearing properties:
   own children run is an ownership wrapper (`context.own(new Workflow())`) and is counted
   as scaffolding rather than as a task that can never land. `runViewport` turns that tree
   into one plan of per-list caps, shrinking the **deepest** list first so a Map's own row
-  survives to explain the detail beneath it, and the region drawing them holds a
-  high-water height: it grows with its content, never shrinks on its own, and is capped by
-  the window — a footer that slides up the screen whenever a list gets shorter is a footer
-  nobody can read. What still overflows is tail-pinned behind a one-column gutter, which
-  costs no rows at exactly the moment rows ran out. `adoptPolledProgress` is the third:
+  survives to explain the detail beneath it. Each cap is spent as a **window over the work
+  in flight**, not as the head or the tail of the list: rows sort completed → running →
+  pending, so for a graph that runs in order the tail is work that has not started and the
+  head is work that finished minutes ago — the running row sat off screen above both, and a
+  step landing scrolled it no closer. The window sits on the running rows with one settled
+  row of context above them, walks forward as steps land, and names what it holds back at
+  each end. The region drawing them holds a high-water height: it grows with its content,
+  never shrinks on its own, and is capped by the window — a footer that slides up the screen
+  whenever a list gets shorter is a footer nobody can read. What the plan could not price (a
+  wrapped label, a subgraph the rows drew before the census walked it) is given back off the
+  top, where each list keeps its settled context, behind a one-column gutter which costs no
+  rows at exactly the moment rows ran out. `adoptPolledProgress` is the third:
   `Task.progress` initialises to `0` and the runner re-stamps `0` at start, neither
   announced and neither a measurement — the graph needs a number in the denominator of
   its average — so a row (and `runAggregateProgress` for the run's own bar) takes a zero
