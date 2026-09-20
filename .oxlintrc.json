@@ -231,17 +231,32 @@
                 "allowTypeImports": true,
                 "message": "Import effort helpers from @workglow/ai/worker. The root barrel pulls all task classes and a second copy of AiProviderRegistry / CheckpointRegistry into the worker bundle."
               },
-              // Blocked WHOLESALE rather than by importNames: every export of
-              // this package registers services into the global registry, so a
-              // name list would be the whole surface and would drift the moment
-              // one was added.
+              // Only `bootstrapWorkglow` touches the global registry.
+              // `createOrchestrationContext` builds a fresh `Container`, and
+              // `registerAllDefaults(registry)` mutates only what it is handed —
+              // both legitimate against a registry the run-fn owns.
               {
                 "name": "@workglow/bootstrap",
+                "importNames": ["bootstrapWorkglow"],
                 "message": "A run-fn executes in a worker with its own globalServiceRegistry, so bootstrapWorkglow mutates a registry the main thread never sees. Resolve the services in the task class (e.g. AiTask.getJobInput()) and pass them through the serialized job input."
               },
               {
                 "name": "workglow/bootstrap",
+                "importNames": ["bootstrapWorkglow"],
                 "message": "A run-fn executes in a worker with its own globalServiceRegistry, so bootstrapWorkglow mutates a registry the main thread never sees. Resolve the services in the task class (e.g. AiTask.getJobInput()) and pass them through the serialized job input."
+              },
+              // `packages/workglow/src/common.ts` does `export * from
+              // "./bootstrap"` and also re-exports `@workglow/util`, so every name
+              // restricted above is one specifier away through the root barrel.
+              {
+                "name": "workglow",
+                "importNames": [
+                  "bootstrapWorkglow",
+                  "globalServiceRegistry",
+                  "getGlobalCredentialStore",
+                  "setGlobalCredentialStore"
+                ],
+                "message": "The workglow root barrel re-exports both @workglow/bootstrap and @workglow/util. Main-thread-only state is unavailable in workers. Resolve it in the task class (e.g. AiTask.getJobInput()) and pass it through the serialized job input."
               }
             ]
           }
