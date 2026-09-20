@@ -27,7 +27,7 @@ const DEEPSEEK_PRO: ModelPricing = {
 const DEEPSEEK_FLASH_OFF_PEAK_RATES = { input: 0.15, output: 0.6, cached: 0.003 } as const;
 
 /**
- * DeepSeek-V4.1-Flash off-peak windows. Peak is 01:00–04:00 and 06:00–10:00 UTC
+ * DeepSeek Flash off-peak windows. Peak is 01:00–04:00 and 06:00–10:00 UTC
  * weekdays; everything else is half those rates. These two clock windows cover
  * the daily peak gaps; they cannot drop weekend mornings, which the published
  * table also treats as off-peak.
@@ -37,7 +37,7 @@ const DEEPSEEK_FLASH_OFF_PEAK: ModelTimingTier[] = [
   { start: "04:00", end: "06:00", pricing: { ...DEEPSEEK_FLASH_OFF_PEAK_RATES } },
 ];
 
-/** Peak list rates for DeepSeek-V4.1-Flash; aliases share this card. */
+/** Peak list rates for DeepSeek Flash; the dated and versioned ids share this card. */
 const DEEPSEEK_FLASH: ModelPricing = {
   currency: "USD",
   input: 0.3,
@@ -52,7 +52,6 @@ const DEEPSEEK_FLASH: ModelPricing = {
 export const DEEPSEEK_PRICING: Record<string, ModelPricing> = {
   "deepseek-flash": DEEPSEEK_FLASH,
   "deepseek-v4-flash": DEEPSEEK_FLASH,
-  "deepseek-v4.1-flash": DEEPSEEK_FLASH,
   "deepseek-v4-flash-0731": DEEPSEEK_FLASH,
   "deepseek-v4-pro-0813": DEEPSEEK_PRO,
   "deepseek-v4-pro": DEEPSEEK_PRO,
