@@ -33,9 +33,36 @@ if (!parentPort) {
 
 const post = (message, transfer) => parentPort.postMessage(message, transfer);
 
+/**
+ * Aborts that arrived before the call they cancel, by request id.
+ *
+ * `WorkerManager` posts the abort for an already-aborted signal *before* it
+ * posts the call, and `WorkerServerBase` parks it (`consumePendingAbort`). A
+ * fixture that dropped it would leave `hang` running and report a working
+ * path as a timeout.
+ */
+const pendingAborts = new Set();
+
+const postAborted = (id) =>
+  post({
+    id,
+    type: "error",
+    data: { message: "aborted by caller", name: "AbortError", stack: "AbortError: aborted" },
+  });
+
 parentPort.addEventListener("message", (event) => {
   const { id, type, functionName, args } = event.data;
+
+  if (type === "abort") {
+    pendingAborts.add(id);
+    return;
+  }
   if (type !== "call") return;
+
+  if (pendingAborts.delete(id)) {
+    postAborted(id);
+    return;
+  }
 
   switch (functionName) {
     case "echo": {
@@ -52,6 +79,10 @@ parentPort.addEventListener("message", (event) => {
     case "withProgress": {
       post({ id, type: "progress", data: { progress: 42, message: "halfway", details: { i: 1 } } });
       post({ id, type: "complete", data: "done" });
+      return;
+    }
+    case "hang": {
+      // Never answers on its own: only an abort resolves it.
       return;
     }
     case "boom": {
@@ -78,7 +109,7 @@ parentPort.addEventListener("message", (event) => {
 
 post({
   type: "ready",
-  functions: ["echo", "vector", "withProgress", "boom"],
+  functions: ["echo", "vector", "withProgress", "boom", "hang"],
   streamFunctions: [],
   previewFunctions: [],
 });

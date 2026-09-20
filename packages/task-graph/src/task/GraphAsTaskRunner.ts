@@ -4,9 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { getLogger } from "@workglow/util";
 import { bridgeSubGraphTaskEvents } from "../task-graph/SubGraphEventBridge";
+import type { TaskGraph } from "../task-graph/TaskGraph";
+import { taskGraphThreadPortabilityError } from "../task-graph/ThreadPortability";
 import type { GraphResultArray } from "../task-graph/TaskGraphRunner";
 import type { GraphAsTask, GraphAsTaskConfig } from "./GraphAsTask";
+import type { ISubGraphDispatcher, SubGraphRunOptionsData } from "./SubGraphDispatch";
+import { SUBGRAPH_DISPATCHER } from "./SubGraphDispatch";
 import type { TaskRunContext } from "./TaskRunContext";
 import { TaskRunner } from "./TaskRunner";
 import type { TaskInput, TaskOutput } from "./TaskTypes";
@@ -43,6 +48,26 @@ export class GraphAsTaskRunner<
     const unbridge = parent ? bridgeSubGraphTaskEvents(this.task.subGraph!, parent) : () => {};
 
     try {
+      // Off-thread when asked for and possible; the subgraph is serialized once
+      // and rebuilt on the far side. Events bridged above stay local to this
+      // thread in that case — see the streaming path for what does cross.
+      const dispatcher = this.threadDispatcherFor(this.task.subGraph!, this.task.executionMode);
+      if (dispatcher !== undefined) {
+        return (await dispatcher.runSubGraph(
+          {
+            graph: this.task.subGraph!.toJSON(),
+            input,
+            runOptions: this.serializableRunOptions(),
+          },
+          {
+            signal: this.currentCtx?.abortController.signal,
+            onProgress: (progress, message) => {
+              void this.handleProgress(progress, message);
+            },
+          }
+        )) as GraphResultArray<Output>;
+      }
+
       return await this.task.subGraph!.run<Output>(input, {
         parentSignal: this.currentCtx?.abortController.signal,
         outputCache: this.outputCache,
@@ -126,5 +151,95 @@ export class GraphAsTaskRunner<
       }
       return this.task.runOutputData as Output;
     }
+  }
+
+  /**
+   * The dispatcher a subgraph should use to leave this thread, or `undefined`
+   * to run in-process.
+   *
+   * Three things must hold, and each failure is a fallback rather than an
+   * error: asking to run off-thread is asking for an optimization, and a graph
+   * must produce the same result on a host that cannot honor it. Each reason
+   * is logged rather than swallowed, because "my threaded work is not using
+   * cores" is otherwise invisible — the run simply stays slow.
+   *
+   * Lives here rather than on the iterator runner so both compound shapes ask
+   * the question the same way; `mode` is whichever flag that subclass reads.
+   */
+  /**
+   * Like {@link threadDispatcherFor}, but also requires the dispatcher to
+   * implement streaming. A dispatcher without `runSubGraphStream` would have to
+   * buffer the whole subgraph output and hand it over at the end, which is the
+   * opposite of what a streaming port is for — so the run stays in-process,
+   * where the stream is real.
+   *
+   * Public because `GraphAsTask.executeStream` is on the task, not the runner.
+   */
+  public threadStreamDispatcherFor(
+    graph: TaskGraph,
+    mode: "inline" | "thread"
+  ): ISubGraphDispatcher | undefined {
+    const dispatcher = this.threadDispatcherFor(graph, mode);
+    if (dispatcher === undefined) return undefined;
+    if (typeof dispatcher.runSubGraphStream !== "function") {
+      getLogger().debug(
+        `${this.task.type}: dispatcher cannot stream, running in-process so the subgraph's streaming ports stay live`,
+        { taskId: this.task.id }
+      );
+      return undefined;
+    }
+    return dispatcher;
+  }
+
+  /**
+   * The slice of this run's config that can cross a thread as data.
+   *
+   * Built in one place so the three dispatch sites cannot drift: a subgraph
+   * must not run under different semantics merely because it ran elsewhere.
+   *
+   * Public for the same reason as {@link threadStreamDispatcherFor}:
+   * `GraphAsTask.executeStream` is on the task, not the runner.
+   */
+  public serializableRunOptions(): SubGraphRunOptionsData {
+    const { noAccumulation, streamHighWaterBytes, streamGateWatchdogMs } = this.streamRunOptions;
+    return {
+      enforceEntitlements: this.task.runConfig?.enforceEntitlements,
+      noAccumulation,
+      streamHighWaterBytes,
+      streamGateWatchdogMs,
+    };
+  }
+
+  protected threadDispatcherFor(
+    graph: TaskGraph,
+    mode: "inline" | "thread"
+  ): ISubGraphDispatcher | undefined {
+    if (mode !== "thread") return undefined;
+
+    const dispatcher = this.registry?.has(SUBGRAPH_DISPATCHER)
+      ? this.registry.get(SUBGRAPH_DISPATCHER)
+      : undefined;
+    if (dispatcher === undefined) {
+      getLogger().debug(
+        `${this.task.type}: off-thread execution requested but no SUBGRAPH_DISPATCHER is registered — running in-process`,
+        { taskId: this.task.id }
+      );
+      return undefined;
+    }
+
+    // Checked against the registry the *dispatcher* rebuilds through, not this
+    // one: a worker routinely binds a fuller TASK_CONSTRUCTORS map than the
+    // host CLI exposes, and asking the wrong map would refuse a graph the far
+    // side could have rebuilt perfectly well.
+    const reason = taskGraphThreadPortabilityError(graph, this.registry);
+    if (reason !== undefined) {
+      getLogger().warn(
+        `${this.task.type}: subgraph is not thread-portable, running in-process — ${reason}`,
+        { taskId: this.task.id }
+      );
+      return undefined;
+    }
+
+    return dispatcher;
   }
 }

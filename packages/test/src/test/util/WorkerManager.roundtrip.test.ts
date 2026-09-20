@@ -107,4 +107,17 @@ describe("WorkerManager over a real worker thread", () => {
     await workers.terminateWorker("roundtrip");
     await expect(workers.callWorkerFunction("roundtrip", "echo", [])).rejects.toThrow(/not found/);
   });
+
+  it("honours a signal already aborted before the call was made", async () => {
+    const workers = registerFixtureWorker("pre-aborted");
+
+    // `callWorkerFunction` awaits worker startup before attaching its abort
+    // listener, and `addEventListener` on an already-aborted signal never
+    // fires. Without an explicit `.aborted` check the call would be sent and
+    // the worker would run it to completion with nothing awaiting the result —
+    // the same hazard `TaskRunContext` documents for parent signals.
+    await expect(
+      workers.callWorkerFunction("pre-aborted", "hang", [], { signal: AbortSignal.abort() })
+    ).rejects.toThrow(/abort/i);
+  });
 });

@@ -5,6 +5,8 @@
  */
 
 import { createServiceToken } from "../di";
+import { BackpressureGate } from "./BackpressureGate";
+import { streamChunkCost } from "./streamCost";
 import { stackScrubRoots, workerErrorPayload } from "./scrubStack";
 
 /** Service token for the platform-specific WorkerServer instance. */
@@ -209,7 +211,7 @@ export class WorkerServerBase {
       input: unknown,
       model: unknown,
       signal: AbortSignal,
-      emit: (event: unknown) => void,
+      emit: (event: unknown) => void | Promise<void>,
       outputSchema?: unknown,
       session?: unknown
     ) => Promise<void>
@@ -389,7 +391,7 @@ export class WorkerServerBase {
       input: unknown,
       model: unknown,
       signal: AbortSignal,
-      emit: (event: unknown) => void,
+      emit: (event: unknown) => void | Promise<void>,
       outputSchema?: unknown,
       session?: unknown
     ) => Promise<void>
@@ -398,17 +400,36 @@ export class WorkerServerBase {
   }
 
   // Handle messages from the main thread
+  /**
+   * Per-request backpressure gates, for callers that opened a credit window.
+   *
+   * A stream has no natural backpressure across a message port: `postMessage`
+   * always accepts, so a worker producing faster than the main thread consumes
+   * simply moves the backlog into the caller's memory. When the call carries a
+   * `creditWindow`, the producer charges this gate per chunk and parks once the
+   * window is full, and the caller credits cost back as it consumes.
+   *
+   * Absent a window the map stays empty and emit behaves exactly as before —
+   * a caller on an older protocol must not park forever waiting for credits it
+   * will never send.
+   */
+  private streamGates: Map<string, BackpressureGate> = new Map();
+
   async handleMessage(event: { type: string; data: any }) {
-    const { id, type, functionName, args, stream, run, preview } = event.data;
+    const { id, type, functionName, args, stream, run, preview, creditWindow, cost } = event.data;
     if (type === "abort") {
       return await this.handleAbort(id);
+    }
+    if (type === "stream_credit") {
+      this.streamGates.get(id)?.credit(typeof cost === "number" ? cost : 1);
+      return;
     }
     if (type === "call") {
       if (stream) {
         return await this.handleStreamCall(id, functionName, args);
       }
       if (run) {
-        return await this.handleRunCall(id, functionName, args);
+        return await this.handleRunCall(id, functionName, args, creditWindow);
       }
       if (preview) {
         return await this.handlePreviewCall(id, functionName, args);
@@ -431,6 +452,11 @@ export class WorkerServerBase {
       const controller = this.requestControllers.get(id);
       controller?.abort();
       this.requestControllers.delete(id);
+      // A producer parked on a full credit window would otherwise never
+      // observe the abort: it is waiting on a credit the caller has stopped
+      // sending, not on the signal.
+      this.streamGates.get(id)?.close();
+      this.streamGates.delete(id);
       // Send error response back to main thread so the promise rejects
       this.postError(id, "Operation aborted");
       this.scheduleCompletedRequestCleanup(id);
@@ -649,7 +675,8 @@ export class WorkerServerBase {
   async handleRunCall(
     id: string,
     functionName: string,
-    [input, model, outputSchema, session]: [any, any, any, any]
+    [input, model, outputSchema, session]: [any, any, any, any],
+    creditWindow?: number
   ) {
     if (!(functionName in this.runFunctions)) {
       this.postError(id, `Run function ${functionName} not found`);
@@ -660,9 +687,26 @@ export class WorkerServerBase {
     this.consumePendingAbort(id, abortController);
     const fn = this.runFunctions[functionName];
 
-    const emit = (event: unknown) => {
-      if (this.completedRequests.has(id)) return;
+    // Only when the caller opened a window. Without one there is nobody to
+    // credit cost back, so a gate would park the producer permanently.
+    const gate =
+      typeof creditWindow === "number" && creditWindow > 0
+        ? new BackpressureGate(creditWindow)
+        : undefined;
+    if (gate !== undefined) this.streamGates.set(id, gate);
+
+    /**
+     * Returns a promise so a disciplined run-fn can `await emit(...)` and be
+     * paced by the consumer. Callers that ignore the result keep today's
+     * fire-and-forget behaviour — the chunk is still posted, it just does not
+     * wait — which is what keeps every existing provider run-fn working
+     * unchanged.
+     */
+    const emit = (event: unknown): Promise<void> => {
+      if (this.completedRequests.has(id)) return Promise.resolve();
       this.postStreamChunk(id, event);
+      if (gate === undefined) return Promise.resolve();
+      return gate.charge(streamChunkCost(event));
     };
 
     try {
@@ -671,6 +715,10 @@ export class WorkerServerBase {
     } catch (error) {
       this.postError(id, error);
     } finally {
+      // Release anything still parked before the request is forgotten: a
+      // producer awaiting credit after its consumer has gone would never wake.
+      gate?.close();
+      this.streamGates.delete(id);
       this.requestControllers.delete(id);
       this.scheduleCompletedRequestCleanup(id);
     }

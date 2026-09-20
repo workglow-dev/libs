@@ -7,7 +7,7 @@
 import type { ResourceScope, ServiceRegistry } from "@workglow/util";
 import { getLogger } from "@workglow/util";
 import type { TaskOutputRepository } from "../storage/TaskOutputRepository";
-import { BackpressureGate } from "../task/BackpressureGate";
+import { BackpressureGate } from "@workglow/util";
 import type { ITask } from "../task/ITask";
 import type { StreamEvent, StreamMode, Usage } from "../task/StreamTypes";
 import {

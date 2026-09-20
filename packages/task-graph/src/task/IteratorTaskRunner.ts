@@ -16,6 +16,7 @@ import {
   type IteratorTask,
   type IteratorTaskConfig,
 } from "./IteratorTask";
+import type { SubGraphRunResults } from "./SubGraphDispatch";
 import { TaskAbortedError } from "./TaskError";
 import type { TaskRunContext } from "./TaskRunContext";
 import type { TaskInput, TaskOutput } from "./TaskTypes";
@@ -317,13 +318,30 @@ export class IteratorTaskRunner<
     const unbridge = parentGraph ? bridgeSubGraphTaskEvents(graphClone, parentGraph) : () => {};
 
     try {
-      const results = await graphClone.run<TaskOutput>(input as TaskInput, {
-        parentSignal: this.currentCtx?.abortController.signal,
-        outputCache: this.outputCache,
-        registry: this.registry,
-        resourceScope: this.resourceScope,
-        ...this.streamRunOptions,
-      });
+      const dispatcher = this.threadDispatcherFor(graphClone, this.task.concurrencyMode);
+      const results: SubGraphRunResults =
+        dispatcher === undefined
+          ? await graphClone.run<TaskOutput>(input as TaskInput, {
+              parentSignal: this.currentCtx?.abortController.signal,
+              outputCache: this.outputCache,
+              registry: this.registry,
+              resourceScope: this.resourceScope,
+              ...this.streamRunOptions,
+            })
+          : await dispatcher.runSubGraph(
+              {
+                graph: graphClone.toJSON(),
+                input: input as TaskInput,
+                runOptions: this.serializableRunOptions(),
+              },
+              {
+                signal: this.currentCtx?.abortController.signal,
+                // Routed to the same handler the in-process path's
+                // `graph_progress` subscription feeds, so an iteration reports
+                // identically whichever side of the boundary it ran on.
+                onProgress: onGraphProgress,
+              }
+            );
 
       if (results.length === 0) {
         return undefined;

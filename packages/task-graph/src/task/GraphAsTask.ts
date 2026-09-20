@@ -17,7 +17,7 @@ import {
 import { computeGraphInputSchema, computeGraphOutputSchema } from "../task-graph/GraphSchemaUtils";
 import { bridgeSubGraphTaskEvents } from "../task-graph/SubGraphEventBridge";
 import type { TaskGraph } from "../task-graph/TaskGraph";
-import type { CompoundMergeStrategy } from "../task-graph/TaskGraphRunner";
+import type { CompoundMergeStrategy, GraphResultArray } from "../task-graph/TaskGraphRunner";
 import { PROPERTY_ARRAY } from "../task-graph/TaskGraphRunner";
 import type { CreateLoopWorkflow } from "../task-graph/WorkflowFactories";
 import { GraphAsTaskRunner } from "./GraphAsTaskRunner";
@@ -35,6 +35,7 @@ export const graphAsTaskConfigSchema = {
   properties: {
     ...TaskConfigSchema["properties"],
     compoundMerge: { type: "string", "x-ui-hidden": true },
+    executionMode: { type: "string", enum: ["inline", "thread"] },
   },
   additionalProperties: false,
 } as const satisfies DataPortSchema;
@@ -43,6 +44,17 @@ export type GraphAsTaskConfig<Input extends TaskInput = TaskInput> = TaskConfig<
   /** subGraph is extracted in the constructor before validation — not in the JSON schema */
   subGraph?: TaskGraph;
   compoundMerge?: CompoundMergeStrategy;
+  /**
+   * Where the subgraph runs. `"inline"` (the default) is this thread;
+   * `"thread"` dispatches it through the registered `SUBGRAPH_DISPATCHER`.
+   *
+   * A request, not a guarantee: without a dispatcher, or with a subgraph that
+   * is not thread-portable, the run falls back inline with the reason logged.
+   * The same caution as `IteratorTaskConfig.concurrencyMode` applies — ask for
+   * it where the subgraph is CPU the host owns, not where it fetches over a
+   * rate-limited host.
+   */
+  executionMode?: "inline" | "thread";
 };
 
 /**
@@ -112,6 +124,10 @@ export class GraphAsTask<
 
   public static override configSchema(): DataPortSchema {
     return graphAsTaskConfigSchema;
+  }
+
+  public get executionMode(): "inline" | "thread" {
+    return (this.config as GraphAsTaskConfig).executionMode ?? "inline";
   }
 
   public get compoundMerge(): CompoundMergeStrategy {
@@ -252,6 +268,65 @@ export class GraphAsTask<
 
     // Run the subgraph and forward streaming events from ending nodes
     if (this.hasChildren()) {
+      // Off-thread, when asked for and the dispatcher can stream. This is the
+      // one path where a subgraph's streaming ports genuinely cross a thread:
+      // a generator is pull-paced by whoever consumes it, so the downstream
+      // read rate reaches all the way back through the dispatcher's handoff
+      // channel to the worker's credit window. Nothing here buffers.
+      const dispatcher = this.runner.threadStreamDispatcherFor(this.subGraph, this.executionMode);
+      if (dispatcher !== undefined) {
+        let results: GraphResultArray<Output> | undefined;
+        for await (const item of dispatcher.runSubGraphStream!(
+          {
+            graph: this.subGraph.toJSON(),
+            input,
+            runOptions: this.runner.serializableRunOptions(),
+          },
+          { signal: context.signal }
+        )) {
+          if (item.kind === "results") {
+            results = item.results as GraphResultArray<Output>;
+            continue;
+          }
+          if (item.kind === "event") {
+            // Replay the subgraph's per-task events onto the parent graph,
+            // which is what `bridgeSubGraphTaskEvents` does for an in-process
+            // subgraph. Without this a dispatched group collapses into one
+            // opaque row in a progress UI, its children invisible.
+            const parent = this.parentGraph;
+            if (parent !== undefined) {
+              try {
+                // The emitter is typed per event name; a forwarded event
+                // carries its arguments as data, so the pairing is checked at
+                // the boundary that built it rather than here.
+                (parent.emit as (name: string, ...args: unknown[]) => void)(
+                  item.event.name,
+                  ...item.event.args
+                );
+              } catch (err) {
+                getLogger().error("forwarded subgraph event listener threw", {
+                  event: item.event.name,
+                  error: err,
+                });
+              }
+            }
+            continue;
+          }
+          const event = item.chunk.event;
+          // Same exclusions the in-process path applies: a child's `finish` is
+          // its own result and its `usage` its own spend, both already
+          // attributed to that child rather than to this wrapper.
+          if (event.type === "finish" || event.type === "usage") continue;
+          yield event as StreamEvent<Output>;
+        }
+        this.runOutputData = this.subGraph.mergeExecuteOutputsToRunOutput(
+          results ?? [],
+          this.compoundMerge
+        );
+        yield { type: "finish", data: this.runOutputData as Output } as StreamEvent<Output>;
+        return;
+      }
+
       const endingNodeIds = new Set<unknown>();
       const tasks = this.subGraph.getTasks();
       for (const task of tasks) {

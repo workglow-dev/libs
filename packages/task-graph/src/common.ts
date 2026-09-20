@@ -24,6 +24,7 @@ export * from "./task-graph/StreamPump";
 export * from "./task-graph/SubGraphEventBridge";
 export * from "./task-graph/TaskGraph";
 export * from "./task-graph/TaskGraphJsonShape";
+export * from "./task-graph/ThreadPortability";
 export * from "./task-graph/TaskGraphEvents";
 export * from "./task-graph/TaskGraphRunner";
 
@@ -47,9 +48,14 @@ export * from "./task-graph/transforms";
 export * from "./task-graph/TransformTypes";
 
 export * from "./cache";
-export * from "./task/BackpressureGate";
+// Moved to @workglow/util (a pure park/wake primitive with no graph
+// knowledge, now also used by the worker protocol, which sits upstream of
+// this package). Re-exported so it stays on this package's public surface.
+export { BackpressureGate } from "@workglow/util";
 export * from "./task/CacheCoordinator";
 export * from "./task/StreamProcessor";
+export * from "./task/SubGraphDispatch";
+export * from "./task/WorkerSubGraphDispatcher";
 export * from "./task/TaskRunContext";
 
 export * from "./task";

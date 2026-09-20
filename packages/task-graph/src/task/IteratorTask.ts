@@ -81,6 +81,7 @@ export const iteratorTaskConfigSchema = {
   properties: {
     ...graphAsTaskConfigSchema["properties"],
     concurrencyLimit: { type: "integer", minimum: 1 },
+    concurrencyMode: { type: "string", enum: ["inline", "thread"] },
     batchSize: { type: "integer", minimum: 1 },
     maxIterations: {
       oneOf: [
@@ -100,6 +101,27 @@ export type IteratorTaskConfig<Input extends TaskInput = TaskInput> = GraphAsTas
    * @default undefined (unlimited)
    */
   readonly concurrencyLimit?: number;
+
+  /**
+   * Where each iteration's subgraph runs.
+   *
+   * `"inline"` (the default) runs it on this thread, concurrently with its
+   * siblings but sharing one core: `concurrencyLimit` interleaves waiting, it
+   * does not add compute.
+   *
+   * `"thread"` asks for it to be dispatched off-thread through the registered
+   * {@link SUBGRAPH_DISPATCHER}, so `concurrencyLimit` becomes a real
+   * parallelism width. It is a *request*, not a guarantee — an iteration falls
+   * back to `"inline"`, with the reason logged, when no dispatcher is
+   * registered or the subgraph is not thread-portable (see
+   * {@link taskGraphThreadPortabilityError}). A graph must produce the same
+   * result either way, so only ask for it where the per-iteration work is CPU
+   * the host owns: a subgraph that fetches over a rate-limited host belongs on
+   * the thread holding the limiter.
+   *
+   * @default "inline"
+   */
+  readonly concurrencyMode?: "inline" | "thread";
 
   /**
    * Number of items per batch. When set, iteration indices are grouped into batches.
@@ -444,6 +466,10 @@ export abstract class IteratorTask<
   // ========================================================================
   // Execution Mode Configuration
   // ========================================================================
+
+  public get concurrencyMode(): "inline" | "thread" {
+    return this.config.concurrencyMode ?? "inline";
+  }
 
   public get concurrencyLimit(): number | undefined {
     return this.config.concurrencyLimit;

@@ -7,6 +7,7 @@
 import { createServiceToken, globalServiceRegistry } from "../di";
 import { getLogger } from "../logging";
 import { rehydrateWorkerError } from "./scrubStack";
+import { streamChunkCost } from "./streamCost";
 
 export class WorkerManager {
   private workers: Map<string, Worker> = new Map();
@@ -246,6 +247,34 @@ export class WorkerManager {
     }
   }
 
+  /**
+   * Turns a worker crash into a rejection for one in-flight request.
+   *
+   * A thread that dies — an uncaught throw, a failed start — emits `error` and
+   * then answers nothing. Without this the request's promise is never settled
+   * and the caller waits forever, which is the one outcome worse than failing:
+   * a hang has no stack, no message, and no end. Rejecting instead makes a
+   * crashed worker behave exactly like the task throwing, which is what every
+   * caller already knows how to handle.
+   *
+   * Returns a detach to call from the request's own cleanup, so a long-lived
+   * worker does not accumulate one listener per call.
+   */
+  private onWorkerCrash(
+    worker: Worker,
+    workerName: string,
+    functionName: string,
+    reject: (error: Error) => void
+  ): () => void {
+    const handleCrash = (event: { message?: string; error?: unknown }) => {
+      const detail =
+        event?.message ?? (event?.error as Error | undefined)?.message ?? "unknown error";
+      reject(new Error(`Worker "${workerName}" crashed during "${functionName}": ${detail}`));
+    };
+    worker.addEventListener("error", handleCrash as (event: any) => void);
+    return () => worker.removeEventListener("error", handleCrash as (event: any) => void);
+  }
+
   async callWorkerFunction<T>(
     workerName: string,
     functionName: string,
@@ -298,15 +327,29 @@ export class WorkerManager {
           getLogger().info(`Worker ${workerName} function ${functionName} aborted.`);
         };
 
+        const detachCrash = this.onWorkerCrash(worker, workerName, functionName, reject);
+
         const cleanup = () => {
           worker.removeEventListener("message", handleMessage);
           options?.signal?.removeEventListener("abort", handleAbort);
+          detachCrash();
         };
 
         worker.addEventListener("message", handleMessage);
 
         if (options?.signal) {
+          // Listen first, then check: `addEventListener` on an already-aborted
+          // signal never fires. The window is real rather than theoretical —
+          // `ensureWorkerReady` above may have just spawned a thread and waited
+          // on its handshake, so a caller that aborted during startup would
+          // otherwise have its work run to completion in the worker, holding a
+          // slot and producing a result nothing is waiting for.
+          //
+          // Posting the abort before the `call` below is safe by design:
+          // `WorkerServerBase` parks an abort that beats its call and consumes
+          // it when the call lands (`consumePendingAbort`).
           options.signal.addEventListener("abort", handleAbort, { once: true });
+          if (options.signal.aborted) handleAbort();
         }
 
         // Note: We intentionally do NOT transfer TypedArrays from the main thread to the worker.
@@ -482,9 +525,15 @@ export class WorkerManager {
         getLogger().info(`Worker ${workerName} stream function ${functionName} aborted.`);
       };
 
+      const detachCrash = this.onWorkerCrash(worker, workerName, functionName, (error) => {
+        queue.push({ kind: "error", error });
+        notify();
+      });
+
       const cleanup = () => {
         worker.removeEventListener("message", handleMessage);
         options?.signal?.removeEventListener("abort", handleAbort);
+        detachCrash();
       };
 
       worker.addEventListener("message", handleMessage);
@@ -554,7 +603,25 @@ export class WorkerManager {
     workerName: string,
     functionName: string,
     args: unknown[],
-    options: { signal?: AbortSignal; emit: (event: T) => void }
+    options: {
+      signal?: AbortSignal;
+      /**
+       * Consumes one event. Returning a promise opts into pacing: with a
+       * `creditWindow` open, the worker is not credited for the event until
+       * that promise settles, so a slow consumer throttles the producer
+       * instead of accumulating its backlog here.
+       */
+      emit: (event: T) => void | Promise<void>;
+      /**
+       * Bound, in cost units, on how much emitted-but-unconsumed payload the
+       * worker may have in flight. Omit for the unbounded behaviour a caller
+       * that does not pace itself still gets.
+       *
+       * Cost is `streamChunkCost`: bytes for binary, characters for text, one
+       * per item otherwise.
+       */
+      creditWindow?: number;
+    }
   ): Promise<void> {
     await this.ensureWorkerReady(workerName);
     const worker = this.workers.get(workerName);
@@ -574,7 +641,24 @@ export class WorkerManager {
         const { id, type, data } = event.data;
         if (id !== requestId) return;
         if (type === "stream_chunk") {
-          options.emit(data as T);
+          const consumed = options.emit(data as T);
+          if (options.creditWindow !== undefined) {
+            // Credit once the consumer has actually taken the event. Credits
+            // are plain numbers, so settling out of order across concurrent
+            // emits is harmless — only the total matters to the window.
+            const cost = streamChunkCost(data);
+            const release = () => {
+              try {
+                worker.postMessage({ id: requestId, type: "stream_credit", cost });
+              } catch {
+                // The worker is gone; its gate went with it.
+              }
+            };
+            // Credited even when the consumer throws: a refusal to consume
+            // must not strand the producer parked on a window that can never
+            // reopen. The throw still surfaces through the consumer's own path.
+            void Promise.resolve(consumed).then(release, release);
+          }
         } else if (type === "complete") {
           // `complete` carries undefined data — the protocol mirrors the stream
           // path's terminal message, with `data: undefined` indicating completion.
@@ -588,9 +672,14 @@ export class WorkerManager {
         worker.postMessage({ id: requestId, type: "abort" });
       };
 
+      const detachCrash = this.onWorkerCrash(worker, workerName, functionName, (error) =>
+        rejectFn(error)
+      );
+
       const cleanup = () => {
         worker.removeEventListener("message", handleMessage);
         options.signal?.removeEventListener("abort", handleAbort);
+        detachCrash();
       };
 
       worker.addEventListener("message", handleMessage);
@@ -602,7 +691,14 @@ export class WorkerManager {
         options.signal.addEventListener("abort", handleAbort, { once: true });
       }
 
-      worker.postMessage({ id: requestId, type: "call", functionName, args, run: true });
+      worker.postMessage({
+        id: requestId,
+        type: "call",
+        functionName,
+        args,
+        run: true,
+        creditWindow: options.creditWindow,
+      });
 
       try {
         await completion;

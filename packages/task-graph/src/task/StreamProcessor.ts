@@ -11,7 +11,7 @@ import type { CacheRegistry } from "../cache/CacheRegistry";
 import type { StreamPortCodec } from "../cache/streamCodec";
 import { getStreamPortCodec } from "../cache/streamCodec";
 import type { Taskish } from "../task-graph/Conversions";
-import { BackpressureGate } from "./BackpressureGate";
+import { BackpressureGate } from "@workglow/util";
 import type { ConfigNotApplicableToAnExistingTask, ITask } from "./ITask";
 import type { StreamEvent, StreamMode, Usage } from "./StreamTypes";
 import {

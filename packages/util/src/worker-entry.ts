@@ -24,6 +24,8 @@ export * from "./logging";
 // Platform-specific WorkerServer registration (Worker.browser/node/bun) is NOT
 // included here. The worker registration files must import @workglow/util to trigger
 // the side-effect that registers the WorkerServer implementation.
+export * from "./worker/BackpressureGate";
+export * from "./worker/streamCost";
 export * from "./worker/WorkerServerBase";
 export * from "./worker/WorkerManager";
 export * from "./worker/scrubStack";

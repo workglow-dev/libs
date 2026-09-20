@@ -40,8 +40,8 @@ describe("WorkerServerBase.handleRunCall protocol", () => {
   it("sends stream_chunk events then a 'complete' terminal message", async () => {
     const server = new WorkerServerBase();
     server.registerRunFunction("test.fn", async (_input, _model, _signal, emit) => {
-      emit({ type: "text-delta", textDelta: "hello" });
-      emit({ type: "finish", data: {} });
+      void emit({ type: "text-delta", textDelta: "hello" });
+      void emit({ type: "finish", data: {} });
     });
 
     await (server as any).handleRunCall("req-1", "test.fn", [
@@ -75,7 +75,7 @@ describe("WorkerServerBase.handleRunCall protocol", () => {
       async (_input, _model, _signal, emit, outputSchema, sessionId) => {
         receivedOutputSchema = outputSchema;
         receivedSessionId = sessionId;
-        emit({ type: "finish", data: {} });
+        void emit({ type: "finish", data: {} });
       }
     );
 
@@ -105,7 +105,7 @@ describe("WorkerServerBase.handleRunCall protocol", () => {
       extra: { tier: "standard" },
     };
     server.registerRunFunction("usage.fn", async (_input, _model, _signal, emit) => {
-      emit({ type: "finish", data: {}, usage } as any);
+      void emit({ type: "finish", data: {}, usage } as any);
     });
 
     await (server as any).handleRunCall("req-usage", "usage.fn", [

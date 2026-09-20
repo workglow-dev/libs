@@ -47,8 +47,8 @@ describe("WorkerServerBase.postStreamChunk transferables", () => {
   it("transfers binary-delta buffers and clones text-delta", async () => {
     const server = new WorkerServerBase();
     server.registerRunFunction("emitStuff", async (_i, _m, _sig, emit) => {
-      emit({ type: "binary-delta", port: "bytes", binaryDelta: new Uint8Array([1, 2, 3]) });
-      emit({ type: "text-delta", port: "text", textDelta: "hi" });
+      void emit({ type: "binary-delta", port: "bytes", binaryDelta: new Uint8Array([1, 2, 3]) });
+      void emit({ type: "text-delta", port: "text", textDelta: "hi" });
     });
 
     await server.handleMessage({
@@ -81,7 +81,7 @@ describe("WorkerServerBase.postStreamChunk transferables", () => {
   it("clones (does not transfer) an empty binary-delta payload", async () => {
     const server = new WorkerServerBase();
     server.registerRunFunction("emitEmpty", async (_i, _m, _sig, emit) => {
-      emit({ type: "binary-delta", port: "bytes", binaryDelta: new Uint8Array(0) });
+      void emit({ type: "binary-delta", port: "bytes", binaryDelta: new Uint8Array(0) });
     });
 
     await server.handleMessage({
@@ -107,7 +107,7 @@ describe("WorkerServerBase.postStreamChunk transferables", () => {
     structuredClone(bytes.buffer, { transfer: [bytes.buffer] });
     expect(bytes.buffer.byteLength).toBe(0);
     server.registerRunFunction("emitDetached", async (_i, _m, _sig, emit) => {
-      emit({ type: "binary-delta", port: "bytes", binaryDelta: bytes });
+      void emit({ type: "binary-delta", port: "bytes", binaryDelta: bytes });
     });
 
     await server.handleMessage({
@@ -144,7 +144,7 @@ describe("WorkerServerBase.postStreamChunk transferables", () => {
 
     const server = new WorkerServerBase();
     server.registerRunFunction("emitOwned", async (_i, _m, _sig, emit) => {
-      emit({ type: "binary-delta", port: "bytes", binaryDelta: new Uint8Array([4, 5]) });
+      void emit({ type: "binary-delta", port: "bytes", binaryDelta: new Uint8Array([4, 5]) });
     });
 
     await server.handleMessage({
@@ -172,7 +172,7 @@ describe("WorkerServerBase.postStreamChunk transferables", () => {
     const backing = new Uint8Array([9, 8, 7, 6, 5]);
     const view = backing.subarray(1, 3); // [8, 7]
     server.registerRunFunction("emitView", async (_i, _m, _sig, emit) => {
-      emit({ type: "binary-delta", port: "bytes", binaryDelta: view });
+      void emit({ type: "binary-delta", port: "bytes", binaryDelta: view });
     });
 
     await server.handleMessage({
