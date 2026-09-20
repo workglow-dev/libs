@@ -108,7 +108,7 @@ export abstract class SqlTabularMigrationApplier implements ITabularMigrationApp
           sqlType,
           nullable,
           hasDefault,
-          hasDefault ? this.literalSql(op.default!) : undefined
+          hasDefault ? this.defaultLiteralSql(op.default!, sqlType) : undefined
         );
         await this.executeSqlTx(sql, tx);
         return;
@@ -152,9 +152,15 @@ export abstract class SqlTabularMigrationApplier implements ITabularMigrationApp
    * Renders a JS literal as SQL. Strings are quoted with `'` doubling;
    * numbers / booleans / null are rendered raw. NaN / ±Infinity throw
    * rather than silently splicing as `"NaN"` / `"Infinity"` (neither is
-   * valid SQL). Objects throw — defaults must be finite primitives.
+   * valid SQL).
+   *
+   * Arrays render as the dialect's own array literal, because a column whose
+   * type IS an array needs an array default and `[]` is the common one — a
+   * list column added to a populated table cannot be NOT NULL without it.
+   * Everything else throws: a default must be a primitive or a list of them.
    */
   protected literalSql(value: unknown): string {
+    if (Array.isArray(value)) return this.arrayLiteralSql(value, undefined);
     if (value === null) return "NULL";
     if (typeof value === "string") return `'${value.replace(/'/g, "''")}'`;
     if (typeof value === "number") {
@@ -171,6 +177,55 @@ export abstract class SqlTabularMigrationApplier implements ITabularMigrationApp
     throw new Error(
       `Unsupported default value for tabular migration: ${typeof value} (${asText(value)})`
     );
+  }
+
+  /**
+   * An array default, in the dialect's own spelling.
+   *
+   * Postgres takes its array literal — `'{}'`, `'{"a","b"}'` — which the
+   * server coerces to whatever array type the column was declared as, so one
+   * rendering serves `text[]`, `integer[]` and the rest. Elsewhere the array
+   * is JSON, which is how a dialect without a native array type stores one.
+   *
+   * Elements must be primitives: an array of objects is not a default any
+   * dialect can express, and silently flattening one would put the wrong value
+   * on every existing row.
+   */
+  /**
+   * A default for a column whose SQL type is known.
+   *
+   * The type matters for arrays and only for arrays: the same `[]` is `'{}'`
+   * in a native `text[]` and `'[]'` in a `jsonb`, and `'{}'` in a jsonb column
+   * is an empty OBJECT — a silently wrong value on every existing row.
+   * `mapPostgresType` chooses between the two by element type, so the caller
+   * that mapped the column is the only one that knows which was picked.
+   */
+  protected defaultLiteralSql(value: unknown, sqlType: string): string {
+    if (Array.isArray(value)) return this.arrayLiteralSql(value, sqlType);
+    return this.literalSql(value);
+  }
+
+  protected arrayLiteralSql(value: readonly unknown[], sqlType: string | undefined): string {
+    for (const item of value) {
+      const kind = typeof item;
+      if (item !== null && kind !== "string" && kind !== "number" && kind !== "boolean") {
+        throw new Error(
+          `Unsupported array default for tabular migration: element of type ${kind} (${asText(item)})`
+        );
+      }
+    }
+    const quote = (text: string): string => `'${text.replace(/'/g, "''")}'`;
+    // A JSON column — which is where `mapPostgresType` sends an array whose
+    // element type has no native Postgres array (a VARCHAR(n), an object) —
+    // takes JSON, not an array literal.
+    const isNativeArray = sqlType !== undefined && sqlType.trimEnd().endsWith("[]");
+    if (this.dialectName() !== "postgres" || !isNativeArray) return quote(JSON.stringify(value));
+    const elements = value.map((item) => {
+      if (item === null) return "NULL";
+      if (typeof item === "string") return `"${item.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+      return String(item);
+    });
+    return quote(`{${elements.join(",")}}`);
   }
 
   /**
