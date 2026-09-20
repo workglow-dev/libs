@@ -22,6 +22,22 @@ import {
 } from "./sqlMigrationDdl";
 
 /**
+ * What an array default may hold. Anything else is refused: an array of
+ * objects is not a default any dialect can express.
+ */
+type ArrayDefaultElement = string | number | boolean | null;
+
+/**
+ * A predicate rather than a bare check, so the rendering below is handed
+ * elements it can stringify. `String()` on an `unknown` that reached here
+ * unvalidated writes `[object Object]` onto every existing row.
+ */
+function isArrayDefaultElement(item: unknown): item is ArrayDefaultElement {
+  const kind = typeof item;
+  return item === null || kind === "string" || kind === "number" || kind === "boolean";
+}
+
+/**
  * SQL-flavored {@link ITabularMigrationApplier}. Subclasses (one per dialect)
  * provide the connection-level primitives (`exec`, `tableExists`,
  * `withTransaction`) and the JSON-Schema-to-SQL mapper. The applier handles
@@ -206,13 +222,17 @@ export abstract class SqlTabularMigrationApplier implements ITabularMigrationApp
   }
 
   protected arrayLiteralSql(value: readonly unknown[], sqlType: string | undefined): string {
+    // Collected into a typed array rather than only validated: the element
+    // rendering below stringifies what it is given, and the check is what
+    // makes that safe — so it has to reach the type, not just the control flow.
+    const checked: ArrayDefaultElement[] = [];
     for (const item of value) {
-      const kind = typeof item;
-      if (item !== null && kind !== "string" && kind !== "number" && kind !== "boolean") {
+      if (!isArrayDefaultElement(item)) {
         throw new Error(
-          `Unsupported array default for tabular migration: element of type ${kind} (${asText(item)})`
+          `Unsupported array default for tabular migration: element of type ${typeof item} (${asText(item)})`
         );
       }
+      checked.push(item);
     }
     const quote = (text: string): string => `'${text.replace(/'/g, "''")}'`;
     // A JSON column — which is where `mapPostgresType` sends an array whose
@@ -220,7 +240,7 @@ export abstract class SqlTabularMigrationApplier implements ITabularMigrationApp
     // takes JSON, not an array literal.
     const isNativeArray = sqlType !== undefined && sqlType.trimEnd().endsWith("[]");
     if (this.dialectName() !== "postgres" || !isNativeArray) return quote(JSON.stringify(value));
-    const elements = value.map((item) => {
+    const elements = checked.map((item) => {
       if (item === null) return "NULL";
       if (typeof item === "string") return `"${item.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
       return String(item);
