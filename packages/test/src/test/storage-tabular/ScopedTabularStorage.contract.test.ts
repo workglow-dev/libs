@@ -75,6 +75,9 @@ runTabularStorageContract({
     supportsTransactions: false,
     supportsQuery: true,
   },
+  // The inner store notifies on write, so the strict commit-order block is
+  // the one that applies; the wrapper forwards rather than polling.
+  usesPolling: false,
 });
 
 // `expectSqlPushdown` is left unset: a wrapper hands its INNER storage to the
