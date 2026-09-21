@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ChatMessage } from "@workglow/ai";
+import type { ChatMessage, ContentBlockInToolResultBody } from "@workglow/ai";
 import { canonicalStringify } from "./WebBrowser_ChromeHelpers";
 
 /**
@@ -34,6 +34,28 @@ export function messageText(msg: ChatMessage): string {
  * round the orchestrator allows, re-running it each time and answering nothing.
  * Folded into the prompt as prose, the model reads what its call returned.
  */
+/** What a `tool_result` renders as when it carried no content at all. */
+const NO_CONTENT = "(no content returned)";
+
+/**
+ * Names a tool-result block this prose surface cannot carry.
+ *
+ * Rendered as the empty string, a tool that returned an image would tell the
+ * model it returned nothing — which is indistinguishable from a tool that
+ * genuinely produced nothing, and is the input most likely to make a model
+ * call the tool again. The marker says the call succeeded and what came back,
+ * so the model can answer from it or stop rather than retry.
+ */
+function describeNonText(block: ContentBlockInToolResultBody): string {
+  if (block.type === "image") {
+    return `[image content (${block.mimeType}), not representable in this prompt]`;
+  }
+  if (block.type === "tool_use") {
+    return `[nested tool call ${block.name}, not representable in this prompt]`;
+  }
+  return "[content not representable in this prompt]";
+}
+
 export function flattenToolExchange(tail: readonly ChatMessage[]): string {
   const names = new Map<string, string>();
   const lines: string[] = [];
@@ -47,11 +69,13 @@ export function flattenToolExchange(tail: readonly ChatMessage[]): string {
       } else if (block.type === "tool_result") {
         const name = names.get(block.tool_use_id) ?? "tool";
         const body = block.content
-          .map((inner) => (inner.type === "text" ? inner.text : ""))
+          .map((inner) => (inner.type === "text" ? inner.text : describeNonText(inner)))
           .filter((s) => s.length > 0)
           .join("\n");
         const label = block.is_error === true ? "Tool error from" : "Tool result from";
-        lines.push(`${label} ${name}: ${body}`);
+        lines.push(
+          body.length > 0 ? `${label} ${name}: ${body}` : `${label} ${name}: ${NO_CONTENT}`
+        );
       }
     }
   }
