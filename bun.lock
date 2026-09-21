@@ -406,6 +406,7 @@
       "devDependencies": {
         "@workglow/ai": "workspace:*",
         "@workglow/browser-control": "workspace:*",
+        "@workglow/job-queue": "workspace:*",
         "@workglow/storage": "workspace:*",
         "@workglow/task-graph": "workspace:*",
         "@workglow/util": "workspace:*",
@@ -415,6 +416,7 @@
       "peerDependencies": {
         "@workglow/ai": "workspace:*",
         "@workglow/browser-control": "workspace:*",
+        "@workglow/job-queue": "workspace:*",
         "@workglow/storage": "workspace:*",
         "@workglow/task-graph": "workspace:*",
         "@workglow/util": "workspace:*",
@@ -424,6 +426,7 @@
       "optionalPeers": [
         "@workglow/ai",
         "@workglow/browser-control",
+        "@workglow/job-queue",
         "@workglow/storage",
         "@workglow/task-graph",
         "@workglow/util",

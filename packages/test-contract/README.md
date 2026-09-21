@@ -35,13 +35,21 @@ Concrete test files (`*.test.ts`) stay in `packages/test/src/test/`. The
 boundary is what makes the pattern obvious: everything here is reusable and
 nothing here runs on its own.
 
-Two pre-existing parameterized suites live with their concrete callers and
-stay in place — moving them is unnecessary churn:
+The two pre-existing parameterized suites are here as well, though their
+signatures predate the `opts` convention below — `runGenericTabularStorageTests`
+takes up to three storage factories positionally, `runGenericJobQueueTests` a
+storage factory, an optional limiter factory and an options bag. They were
+left where their concrete callers were on the first split, on the grounds that
+moving them was churn; what that cost was the CRUD half of `ITabularStorage`.
+An adapter installing `@workglow/test-contract/tabular-storage` inherited
+transactions, criteria and join, and nothing at all about `put`, `get`,
+`delete`, `query`, `putBulk` ordering, composite-key separators,
+`undefined`-criterion semantics or `updateWhere` CAS — rules with no compiler
+behind them, and the ones a `ReadOnlyTabularStorage` wrapper or a scoped
+storage is most likely to get subtly wrong.
 
-- `packages/test/src/test/job-queue/genericJobQueueTests.ts`
-- `packages/test/src/test/storage-tabular/genericTabularStorageTests.ts`
-
-Treat both as additional examples of the pattern.
+`packages/test/src/test/{storage-tabular,job-queue}/generic*Tests.ts` are
+re-export shims, so the concrete callers there are unchanged.
 
 ## Conventions
 
@@ -132,8 +140,8 @@ Capability flags:
 | Tabular schema migrations               | `@workglow/test-contract/tabular-migrations`      | InMemory, IndexedDB, Postgres, SQLite, FsFolder                                                       |
 | `ITabularStorage`                       | `@workglow/test-contract/tabular-storage`         | InMemory, SharedInMemory, IndexedDB, Postgres, SQLite, DuckDB, Supabase, Cached, Telemetry, FsFolder  |
 | `ITabularStorage.join`                  | `@workglow/test-contract/tabular-storage`         | InMemory, SharedInMemory, IndexedDB, Postgres, SQLite, DuckDB, Supabase, Cached, Telemetry, HttpProxy |
-| `ITabularStorage` (rest of the surface) | `test/storage-tabular/genericTabularStorageTests` | InMemory, IndexedDB, Postgres, SQLite, Supabase, FsFolder, HuggingFace                                |
-| `IQueueStorage` + `IRateLimiterStorage` | `test/job-queue/genericJobQueueTests`             | InMemory, IndexedDB, Postgres, SQLite, Supabase                                                       |
+| `ITabularStorage` (rest of the surface) | `@workglow/test-contract/tabular-storage`         | InMemory, IndexedDB, Postgres, SQLite, Supabase, FsFolder, HuggingFace                                |
+| `IQueueStorage` + `IRateLimiterStorage` | `@workglow/test-contract/job-queue`               | InMemory, IndexedDB, Postgres, SQLite, Supabase                                                       |
 | `IVectorStorage`                        | `@workglow/test-contract/vector-storage`          | InMemory, SQLite, Postgres, IndexedDB, Scoped, Telemetry                                              |
 | `IEntitlementProfile`                   | `@workglow/test-contract/entitlement-profile`     | Browser, Desktop, Server, Custom                                                                      |
 | `IBrowserContext`                       | `@workglow/test-contract/browser-context`         | Mock, Playwright, BunWebView, Electron                                                                |
@@ -222,7 +230,9 @@ Future contract suites in priority order:
 
 1. Storage extensions (subscribeToChanges ordering, vector-dimension format,
    putBulk round-trip count, deleteSearch streaming) — additions to the
-   existing `genericTabularStorageTests.ts`.
+   existing `tabular-storage/genericTabularStorageTests.ts`, and normalizing
+   that suite and the job-queue one onto the `opts` entrypoint shape the rest
+   of the package uses.
 2. Worker-proxy contract — harness shipped; per-adapter wiring deferred to a
    follow-up PR (vitest-Node `Worker` polyfill + per-adapter
    `WorkerManager` unregister-on-dispose required before HFT/LlamaCpp can

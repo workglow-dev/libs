@@ -21,6 +21,11 @@ export * from "./tabular-storage/assertions/vectorColumnFormat";
 export * from "./tabular-storage/assertions/withConnectionTransaction";
 export * from "./tabular-storage/assertions/withTransactionRollback";
 export * from "./tabular-storage/fixtures";
+// The CRUD half: put/get/delete/query/putBulk ordering, composite-key
+// separators, `undefined`-criterion semantics, `updateWhere` CAS. Rules with no
+// compiler behind them, and the ones an adapter is most likely to get subtly
+// wrong.
+export * from "./tabular-storage/genericTabularStorageTests";
 export * from "./tabular-storage/joinFixtures";
 export * from "./tabular-storage/runTabularJoinContract";
 export * from "./tabular-storage/runTabularStorageContract";
