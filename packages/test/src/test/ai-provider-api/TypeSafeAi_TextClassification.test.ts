@@ -165,6 +165,50 @@ describe("TypeSafeAi_TextClassification", () => {
     expect(requests).toHaveLength(0);
   });
 
+  // `candidateLabels` is an ordinary data port, so a label spelled "__proto__"
+  // arrives from a dataflow or a graph JSON this package did not author. On a
+  // plain object literal it would never become an own key, so the question
+  // would be asked about two labels while three were named — and neither the
+  // blank guard nor the distinctness guard would notice.
+  it("sends a __proto__ label as its own criteria key rather than dropping it", async () => {
+    installClient({ spam: 0.7, ham: 0.3 }, requests);
+
+    await classify({ text: "x", candidateLabels: ["spam", "__proto__", "ham"] });
+
+    expect(requests).toHaveLength(1);
+    const criteria = requests[0]!.questions.label!.criteria as Record<string, null>;
+    expect(Object.keys(criteria).sort()).toEqual(["__proto__", "ham", "spam"]);
+    expect(Object.hasOwn(criteria, "__proto__")).toBe(true);
+    expect(criteria.__proto__).toBeNull();
+  });
+
+  // `map["__proto__"] ?? 0` never fires its fallback: the inherited value is an
+  // object, so a `score` port declared `number` would carry `{}` and every
+  // comparison against it in the sort would be NaN.
+  it("scores an omitted __proto__ label as the number 0, not an inherited object", async () => {
+    installClient({ spam: 0.7, ham: 0.3 }, requests);
+
+    const out = await classify({ text: "x", candidateLabels: ["spam", "__proto__", "ham"] });
+
+    expect(out.categories).toEqual([
+      { label: "spam", score: 0.7 },
+      { label: "ham", score: 0.3 },
+      { label: "__proto__", score: 0 },
+    ]);
+    expect(out.categories.map((c) => typeof c.score)).toEqual(["number", "number", "number"]);
+  });
+
+  // The distinctness guard reads own properties, so it only means what it says
+  // once the map has no prototype to absorb the first assignment.
+  it("refuses a duplicated __proto__ label the way it refuses any other", async () => {
+    installClient({ spam: 1 }, requests);
+
+    await expect(
+      classify({ text: "x", candidateLabels: ["spam", "__proto__", "ham", "__proto__"] })
+    ).rejects.toThrow(/distinct/i);
+    expect(requests).toHaveLength(0);
+  });
+
   it("throws when TypeSafe answers a choice question with another answer type", async () => {
     const client = {
       systemOne: async () => ({
