@@ -532,6 +532,46 @@ rather than reaching for the global. `lib: ["dom"]` in the root tsconfig means n
 three typecheck as errors; `WorkerManager.roundtrip.test.ts` covers them over a real thread,
 under both runners.
 
+### `@workglow/a2ui`
+
+[A2UI](https://a2ui.org) support: the wire types, the checks that make an agent-authored
+surface safe to draw, and `A2UISurfaceTask`, which draws one. An agent sends a declarative
+description of an interface — a flat list of components addressed by id, plus a JSON data
+model they read through — and the host renders it with its own widgets. **Nothing the agent
+sends executes.** Three subpaths: `./protocol` (wire types, batch validation, JSON-pointer
+patching, the fold from a message stream to surface state, and the binding layer),
+`./catalog` (the component allowlist, the check enforcing it, the client-side functions it
+declares, and the prompt text that teaches an agent to write against it), and `./tasks`
+(`A2UISurfaceTask` plus the `IA2UIConnector` seam a host implements, resolved through
+`A2UI_CONNECTOR`).
+
+**There is no renderer here, on purpose** — a renderer is a framework choice and every one
+of them needs the same things above. `basePath` is the part easy to get subtly wrong: it is
+what makes a repeated row read the Nth item rather than the first, so a renderer resolving
+every path against the root draws a list where every row shows the same data, which looks
+like a rendering bug and is a resolution one.
+
+`./tasks` is re-exported by the `workglow` meta-package, which is what makes a saved graph
+JSON naming `"A2UISurfaceTask"` resolve for a host that installed `workglow` rather than
+reaching for this package by name — the same reason `@workglow/a2a/tasks` is.
+
+### `@workglow/triggers`
+
+Pure-timer triggers — `IntervalTrigger`, `PollingTrigger`, `CronTrigger` — plus the
+`Workflow` lifecycle methods that start a workflow from one. No new dependencies, no host
+HTTP server, no persistence, so it runs unchanged in Node, Bun and the browser.
+`bindWorkflowTrigger` / `listenWorkflow` are the free functions; the fluent `Workflow`
+methods exist only after `installWorkflowTriggers()`.
+
+**Importing this package installs nothing.** A module body patching `Workflow.prototype`
+would make every barrel re-exporting it side-effectful — `workglow`'s included, which also
+reaches `@workglow/duckdb`, `postgres`, `sqlite` and `mcp`, none of which declare
+`sideEffects`, so a bundler would have to keep all of them in the app's bundle. Ask for the
+patch instead; it is idempotent.
+
+`WebhookTrigger` is the one trigger kind the design named and this package does not ship:
+it needs a host HTTP server, which is the dependency every other trigger here avoids.
+
 ### `@workglow/tasks`
 
 `InputTask`, `OutputTask`, `LambdaTask`, `DelayTask`, `FetchUrlTask`, `JavaScriptTask`,

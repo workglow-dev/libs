@@ -474,6 +474,7 @@
       "version": "0.6.7",
       "dependencies": {
         "@workglow/a2a": "workspace:*",
+        "@workglow/a2ui": "workspace:*",
         "@workglow/ai": "workspace:*",
         "@workglow/anthropic": "workspace:*",
         "@workglow/browser-control": "workspace:*",
