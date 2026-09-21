@@ -24,7 +24,7 @@ import type {
   TabularEventParameters,
   TabularSubscribeOptions,
 } from "@workglow/storage";
-import { decodeCursor, StorageValidationError } from "@workglow/storage";
+import { decodeCursor, shouldRunDeleteSearch, StorageValidationError } from "@workglow/storage";
 import { EventEmitter, getLogger } from "@workglow/util";
 import type { DataPortSchemaObject } from "@workglow/util/schema";
 
@@ -159,7 +159,19 @@ export class ScopedTabularStorage<
     return stripped;
   }
 
+  /**
+   * Scoped delete, screened against the CALLER's criteria rather than the
+   * scoped ones.
+   *
+   * `kb_id` is this wrapper's own bookkeeping, not a narrowing the caller
+   * asked for — but to the inner storage it is just another column that
+   * matches some rows and not others, so injecting it first satisfies the
+   * unfiltered-delete guard and the delete runs. What it would then empty is
+   * the whole scope, which is the entire universe this wrapper's caller can
+   * see: exactly the outcome the guard exists to refuse, one level down.
+   */
   async deleteSearch(criteria: DeleteSearchCriteria<Entity>): Promise<void> {
+    if (!shouldRunDeleteSearch(criteria)) return;
     await this.inner.deleteSearch({ ...(criteria as any), kb_id: this.kbId });
   }
 
