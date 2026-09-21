@@ -742,6 +742,26 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
       if (s.size === 0) this.streamSubscribers.delete(key);
     };
 
+    /**
+     * Hand one row to the subscriber without awaiting it, and without letting
+     * its failure escape.
+     *
+     * The callback returns `unknown`, so a consumer that reassembles a stream
+     * is very likely to be `async` — and an unawaited promise that rejects is
+     * an unhandled rejection, which Node terminates the process for by
+     * default. `publishStreamChunk` isolates exactly this failure; whether a
+     * subscriber's throw is contained or fatal must not depend on which side
+     * of the live/replay split the row it was handed came from, because the
+     * subscriber cannot see that split and does not control it.
+     */
+    const deliver = (row: StreamChunkRow): void => {
+      try {
+        void Promise.resolve(callback(row)).catch(() => {});
+      } catch {
+        // A synchronous throw is the subscriber's business too.
+      }
+    };
+
     // A replay the log can no longer serve is reported, never approximated:
     // the rows below `droppedThrough` were evicted for size, and delivering
     // the surviving suffix would splice a body back together across the hole
@@ -753,7 +773,7 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
       // unsubscribe function), and replay has no live producer to pace —
       // unlike `publishStreamChunk`, where awaiting the subscriber is the only
       // backpressure there is. What replay delivers is bounded by the log cap.
-      callback({
+      deliver({
         jobId,
         seq: sinceSeq + 1,
         event: {
@@ -775,7 +795,7 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
     // above, so it replays as if empty. Not awaited, for the same reason as
     // the refusal: replay is a bounded catch-up with nothing live behind it.
     const log = this.streamLog.get(key);
-    if (log) for (const r of log) if (r.seq > sinceSeq) callback(r);
+    if (log) for (const r of log) if (r.seq > sinceSeq) deliver(r);
     return unsubscribe;
   }
 
