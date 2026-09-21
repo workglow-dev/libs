@@ -32,9 +32,17 @@ const INSTRUCTIONS = "Which of these labels best describes the text?";
  * to return it meaningfully. Duplicates collapse into one key on the way to a
  * map, so they are refused too: silently classifying against four labels when
  * five were named reports a distribution over a set the caller never chose.
+ *
+ * The map is null-prototyped so both guards mean what they say. On a plain
+ * object literal, `criteria["__proto__"] = null` runs the inherited setter
+ * instead of creating an own property: the label never reaches the question,
+ * `Object.hasOwn` never sees it, and both the blank check and the distinctness
+ * check pass over a label that was silently dropped. `candidateLabels` is an
+ * ordinary data port, so that string arrives from a dataflow or a graph JSON
+ * this package did not author.
  */
 function buildCriteria(labels: readonly string[]): Record<string, null> {
-  const criteria: Record<string, null> = {};
+  const criteria: Record<string, null> = Object.create(null);
   for (const label of labels) {
     if (typeof label !== "string" || label.trim() === "") {
       throw new Error(
@@ -113,12 +121,23 @@ export const TypeSafeAi_TextClassification_Stream: AiProviderRunFn<
  * order for ties. A label the response omits scores 0 — it was in the question,
  * so it has a probability, and dropping it would shorten a list the caller sized
  * with `maxCategories`.
+ *
+ * The lookup is an own-property read rather than `map[label] ?? 0` for the same
+ * reason the criteria map is null-prototyped: `??` does not fire for
+ * `"__proto__"`, whose inherited value is an object, so a `score` port declared
+ * `number` would carry `{}` and every comparison against it in the sort would
+ * be `NaN`, leaving the rest of the ranking in engine order rather than by
+ * score. A non-numeric value on the wire scores 0 for the same reason.
  */
 function rankCategories(
   answer: TypeSafeChoiceAnswer,
   labels: readonly string[]
 ): { label: string; score: number }[] {
+  const probabilities = answer.probabilities;
   return labels
-    .map((label) => ({ label, score: answer.probabilities[label] ?? 0 }))
+    .map((label) => {
+      const score = Object.hasOwn(probabilities, label) ? probabilities[label] : 0;
+      return { label, score: typeof score === "number" && Number.isFinite(score) ? score : 0 };
+    })
     .sort((a, b) => b.score - a.score);
 }
