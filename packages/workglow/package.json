@@ -143,6 +143,18 @@
       "types": "./dist/xai-runtime.d.ts",
       "import": "./dist/xai-runtime.js"
     },
+    "./typesafeai": {
+      "browser": {
+        "types": "./dist/typesafeai.d.ts",
+        "import": "./dist/typesafeai.browser.js"
+      },
+      "types": "./dist/typesafeai.d.ts",
+      "import": "./dist/typesafeai.js"
+    },
+    "./typesafeai/runtime": {
+      "types": "./dist/typesafeai-runtime.d.ts",
+      "import": "./dist/typesafeai-runtime.js"
+    },
     "./node-llama": {
       "types": "./dist/node-llama.d.ts",
       "import": "./dist/node-llama.js"
@@ -203,6 +215,7 @@
     "@workglow/anthropic": "workspace:*",
     "@workglow/openai": "workspace:*",
     "@workglow/openrouter": "workspace:*",
+    "@workglow/typesafeai": "workspace:*",
     "@workglow/xai": "workspace:*",
     "@workglow/deepseek": "workspace:*",
     "@workglow/google-gemini": "workspace:*",

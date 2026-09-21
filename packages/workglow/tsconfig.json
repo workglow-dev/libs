@@ -32,6 +32,7 @@
     { "path": "../../providers/ollama" },
     { "path": "../../providers/openai" },
     { "path": "../../providers/openrouter" },
+    { "path": "../../providers/typesafeai" },
     { "path": "../../providers/xai" },
     { "path": "../../providers/duckdb" },
     { "path": "../../providers/postgres" },
