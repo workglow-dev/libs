@@ -26,6 +26,7 @@ export * from "@workglow/mcp/tasks";
 export * from "@workglow/mcp/util";
 export * from "@workglow/a2a/tasks";
 export * from "@workglow/a2a/util";
+export * from "@workglow/a2ui/tasks";
 export * from "@workglow/tasks";
 export * from "@workglow/util";
 export * from "@workglow/util/schema";
