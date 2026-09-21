@@ -27,9 +27,45 @@ import type {
   TypedArrayConstructor,
   TypedArraySchemaOptions,
 } from "@workglow/util/schema";
+import { getLogger } from "@workglow/util";
 import { cosineSimilarity } from "@workglow/util/schema";
 import { createRequire } from "node:module";
 import { SqliteTabularStorage } from "./SqliteTabularStorage";
+
+/**
+ * SQLite's own index options.
+ *
+ * `requireVectorExtension` decides what happens when the sqlite-vector
+ * extension cannot be loaded. Left off, the storage degrades to the JS
+ * fallback, which is the historical behaviour and still the right default for
+ * a small table on a platform with no prebuilt binary. Turned on, coming up
+ * without the extension is a failure — which is what a knowledge base sized
+ * for the SQL path wants, since the degradation is invisible at every level
+ * above it: nothing throws, the same values come back, and the only symptom is
+ * a full table scan in a latency graph.
+ */
+export interface SqliteVectorIndexOptions extends VectorIndexOptions {
+  readonly requireVectorExtension?: boolean;
+}
+
+/** Thrown from {@link SqliteAiVectorStorage.setupDatabase} under `requireVectorExtension`. */
+export class SqliteVectorExtensionUnavailableError extends Error {
+  public override readonly name = "SqliteVectorExtensionUnavailableError";
+  constructor(
+    public readonly table: string,
+    public readonly loadError: unknown,
+    public readonly probeError: unknown
+  ) {
+    const reason = (error: unknown): string =>
+      error instanceof Error ? error.message : String(error);
+    super(
+      `sqlite-vector is unavailable for table "${table}", so every write would store a JSON ` +
+        `BLOB and every search would scan the table in JS. Loading it failed with: ` +
+        `${reason(loadError)}. Probing for an already-loaded copy failed with: ` +
+        `${reason(probeError)}. Pass requireVectorExtension: false to accept the fallback.`
+    );
+  }
+}
 
 /**
  * Maps TypedArray constructor types to their sqlite-vector encoding function names
@@ -104,6 +140,12 @@ export class SqliteAiVectorStorage<
   private metadataPropertyName: keyof Entity | undefined;
   private vectorTypeSuffix: string;
   private extensionLoaded: boolean = false;
+  /**
+   * Why the extension is not loaded, or `undefined` while it is (or has not
+   * been asked for yet). Exposed because a caller cannot tell the fallback
+   * from the SQL path by its results — that is the whole problem with it.
+   */
+  private vectorFallbackReason: SqliteVectorExtensionUnavailableError | undefined;
 
   /**
    * Creates a new SQLite AI vector storage
@@ -115,7 +157,7 @@ export class SqliteAiVectorStorage<
    * @param dimensions - The number of dimensions of the vector
    * @param vectorCtor - TypedArray constructor for stored vectors (e.g. {@link Float32Array})
    */
-  private readonly indexOptions: VectorIndexOptions;
+  private readonly indexOptions: SqliteVectorIndexOptions;
   private readonly distance: VectorDistanceMetric;
 
   constructor(
@@ -126,7 +168,7 @@ export class SqliteAiVectorStorage<
     indexes: readonly (keyof NoInfer<Entity> | readonly (keyof NoInfer<Entity>)[])[] = [],
     dimensions: number,
     vectorCtor: TypedArrayConstructor = Float32Array,
-    indexOptions: VectorIndexOptions = {}
+    indexOptions: SqliteVectorIndexOptions = {}
   ) {
     super(dbOrPath, table, schema, primaryKeyNames, indexes);
 
@@ -156,6 +198,19 @@ export class SqliteAiVectorStorage<
     this.metadataPropertyName = getMetadataProperty(schema) as keyof Entity | undefined;
   }
 
+  /**
+   * Whether the sqlite-vector extension is loaded, i.e. whether writes encode
+   * vectors and searches run in SQL rather than scanning the table in JS.
+   */
+  public isVectorExtensionLoaded(): boolean {
+    return this.extensionLoaded;
+  }
+
+  /** Why the extension is unavailable, or `undefined` when it is loaded. */
+  public getVectorFallbackReason(): SqliteVectorExtensionUnavailableError | undefined {
+    return this.extensionLoaded ? undefined : this.vectorFallbackReason;
+  }
+
   /** Returns the configured index/tuning options (sqlite-vector ignores HNSW knobs). */
   public getIndexOptions(): VectorIndexOptions {
     return this.indexOptions;
@@ -167,7 +222,19 @@ export class SqliteAiVectorStorage<
 
   /**
    * Load the sqlite-vector extension and initialize vector indexing on the vector column.
-   * Extension loading is best-effort: if unavailable, operations fall back to in-memory search.
+   *
+   * Failing to load it is not an error by default — a platform with no
+   * prebuilt binary still gets a working storage — but it is never silent.
+   * Falling back re-routes the class's entire behaviour: `_putInternal` and
+   * `_putBulkInternal` store the parent's JSON BLOB rather than an encoded
+   * vector, `vector_init` is never called, and `similaritySearch` reads the
+   * whole table and sorts in process. Nothing throws and the same values come
+   * back, so the only way to learn of it is to be told.
+   *
+   * Both failures are captured rather than discarded: the probe exists for a
+   * caller that loaded the extension itself, so it must not stand in for the
+   * reason loading failed. {@link SqliteVectorIndexOptions.requireVectorExtension}
+   * turns the degradation into a refusal to come up.
    */
   public override async setupDatabase(): Promise<void> {
     // Always create the table first via the parent class
@@ -175,19 +242,36 @@ export class SqliteAiVectorStorage<
 
     // Try to load the sqlite-vector extension if not already loaded
     if (!this.extensionLoaded) {
+      let extensionPath: string | undefined;
+      let loadError: unknown;
       try {
         // Use CJS require so the platform-specific sub-package resolves correctly in ESM contexts
         const _require = createRequire(import.meta.url);
         const { getExtensionPath } = _require("@sqliteai/sqlite-vector");
-        this.database.loadExtension(getExtensionPath());
+        extensionPath = getExtensionPath() as string;
+        this.database.loadExtension(extensionPath);
         this.extensionLoaded = true;
-      } catch {
+      } catch (error) {
+        loadError = error;
         // Extension might already be loaded by the caller; verify with vector_version()
         try {
           this.database.exec("SELECT vector_version()");
           this.extensionLoaded = true;
-        } catch {
-          // Extension is unavailable; operations will fall back to in-memory search
+        } catch (probeError) {
+          this.vectorFallbackReason = new SqliteVectorExtensionUnavailableError(
+            this.table,
+            loadError,
+            probeError
+          );
+          if (this.indexOptions.requireVectorExtension === true) {
+            throw this.vectorFallbackReason;
+          }
+          getLogger().warn(
+            `SqliteAiVectorStorage("${this.table}"): sqlite-vector unavailable` +
+              `${extensionPath === undefined ? "" : ` at ${extensionPath}`}; ` +
+              `writes store JSON BLOBs and searches scan the table in JS. ` +
+              `${this.vectorFallbackReason.message}`
+          );
         }
       }
     }
