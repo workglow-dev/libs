@@ -354,7 +354,7 @@ async function generateToolResponse(
   emit: (event: StreamEvent<ToolCallingTaskOutput>) => void,
   sequence: any,
   prefix: CheckpointPrefix | undefined
-): Promise<{ output: ToolCallingTaskOutput; cleanHistory: any[] }> {
+): Promise<{ cleanHistory: any[] }> {
   const { LlamaChat } = getLlamaCppSdk();
   let llamaChat: any;
   let gen:
@@ -407,8 +407,10 @@ async function generateToolResponse(
       emit({ type: "object-delta", port: "toolCalls", objectDelta: [...validToolCalls] });
     }
 
+    // No accumulated output is returned on purpose: the text went out as
+    // deltas and the calls as an object-delta, and `TaskRunner` accumulates
+    // both. Handing a caller a second copy is what lets it reach `finish`.
     return {
-      output: { text: accumulatedText, toolCalls: validToolCalls },
       cleanHistory: chatResponse?.lastEvaluation.cleanHistory ?? chatHistory,
     };
   } finally {
@@ -442,15 +444,8 @@ export const LlamaCpp_ToolCalling_Stream: AiProviderRunFn<
       await withSequence(
         context,
         async (sequence) => {
-          const { output } = await generateToolResponse(
-            input,
-            model,
-            signal,
-            emit,
-            sequence,
-            undefined
-          );
-          emit({ type: "finish", data: output });
+          await generateToolResponse(input, model, signal, emit, sequence, undefined);
+          emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput });
         },
         { signal }
       );
@@ -569,7 +564,7 @@ export const LlamaCpp_ToolCalling_Stream: AiProviderRunFn<
         : undefined;
 
       try {
-        const { output, cleanHistory } = await generateToolResponse(
+        const { cleanHistory } = await generateToolResponse(
           input,
           model,
           signal,
@@ -589,7 +584,7 @@ export const LlamaCpp_ToolCalling_Stream: AiProviderRunFn<
         if (!isCheckpointConsumption || reKeyForEmit) {
           session.setChatHistory(cleanHistory);
         }
-        emit({ type: "finish", data: output });
+        emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput });
         if (emitId !== undefined && reKeyForEmit) {
           setLlamaCppSession(emitId, {
             mode: "prefix-rewind",

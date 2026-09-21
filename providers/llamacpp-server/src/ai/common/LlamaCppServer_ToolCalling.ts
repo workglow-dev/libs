@@ -21,6 +21,7 @@ import {
 import {
   buildToolDescription,
   filterValidToolCalls,
+  isAllowedToolName,
   sanitizeToolArgs,
   toTextFlatMessages,
 } from "@workglow/ai/worker";
@@ -105,7 +106,6 @@ export function createLlamaCppServerToolCallingStream(
         );
       }
 
-      let accumulatedText = "";
       const calls = new Map<number, ToolCallAccumulator>();
       let nextSyntheticIndex = 0;
       let usage: Usage | undefined;
@@ -114,7 +114,6 @@ export function createLlamaCppServerToolCallingStream(
         if (delta.done) break;
         usage = mapOpenAIChatUsage(delta.usage) ?? usage;
         if (delta.contentDelta) {
-          accumulatedText += delta.contentDelta;
           provisionalUsage.onText(delta.contentDelta);
           emit({ type: "text-delta", port: "text", textDelta: delta.contentDelta });
         }
@@ -138,7 +137,11 @@ export function createLlamaCppServerToolCallingStream(
               call.parsed = call.args.push(tc.function.arguments) ?? call.parsed;
             }
           }
-          emit({ type: "object-delta", port: "toolCalls", objectDelta: buildToolCalls(calls) });
+          emit({
+            type: "object-delta",
+            port: "toolCalls",
+            objectDelta: buildToolCalls(calls, input.tools),
+          });
         }
       }
       provisionalUsage.flush();
@@ -147,10 +150,17 @@ export function createLlamaCppServerToolCallingStream(
       for (const call of calls.values()) {
         call.parsed = call.args.finishObject();
       }
+      // One last delta, because the repair above is the first time the
+      // arguments are complete — same ids, so it upserts over the partial ones.
       const finalToolCalls = filterValidToolCalls(buildToolCalls(calls), input.tools);
+      if (finalToolCalls.length > 0) {
+        emit({ type: "object-delta", port: "toolCalls", objectDelta: finalToolCalls });
+      }
+      // Text and calls both reached the consumer as deltas and `TaskRunner`
+      // accumulates them; repeating either hands it a competing copy.
       emit({
         type: "finish",
-        data: { text: accumulatedText, toolCalls: finalToolCalls } as ToolCallingTaskOutput,
+        data: { text: "", toolCalls: [] } as ToolCallingTaskOutput,
         usage,
       });
     } finally {
@@ -159,11 +169,24 @@ export function createLlamaCppServerToolCallingStream(
   };
 }
 
-function buildToolCalls(callsByIndex: ReadonlyMap<number, ToolCallAccumulator>): ToolCalls {
+/**
+ * `allowedTools` filters silently, and the interim deltas pass it.
+ *
+ * The delta fold is an upsert by id, so a call that reaches the stream cannot
+ * later be retracted — which means a name the model invented has to be kept out
+ * rather than removed at the end. {@link filterValidToolCalls} is still run once
+ * on the final set, where its warning names the dropped call exactly once
+ * instead of once per delta.
+ */
+function buildToolCalls(
+  callsByIndex: ReadonlyMap<number, ToolCallAccumulator>,
+  allowedTools?: ReadonlyArray<ToolDefinition>
+): ToolCalls {
   const result: ToolCalls = [];
   for (const idx of [...callsByIndex.keys()].sort((a, b) => a - b)) {
     const call = callsByIndex.get(idx)!;
     if (!call.name) continue;
+    if (allowedTools && !isAllowedToolName(call.name, allowedTools)) continue;
     // `sanitizeToolArgs` copies, so the emitted call is detached from the
     // parser's live root and unaffected by later fragments.
     result.push({

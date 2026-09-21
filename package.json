@@ -79,7 +79,7 @@
     "electron": "^44.4.3",
     "@google/genai": "^2.23.0",
     "node-llama-cpp": "^3.21.1",
-    "needle-rs": "^0.3.0",
+    "needle-rs": "^0.3.1",
     "@huggingface/inference": "^4.13.30",
     "ollama": "^0.6.3",
     "openai": "^7.20.0",

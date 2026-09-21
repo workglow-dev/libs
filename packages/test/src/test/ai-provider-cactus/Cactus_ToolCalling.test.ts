@@ -5,6 +5,8 @@
  */
 
 import { _testOnly } from "@workglow/cactus/ai";
+import type { StreamEvent } from "@workglow/task-graph";
+import { expectNoFinishAccumulation } from "@workglow/test-contract/ai-provider";
 import { afterEach, describe, expect, it } from "vitest";
 import { runFnFor } from "./test-utils";
 
@@ -54,10 +56,17 @@ async function runToolCalling(engine: {
     t: string,
     cb: (tokenIdOrChunk: number | string, piece?: string) => void
   ) => string | Promise<string>;
-}): Promise<{ names: string[]; textDeltas: string[]; finishText: string }> {
+}): Promise<{
+  names: string[];
+  textDeltas: string[];
+  text: string;
+  finishText: string;
+  events: StreamEvent<never>[];
+}> {
   cactusEngines.set("needle-26m", engine as never);
   const names: string[] = [];
   const textDeltas: string[] = [];
+  const events: StreamEvent<never>[] = [];
   let finishText = "";
   const controller = new AbortController();
   await Cactus_ToolCalling(
@@ -65,6 +74,7 @@ async function runToolCalling(engine: {
     model as never,
     controller.signal,
     (ev) => {
+      events.push(ev as StreamEvent<never>);
       if (ev.type === "text-delta" && ev.port === "text") {
         textDeltas.push(ev.textDelta);
       }
@@ -78,7 +88,14 @@ async function runToolCalling(engine: {
       }
     }
   );
-  return { names, textDeltas, finishText };
+  // Every case runs the generic guard, so a `finish` that starts carrying the
+  // generation again fails wherever it is reintroduced rather than only where
+  // someone remembered to look.
+  expectNoFinishAccumulation(events);
+  // `text` is what a consumer ends up with: `TaskRunner` accumulates the
+  // deltas. `finishText` is kept so a case can assert the run-fn adds nothing
+  // on top of them.
+  return { names, textDeltas, text: textDeltas.join(""), finishText, events };
 }
 
 describe("Cactus_ToolCalling output parsing", () => {
@@ -128,12 +145,15 @@ describe("Cactus_ToolCalling output parsing", () => {
   });
 
   it("ignores run_json and falls back to run() when run_stream is absent", async () => {
-    const { names, finishText } = await runToolCalling({
+    const { names, text, finishText } = await runToolCalling({
       run: () => `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`,
       run_json: () => `<tool_call>[]</tool_call>`,
     });
     expect(names).toEqual(["lookup_weather"]);
-    expect(finishText).toContain("lookup_weather");
+    // The generation reaches the consumer as a delta even with no stream to
+    // ride, so the one-shot and streamed paths accumulate to the same text.
+    expect(text).toContain("lookup_weather");
+    expect(finishText).toBe("");
   });
 
   it("parses a v3 payload that follows a <think> reasoning block", async () => {
@@ -212,5 +232,71 @@ describe("Cactus_ToolCalling output parsing", () => {
       },
     });
     expect(textDeltas.join("")).toBe("<tool_call>[]</tool_call>");
+  });
+});
+
+/**
+ * v3 reasons before essentially every answer, so `text` would otherwise carry
+ * the chain of thought — a host rendering it beside the tool cards would show
+ * it, and a host logging it would persist it. `text` means the model's answer
+ * for v1 and v2, and has to keep meaning that here.
+ */
+describe("Cactus_ToolCalling v3 reasoning on the text port", () => {
+  it("keeps a <think> block out of the text a one-shot generation yields", async () => {
+    const { names, text } = await runToolCalling({
+      run: () =>
+        `<think>The user wants Paris weather, so lookup_weather.</think>` +
+        `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`,
+    });
+    expect(names).toEqual(["lookup_weather"]);
+    expect(text).not.toContain("<think>");
+    expect(text).not.toContain("The user wants Paris weather");
+  });
+
+  it("keeps a <think> block out of the stream even when tags straddle deltas", async () => {
+    const { names, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        // The tags arrive split, which is what makes this more than a replace.
+        cb("<thi");
+        cb("nk>secret reasoning");
+        cb(" continues</thi");
+        cb("nk>Paris is sunny.");
+        cb(`<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`);
+        return (
+          `<think>secret reasoning continues</think>Paris is sunny.` +
+          `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`
+        );
+      },
+    });
+    expect(names).toEqual(["lookup_weather"]);
+    expect(text).not.toContain("secret reasoning");
+    expect(text).not.toContain("<think>");
+    expect(text).toContain("Paris is sunny.");
+  });
+
+  it("releases an unterminated <think> rather than swallowing the generation", async () => {
+    // Cut off at the token limit: there is no closing tag, and the parser
+    // deliberately leaves such a block alone, so the stream must too.
+    const { text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb("<think>reasoning that never closes");
+        return "<think>reasoning that never closes";
+      },
+    });
+    expect(text).toBe("<think>reasoning that never closes");
+  });
+
+  it("does not hold back text that merely starts like a tag", async () => {
+    const { text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb("a < b and c <th");
+        cb("an d");
+        return "a < b and c <than d";
+      },
+    });
+    expect(text).toBe("a < b and c <than d");
   });
 });
