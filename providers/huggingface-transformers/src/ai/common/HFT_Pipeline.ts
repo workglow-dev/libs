@@ -5,6 +5,7 @@
  */
 
 import type { DynamicCache, PretrainedModelOptions, ProgressInfo } from "@huggingface/transformers";
+import { isBrowserLike } from "@workglow/ai/provider-utils";
 import type { StreamPhase } from "@workglow/task-graph";
 import { getLogger } from "@workglow/util/worker";
 import { resolveHftPipelineDevice } from "./HFT_Device";
@@ -227,26 +228,42 @@ export class HftModelFileTooLargeError extends Error {
  */
 const DEFAULT_MAX_MODEL_FILE_BYTES = 2 * 1024 * 1024 * 1024 - 4 * 1024 * 1024;
 
-function isNodeRuntime(): boolean {
-  return (
-    typeof process !== "undefined" && process.versions != null && process.versions.node != null
-  );
-}
-
-let _maxModelFileBytes: number = isNodeRuntime()
-  ? Number.POSITIVE_INFINITY
-  : DEFAULT_MAX_MODEL_FILE_BYTES;
+/**
+ * Explicit override from {@link setHftMaxModelFileBytes}; `undefined` means
+ * "whatever this runtime's default is".
+ */
+let _maxModelFileBytesOverride: number | undefined;
 
 /**
- * Override the largest model file this runtime will accept.
- * `Infinity` disables the check.
+ * The ceiling this runtime gets when nothing overrode it.
+ *
+ * The limit is a property of which JS engine and heap the code runs on, not of
+ * whether `process` is reachable. An Electron renderer with node integration
+ * answers `process.versions.node` and is Chromium — the renderer this ceiling
+ * was measured on, OOM-kill included — and `providers/electron` is a
+ * first-party package here, so that host is not hypothetical. `isBrowserLike`
+ * asks the question that decides the answer, and is the spelling the rest of
+ * the tree already uses for it.
+ *
+ * Resolved per read rather than once at import, so a host that installs its
+ * globals after this module loads still gets the right answer.
+ */
+function defaultMaxModelFileBytes(): number {
+  return isBrowserLike() ? DEFAULT_MAX_MODEL_FILE_BYTES : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Override the largest model file this runtime will accept. `Infinity` disables
+ * the check — the escape hatch for a host that knows better, such as an
+ * Electron main process driving the pipeline. A non-positive value restores
+ * this runtime's own default.
  */
 export function setHftMaxModelFileBytes(bytes: number): void {
-  _maxModelFileBytes = bytes > 0 ? bytes : DEFAULT_MAX_MODEL_FILE_BYTES;
+  _maxModelFileBytesOverride = bytes > 0 ? bytes : undefined;
 }
 
 export function getHftMaxModelFileBytes(): number {
-  return _maxModelFileBytes;
+  return _maxModelFileBytesOverride ?? defaultMaxModelFileBytes();
 }
 
 /**
@@ -259,12 +276,16 @@ export function getHftMaxModelFileBytes(): number {
  */
 export function assertFileFitsInMemory(response: Response): void {
   if (!response.ok) return;
-  const limit = _maxModelFileBytes;
+  const limit = getHftMaxModelFileBytes();
   if (!Number.isFinite(limit)) return;
   const header = response.headers.get("content-length");
   if (!header || !/^\d+$/.test(header)) return;
   const size = Number.parseInt(header, 10);
   if (size > limit) {
+    // Both call sites throw out of a `.then`, so nothing downstream is left to
+    // read or release this body. Cancelling it returns the socket instead of
+    // leaving an unlocked stream to the collector.
+    response.body?.cancel().catch(() => {});
     throw new HftModelFileTooLargeError(response.url || "model file", size, limit);
   }
 }
