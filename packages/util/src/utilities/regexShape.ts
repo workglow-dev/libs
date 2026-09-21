@@ -19,8 +19,6 @@
  * belongs.
  */
 
-import { SECURITY_LIMITS } from "../limits";
-
 /**
  * `{n,}` / `{n,m}` starting exactly at an index. Sticky rather than
  * `test(pattern.slice(index))`, because slicing per character is the quadratic
