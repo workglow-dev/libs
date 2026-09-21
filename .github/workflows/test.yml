@@ -1,6 +1,11 @@
-# Bun is pinned exactly, matching `packageManager`: @workglow/sqlite/storage needs
-# `node:sqlite`, which Bun ships from 1.4.0. Floating tags would let an unrelated
-# Bun regression redden every PR on a day nobody touched the code.
+# Bun is pinned exactly, in `.bun-version` and nowhere else: @workglow/sqlite/storage
+# needs `node:sqlite`, which Bun ships from 1.4.0. Floating tags would let an
+# unrelated Bun regression redden every PR on a day nobody touched the code.
+#
+# One file rather than a number per step, because a pin repeated at every
+# `setup-bun` is a pin only where someone remembered to change it: the version
+# stood at 1.4.2 in one job and 1.4.0 in the other twelve across these three
+# workflows, so what CI actually ran the suite on was not what the repo said.
 #
 # Coverage is NOT collected here. Every vitest job below runs one slice of the
 # suite, so a per-job number only means something once the fragments are merged
@@ -37,7 +42,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version-file: .bun-version
       - run: bun i
       # Fails the PR if any package's type-instantiation count grows past its
       # committed budget (scripts/typecheck-budget.json). Re-baseline intentional
@@ -59,7 +64,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version-file: .bun-version
       - run: bun i
       # Fails if any test file is unreachable by section+kind selection. Every
       # other job passes a kind, so an unreachable file silently never runs.
@@ -75,7 +80,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version-file: .bun-version
       - run: bun i
       # The only thing that runs oxlint under CI. `prepare` skips husky when $CI
       # is set, so the pre-commit hook -- which `--no-verify` bypasses anyway --
@@ -104,7 +109,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version-file: .bun-version
       - run: bun i
       - run: bun run build
       - name: Upload build artifacts
@@ -150,7 +155,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version-file: .bun-version
       - run: bun i
       - name: Download build artifacts
         uses: actions/download-artifact@v8
@@ -173,7 +178,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version-file: .bun-version
       - run: bun i
       - name: Download build artifacts
         uses: actions/download-artifact@v8
@@ -197,7 +202,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version-file: .bun-version
       - run: bun i
       - name: Cache Hugging Face model downloads
         uses: actions/cache@v4
@@ -228,7 +233,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version-file: .bun-version
       - run: bun i
       - name: Cache Hugging Face model downloads
         uses: actions/cache@v4
@@ -259,7 +264,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version-file: .bun-version
       - run: bun i
       - name: Cache Hugging Face / GGUF model downloads
         uses: actions/cache@v4
@@ -290,7 +295,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version-file: .bun-version
       - run: bun i
       - name: Download build artifacts
         uses: actions/download-artifact@v8

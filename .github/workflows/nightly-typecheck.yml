@@ -1,6 +1,11 @@
-# Bun is pinned exactly, matching `packageManager`: @workglow/sqlite/storage needs
-# `node:sqlite`, which Bun ships from 1.4.0. Floating tags would let an unrelated
-# Bun regression redden every PR on a day nobody touched the code.
+# Bun is pinned exactly, in `.bun-version` and nowhere else: @workglow/sqlite/storage
+# needs `node:sqlite`, which Bun ships from 1.4.0. Floating tags would let an
+# unrelated Bun regression redden every PR on a day nobody touched the code.
+#
+# One file rather than a number per step, because a pin repeated at every
+# `setup-bun` is a pin only where someone remembered to change it: the version
+# stood at 1.4.2 in one job and 1.4.0 in the other twelve across these three
+# workflows, so what CI actually ran the suite on was not what the repo said.
 name: Nightly type-drift guard
 permissions:
   contents: read
@@ -22,7 +27,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version-file: .bun-version
       - run: bun i
       - name: Build type declarations
         run: bun run build:types
