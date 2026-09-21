@@ -45,7 +45,6 @@ import type {
   ValueOptionType,
 } from "./ITabularStorage";
 import { runHashJoin } from "./hashJoin";
-import { isSearchCondition, isSearchInCondition, isSearchNotInCondition } from "./ITabularStorage";
 import { resolveJoinDelegate } from "./joinDelegate";
 import type { KeysetPageDeps } from "./keysetPage";
 import {
@@ -69,6 +68,7 @@ import {
 } from "./tabularSchemaSetup";
 import {
   criteriaMatchNoRow,
+  deleteSearchIdentity,
   shouldRunDeleteSearch,
   validateGetAllOptions,
   validateJoinSpec,
@@ -626,21 +626,7 @@ export abstract class BaseTabularStorage<
    * they don't identify a concrete value.
    */
   protected deleteIdentity(criteria: DeleteSearchCriteria<Entity>): Partial<Entity> {
-    const identity: Record<string, unknown> = {};
-    for (const [column, criterion] of Object.entries(criteria)) {
-      // A list criterion identifies no single value, so it is dropped for the
-      // same reason a comparison condition is — otherwise the raw condition
-      // object would be emitted as if it were the column's value. Both list
-      // guards are required: `not-in` passes neither of the other two.
-      if (
-        !isSearchCondition(criterion) &&
-        !isSearchInCondition(criterion) &&
-        !isSearchNotInCondition(criterion)
-      ) {
-        identity[column] = criterion;
-      }
-    }
-    return identity as Partial<Entity>;
+    return deleteSearchIdentity(criteria);
   }
 
   protected separateKeyValueFromCombined(obj: Entity): { value: Value; key: PrimaryKey } {

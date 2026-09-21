@@ -39,10 +39,11 @@ export * from "./tabular/joinDelegate";
 export * from "./tabular/sqlMigrationDdl";
 export * from "./tabular/SqlTabularMigrationApplier";
 export * from "./tabular/StorageError";
-// The delete guard specifically: a wrapper implementing `ITabularStorage` owes
-// its caller the same refusal a concrete backend does, and cannot reach into
-// the module to get it.
-export { shouldRunDeleteSearch } from "./tabular/tabularValidation";
+// The two delete helpers specifically: a wrapper implementing `ITabularStorage`
+// owes its caller the same refusal, and its subscribers the same `delete`
+// event, that a concrete backend does — and cannot reach into the module or a
+// protected member to get either.
+export { deleteSearchIdentity, shouldRunDeleteSearch } from "./tabular/tabularValidation";
 export * from "./tabular/TabularStorageRegistry";
 export * from "./tabular/TelemetryTabularStorage";
 export * from "./tabular/withConnectionTransaction";

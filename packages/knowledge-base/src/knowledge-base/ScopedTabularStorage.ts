@@ -24,7 +24,12 @@ import type {
   TabularEventParameters,
   TabularSubscribeOptions,
 } from "@workglow/storage";
-import { decodeCursor, shouldRunDeleteSearch, StorageValidationError } from "@workglow/storage";
+import {
+  decodeCursor,
+  deleteSearchIdentity,
+  shouldRunDeleteSearch,
+  StorageValidationError,
+} from "@workglow/storage";
 import { EventEmitter, getLogger } from "@workglow/util";
 import type { DataPortSchemaObject } from "@workglow/util/schema";
 
@@ -173,6 +178,16 @@ export class ScopedTabularStorage<
   async deleteSearch(criteria: DeleteSearchCriteria<Entity>): Promise<void> {
     if (!shouldRunDeleteSearch(criteria)) return;
     await this.inner.deleteSearch({ ...(criteria as any), kb_id: this.kbId });
+    // Every concrete backend emits `delete` from a bulk `deleteSearch`, and
+    // this wrapper owns an emitter of its own — the inner's event reaches the
+    // inner's listeners, never this one's — so without this a scoped caller
+    // subscribed to the wrapper sees keyed deletes and `deleteAll`, and
+    // nothing at all for the path a scoped caller actually deletes through.
+    //
+    // The identity is built from the CALLER's criteria, before `kb_id` is
+    // injected: it is this wrapper's bookkeeping, not a column the caller
+    // named, and every other value the wrapper hands back has it stripped.
+    this.events.emit("delete", deleteSearchIdentity(criteria));
   }
 
   async updateWhere(

@@ -255,6 +255,37 @@ export function criteriaMatchNoRow<Entity>(
 }
 
 /**
+ * The identity emitted on the `delete` event for a bulk `deleteSearch`: the
+ * plain (operator-free) columns of the criteria — which include the owner /
+ * scope columns — as a `Partial<Entity>`. Search conditions are dropped since
+ * they don't identify a concrete value.
+ *
+ * A free function rather than only a protected method, because a wrapper that
+ * implements `ITabularStorage` without extending `BaseTabularStorage` owes its
+ * subscribers the same event a concrete backend emits, and cannot reach a
+ * protected member to build it.
+ */
+export function deleteSearchIdentity<Entity>(
+  criteria: DeleteSearchCriteria<Entity>
+): Partial<Entity> {
+  const identity: Record<string, unknown> = {};
+  for (const [column, criterion] of Object.entries(criteria)) {
+    // A list criterion identifies no single value, so it is dropped for the
+    // same reason a comparison condition is — otherwise the raw condition
+    // object would be emitted as if it were the column's value. Both list
+    // guards are required: `not-in` passes neither of the other two.
+    if (
+      !isSearchCondition(criterion) &&
+      !isSearchInCondition(criterion) &&
+      !isSearchNotInCondition(criterion)
+    ) {
+      identity[column] = criterion;
+    }
+  }
+  return identity as Partial<Entity>;
+}
+
+/**
  * Whether a `deleteSearch` should run at all, throwing when its criteria would
  * take the whole table with them.
  *

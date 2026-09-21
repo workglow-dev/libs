@@ -152,6 +152,44 @@ describe("ScopedTabularStorage join scoping", () => {
     ]);
   });
 
+  it("emits a delete event for the bulk path, with no kb_id on the identity", async () => {
+    // Every concrete backend emits `delete` from `deleteSearch`, and a scoped
+    // caller deletes through exactly that path — but the wrapper has its own
+    // emitter, so the inner's event never reaches a listener on the wrapper.
+    const { posts } = await seedPair("kb-a", "kb-a");
+    const seen: Partial<Record<string, unknown>>[] = [];
+    posts.on("delete", (identity: Record<string, unknown>) => {
+      seen.push(identity);
+    });
+
+    await posts.deleteSearch({ tenant: "t1" });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual({ tenant: "t1" });
+    // `kb_id` is the wrapper's bookkeeping, not a column the caller named.
+    expect(seen[0]).not.toHaveProperty("kb_id");
+  });
+
+  it("emits nothing on the paths the delete guard stops", async () => {
+    const { posts } = await seedPair("kb-a", "kb-a");
+    const seen: unknown[] = [];
+    posts.on("delete", (identity: unknown) => {
+      seen.push(identity);
+    });
+
+    // Empty criteria are a no-op rather than a table wipe, so there is no
+    // deletion to announce.
+    await posts.deleteSearch({});
+    // An all-empty exclusion is refused outright, and a throw is not a delete.
+    await expect(posts.deleteSearch({ tenant: { value: [], operator: "not-in" } })).rejects.toThrow(
+      /delete the whole table/
+    );
+
+    expect(seen).toEqual([]);
+    const left = (await posts.getAll()) ?? [];
+    expect(left).toHaveLength(1);
+  });
+
   it("refuses an unscoped right side rather than joining across every scope", async () => {
     const { posts } = await seedPair("kb-a", "kb-a");
     const raw = new InMemoryTabularStorage(
