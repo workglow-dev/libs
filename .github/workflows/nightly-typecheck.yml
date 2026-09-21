@@ -1,11 +1,14 @@
-# Bun is pinned exactly, in `.bun-version` and nowhere else: @workglow/sqlite/storage
-# needs `node:sqlite`, which Bun ships from 1.4.0. Floating tags would let an
-# unrelated Bun regression redden every PR on a day nobody touched the code.
+# Every `setup-bun` here takes `latest`, deliberately. The suites are what this
+# repository ships against a moving runtime: `bunfig.toml`'s compatibility shim
+# is written against the gaps in Bun's own `vitest` shim and each of its guards
+# is meant to stand down once Bun ships its own, which only running a new Bun
+# can ever reveal. `engines` already states the floor (`bun >= 1.4.0`, where
+# `node:sqlite` arrives) and `latest` is always above it.
 #
-# One file rather than a number per step, because a pin repeated at every
-# `setup-bun` is a pin only where someone remembered to change it: the version
-# stood at 1.4.2 in one job and 1.4.0 in the other twelve across these three
-# workflows, so what CI actually ran the suite on was not what the repo said.
+# The cost is real and accepted: a Bun regression can redden every PR on a day
+# nobody touched the code. That is the trade — finding out on the day Bun ships
+# it, rather than at the next manual bump. One spelling in every job, so there
+# is no version to keep in sync; `packageManager` still pins local installs.
 name: Nightly type-drift guard
 permissions:
   contents: read
@@ -27,7 +30,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version-file: .bun-version
+          bun-version: latest
       - run: bun i
       - name: Build type declarations
         run: bun run build:types

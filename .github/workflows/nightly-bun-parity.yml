@@ -20,14 +20,17 @@ name: Nightly Bun parity & coverage
 # it is a measurement rather than a gate. Nightly is where a job may take an
 # hour and where nobody is waiting on it.
 
-# Bun is pinned exactly, in `.bun-version` and nowhere else: @workglow/sqlite/storage
-# needs `node:sqlite`, which Bun ships from 1.4.0. Floating tags would let an
-# unrelated Bun regression redden every PR on a day nobody touched the code.
+# Every `setup-bun` here takes `latest`, deliberately. The suites are what this
+# repository ships against a moving runtime: `bunfig.toml`'s compatibility shim
+# is written against the gaps in Bun's own `vitest` shim and each of its guards
+# is meant to stand down once Bun ships its own, which only running a new Bun
+# can ever reveal. `engines` already states the floor (`bun >= 1.4.0`, where
+# `node:sqlite` arrives) and `latest` is always above it.
 #
-# One file rather than a number per step, because a pin repeated at every
-# `setup-bun` is a pin only where someone remembered to change it: the version
-# stood at 1.4.2 in one job and 1.4.0 in the other twelve across these three
-# workflows, so what CI actually ran the suite on was not what the repo said.
+# The cost is real and accepted: a Bun regression can redden every PR on a day
+# nobody touched the code. That is the trade — finding out on the day Bun ships
+# it, rather than at the next manual bump. One spelling in every job, so there
+# is no version to keep in sync; `packageManager` still pins local installs.
 permissions:
   contents: read
 
@@ -42,14 +45,6 @@ env:
   TURBO_TELEMETRY_DISABLED: "1"
 
 jobs:
-  # The pinned Bun is what every other workflow runs, so a failure there is a
-  # real regression. `latest` is the axis that makes this a PARITY run rather
-  # than a second copy of the pinned one: the compatibility shim in
-  # `scripts/lib/preload-vitest-compat.ts` is written against differences
-  # between Bun releases, and each of its guards is meant to stand down once
-  # Bun ships its own — which a single-version matrix can never notice. A
-  # floating tag belongs here and nowhere else: failures in this workflow are
-  # informational and block no merge.
   bun-parity:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -57,18 +52,12 @@ jobs:
       fail-fast: false
       matrix:
         kind: [unit, integration]
-        bun: [pinned, latest]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
-        if: matrix.bun == 'pinned'
-        with:
-          bun-version-file: .bun-version
-      - uses: oven-sh/setup-bun@v2
-        if: matrix.bun == 'latest'
         with:
           bun-version: latest
       - run: bun i
@@ -77,7 +66,7 @@ jobs:
       # to its own schedule, and `browser` needs Playwright binaries this job
       # does not install. Everything else is covered by subtraction, so a new
       # section joins this run without anyone remembering to add it.
-      - name: Run ${{ matrix.kind }} tests under Bun (${{ matrix.bun }})
+      - name: Run ${{ matrix.kind }} tests under Bun
         env:
           WORKGLOW_SECRETS_PASSPHRASE: ${{ secrets.WORKGLOW_SECRETS_PASSPHRASE }}
         run: bun scripts/test.ts bun ${{ matrix.kind }} --except rag,browser,provider-hft,provider-nodellama,provider-api,provider-cactus
@@ -99,7 +88,7 @@ jobs:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version-file: .bun-version
+          bun-version: latest
       - run: bun i
       # Resolution still goes through each package's `exports`, which point at
       # ./dist/*, so the built entries have to exist even though every one of
