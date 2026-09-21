@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { hasUnsafeRegexShape } from "@workglow/util";
 import type { A2UIFunctions } from "../protocol/binding";
 
 /**
@@ -32,19 +33,6 @@ const MAX_REGEX_SUBJECT = 4096;
 
 /** Characters of pattern, past which nothing here is worth reasoning about. */
 const MAX_REGEX_PATTERN = 200;
-
-/**
- * A quantifier applied to a group that is itself quantified — `(a+)+`, `(a*)*`,
- * `(a|aa)+` — which is the shape that backtracks exponentially.
- *
- * A heuristic, and named as one: `^(a?b?)*$` passes it and still blows up. The
- * repository reached this conclusion already, in `regexSafety.ts`, and its
- * answer is a wall-clock budget at match time — which needs a `vm` and so
- * cannot exist in a browser build. What is left here is refusing the shapes
- * that are recognisable and bounding the subject, which together cover the
- * accidental cases without claiming to cover a determined one.
- */
-const NESTED_QUANTIFIER = /\([^()]*[+*][^()]*\)\s*[+*{]|\([^()]*\|[^()]*\)\s*[+*{]/;
 
 function truthy(value: unknown): boolean {
   return Boolean(value);
@@ -111,9 +99,15 @@ export const A2UI_BASIC_FUNCTIONS: A2UIFunctions = Object.freeze({
     // The pattern is the agent's, so a catastrophic one is reachable and a
     // subject cap is not a time bound: `^(a+)+$` is exponential on 4,096
     // characters just as surely as on a million. So the shape is screened as
-    // well — see NESTED_QUANTIFIER for what that does and does not cover.
+    // well, by the one screen the repository has rather than a second one
+    // spelled here: it walks the pattern instead of matching a regex against
+    // it, so it sees a group body quantified `{n,m}` (`^(a{1,10})*$` doubles
+    // its running time every two characters) and alternations whose branches
+    // overlap. Still a heuristic — `^(a?b?)*$` passes it — and the complete
+    // answer is a wall-clock budget at match time, which needs a `vm` a
+    // browser build cannot have.
     if (pattern.length > MAX_REGEX_PATTERN) return false;
-    if (NESTED_QUANTIFIER.test(pattern)) return false;
+    if (hasUnsafeRegexShape(pattern)) return false;
     if (value.length > MAX_REGEX_SUBJECT) return false;
     try {
       return new RegExp(pattern).test(value);
