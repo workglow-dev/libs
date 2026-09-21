@@ -15,7 +15,11 @@ import { extractMessageText } from "@workglow/ai/provider-utils";
 import { filterValidToolCalls } from "@workglow/ai/worker";
 import type { NeedleEngine } from "./Cactus_LoadEngine";
 import type { CactusModelConfig } from "./Cactus_ModelSchema";
-import { needleStreamPiece, parseNeedleToolCalls } from "./Cactus_ParseToolCalls";
+import {
+  createNeedleReasoningFilter,
+  needleStreamPiece,
+  parseNeedleToolCalls,
+} from "./Cactus_ParseToolCalls";
 
 function buildToolsJson(tools: ReadonlyArray<ToolDefinition>): string {
   return JSON.stringify(
@@ -70,25 +74,34 @@ export function createCactusToolCalling(
     const query = promptText(input);
     const toolsJson = buildToolsJson(input.tools);
 
+    // One definition of "what the caller sees as text", so the streamed and
+    // one-shot paths cannot disagree about it.
+    const reasoning = createNeedleReasoningFilter();
+    const emitVisible = (chunk: string): void => {
+      if (chunk.length > 0) emit({ type: "text-delta", port: "text", textDelta: chunk });
+    };
+
     let raw: string;
     if (typeof engine.run_stream === "function") {
       raw = await engine.run_stream(query, toolsJson, (tokenIdOrChunk, piece) => {
-        emit({
-          type: "text-delta",
-          port: "text",
-          textDelta: needleStreamPiece(tokenIdOrChunk, piece),
-        });
+        emitVisible(reasoning.push(needleStreamPiece(tokenIdOrChunk, piece)));
       });
     } else {
       const out = await engine.run(query, toolsJson);
       raw = typeof out === "string" ? out : String(out);
+      // No stream to ride: the whole generation is one delta, so the
+      // accumulator ends up with the same text either way.
+      emitVisible(reasoning.push(raw));
     }
+    emitVisible(reasoning.flush());
 
     const parsed: ToolCalls = parseNeedleToolCalls(raw);
     const validToolCalls = filterValidToolCalls(parsed, input.tools);
     if (validToolCalls.length > 0) {
       emit({ type: "object-delta", port: "toolCalls", objectDelta: [...validToolCalls] });
     }
-    emit({ type: "finish", data: { text: raw, toolCalls: validToolCalls } });
+    // The deltas above are the output; `TaskRunner` accumulates them. Repeating
+    // them here would hand the accumulator a second, competing copy.
+    emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput });
   };
 }

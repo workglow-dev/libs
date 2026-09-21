@@ -16,6 +16,7 @@ export * from "./ai-provider/assertions/capabilityHonesty";
 export * from "./ai-provider/assertions/dispose";
 export * from "./ai-provider/assertions/inferAdvertisesRegistered";
 export * from "./ai-provider/assertions/inferServesInferred";
+export * from "./ai-provider/assertions/noFinishAccumulation";
 export * from "./ai-provider/assertions/pricingMatchesModality";
 export * from "./ai-provider/assertions/registryCoverage";
 export * from "./ai-provider/assertions/sessionReuse";

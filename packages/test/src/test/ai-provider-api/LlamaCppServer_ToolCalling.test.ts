@@ -60,8 +60,49 @@ describe("createLlamaCppServerToolCallingStream", () => {
       undefined as any,
       emit
     );
+    // The repaired arguments arrive on the LAST object-delta, not on `finish`:
+    // the parser is closed after the stream ends, so that delta is the first
+    // time `{"a":1` and `,"b":2}` are one complete object. `finish` carries the
+    // empty shape because `TaskRunner` accumulates the deltas.
+    const toolCallDeltas = events.filter(
+      (e) => e.type === "object-delta" && e.port === "toolCalls"
+    );
+    expect(toolCallDeltas.at(-1)!.objectDelta).toEqual([
+      { id: "c0", name: "add", input: { a: 1, b: 2 } },
+    ]);
     const finish = events.find((e) => e.type === "finish")!;
-    expect(finish.data.toolCalls).toEqual([{ id: "c0", name: "add", input: { a: 1, b: 2 } }]);
+    expect(finish.data).toEqual({ text: "", toolCalls: [] });
+  });
+
+  it("keeps a tool name the model invented out of the stream entirely", async () => {
+    // The delta fold is an upsert by id, so a call that reaches the consumer
+    // cannot be retracted later — filtering has to happen before it is emitted,
+    // not once at the end.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseChunks([
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [{ index: 0, id: "c0", function: { name: "rm_rf", arguments: "{}" } }],
+              },
+            },
+          ],
+        },
+      ])
+    );
+    const fn = createLlamaCppServerToolCallingStream({});
+    const events: any[] = [];
+    await fn(
+      { prompt: "p", tools: TOOLS, toolChoice: "auto" } as any,
+      model,
+      undefined as any,
+      (e: any) => events.push(e)
+    );
+    const emitted = events
+      .filter((e) => e.type === "object-delta" && e.port === "toolCalls")
+      .flatMap((e) => e.objectDelta as Array<{ name: string }>);
+    expect(emitted).toEqual([]);
   });
 
   it("omits tools[] when toolChoice='none'", async () => {

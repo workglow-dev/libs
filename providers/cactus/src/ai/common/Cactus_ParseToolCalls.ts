@@ -29,6 +29,82 @@ export function stripNeedleReasoning(raw: string): string {
 }
 
 /**
+ * The incremental form of {@link stripNeedleReasoning}, for the delta stream.
+ *
+ * `text` means the model's answer for v1 and v2, and it has to keep meaning
+ * that for v3 — which reasons before essentially every answer. The parse path
+ * already drops the `<think>` block; forwarding it to the `text` port anyway
+ * would leave a host rendering the chain of thought beside the tool cards, and
+ * a host logging `text` persisting it.
+ *
+ * Streaming makes this more than a `replace`: a tag can straddle a delta
+ * boundary, so the filter holds back any trailing run that could still turn
+ * into `<think>` and releases it once it cannot.
+ *
+ * {@link NeedleReasoningFilter.flush} exists for the case the fence never
+ * closes. A generation cut short at the token limit has no `</think>`, and
+ * `stripNeedleReasoning` deliberately leaves such a block alone — so the filter
+ * releases what it held rather than swallowing the whole generation.
+ */
+export interface NeedleReasoningFilter {
+  /** The visible part of this delta; `""` when it is entirely reasoning. */
+  push(delta: string): string;
+  /** Whatever is still held when the stream ends. */
+  flush(): string;
+}
+
+/** Longest suffix of `text` that is a proper prefix of `tag`. */
+function danglingPrefixLength(text: string, tag: string): number {
+  const max = Math.min(text.length, tag.length - 1);
+  for (let n = max; n > 0; n--) {
+    if (text.endsWith(tag.slice(0, n))) return n;
+  }
+  return 0;
+}
+
+export function createNeedleReasoningFilter(): NeedleReasoningFilter {
+  const OPEN = "<think>";
+  const CLOSE = "</think>";
+  /** Text not yet classifiable: a partial tag, or a fence still open. */
+  let held = "";
+  let inside = false;
+
+  return {
+    push(delta: string): string {
+      held += delta;
+      let visible = "";
+      for (;;) {
+        if (inside) {
+          const close = held.indexOf(CLOSE);
+          // No closing tag yet: keep holding, in case the stream ends here.
+          if (close === -1) return visible;
+          held = held.slice(close + CLOSE.length);
+          inside = false;
+          continue;
+        }
+        const open = held.indexOf(OPEN);
+        if (open === -1) {
+          const dangling = danglingPrefixLength(held, OPEN);
+          visible += held.slice(0, held.length - dangling);
+          held = held.slice(held.length - dangling);
+          return visible;
+        }
+        visible += held.slice(0, open);
+        // Keep the opening tag, so an unterminated block flushes intact.
+        held = held.slice(open);
+        inside = true;
+      }
+    },
+    flush(): string {
+      const rest = held;
+      held = "";
+      inside = false;
+      return rest;
+    },
+  };
+}
+
+/**
  * Needle v2 and v3 wrap each JSON payload in `<tool_call>…</tool_call>` and can
  * emit more than one block; v1 emits the JSON payload directly.
  *

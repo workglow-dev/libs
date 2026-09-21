@@ -516,7 +516,9 @@ export const HFT_ToolCalling: AiProviderRunFn<
     // For models that use a generation prefix, prepend it so the parser sees the
     // full markup pattern.
     const parseableFullText = responsePrefix ? `${responsePrefix}${fullText}` : fullText;
-    const { text: cleanedText, toolCalls } = adaptParserResult(
+    // Only the calls are taken: the parser's cleaned text is the same text the
+    // markup filter already streamed, and the stream is the one copy.
+    const { toolCalls } = adaptParserResult(
       parseToolCalls(parseableFullText, { parser: modelFamily })
     );
     const validToolCalls = filterValidToolCalls(
@@ -543,9 +545,12 @@ export const HFT_ToolCalling: AiProviderRunFn<
       }
     }
 
+    // The markup filter above already emitted this text as deltas and the
+    // tool calls as an object-delta; `TaskRunner` accumulates them. Repeating
+    // either here hands the accumulator a second, competing copy.
     emit({
       type: "finish",
-      data: { text: cleanedText, toolCalls: validToolCalls } as ToolCallingTaskOutput,
+      data: { text: "", toolCalls: [] } as ToolCallingTaskOutput,
     });
   });
 };
