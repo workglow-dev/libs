@@ -5,22 +5,22 @@
  */
 
 import type { Capability, ModelPricing, ModelRecord } from "@workglow/ai";
-import { _testOnly as anthropic } from "@workglow/anthropic/ai";
+import { _testOnly as anthropic, ANTHROPIC_PRICING } from "@workglow/anthropic/ai";
 import { _testOnly as cactus } from "@workglow/cactus/ai";
 import { _testOnly as chromeAi } from "@workglow/chrome-ai/ai";
-import { _testOnly as deepseek } from "@workglow/deepseek/ai";
-import { _testOnly as gemini } from "@workglow/google-gemini/ai";
+import { _testOnly as deepseek, DEEPSEEK_PRICING } from "@workglow/deepseek/ai";
+import { _testOnly as gemini, GEMINI_PRICING } from "@workglow/google-gemini/ai";
 import { _testOnly as hfi } from "@workglow/huggingface-inference/ai";
 import { _testOnly as hft } from "@workglow/huggingface-transformers/ai";
 import { _testOnly as llamaServer } from "@workglow/llamacpp-server/ai";
 import { _testOnly as llamaCpp } from "@workglow/node-llama-cpp/ai";
 import { _testOnly as ollama } from "@workglow/ollama/ai";
-import { _testOnly as openai } from "@workglow/openai/ai";
+import { _testOnly as openai, OPENAI_PRICING } from "@workglow/openai/ai";
 import { _testOnly as openrouter } from "@workglow/openrouter/ai";
 import { _testOnly as sdCpp } from "@workglow/stable-diffusion-server/ai";
 import { _testOnly as tfmp } from "@workglow/tf-mediapipe/ai";
-import { _testOnly as typesafeai } from "@workglow/typesafeai/ai";
-import { _testOnly as xai } from "@workglow/xai/ai";
+import { _testOnly as typesafeai, TYPESAFEAI_PRICING } from "@workglow/typesafeai/ai";
+import { _testOnly as xai, XAI_PRICING } from "@workglow/xai/ai";
 import { describe, expect, it } from "vitest";
 
 import { assertInferAdvertisesRegistered } from "@workglow/test-contract/ai-provider";
@@ -28,6 +28,7 @@ import type { InferredForModel } from "@workglow/test-contract/ai-provider";
 import { assertInferServesInferred } from "@workglow/test-contract/ai-provider";
 import type { PricedModel } from "@workglow/test-contract/ai-provider";
 import {
+  assertNonTokenPricingRecorded,
   assertPricedGapDoesNotGrow,
   assertPricingMatchesModality,
 } from "@workglow/test-contract/ai-provider";
@@ -337,10 +338,22 @@ const PRICED_CASES: readonly {
     name: "openai",
     models: pricedEach(
       "OPENAI",
-      ["gpt-4o", "text-embedding-3-small", "dall-e-3", "gpt-image-1"],
+      [
+        "gpt-4o",
+        "text-embedding-3-small",
+        "dall-e-3",
+        "gpt-image-1",
+        "gpt-image-2",
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-flare",
+      ],
       () => new openai.OpenAiQueuedProvider(openai.OPENAI_RUN_FNS)
     ),
-    namedByTable: [],
+    // GPT Image genuinely bills per token across three buckets — text in,
+    // image in, image out — which is what `imageInput`/`imageCached` exist to
+    // express. `dall-e-3` and `gpt-image-1` are unpriced, so they need no
+    // entry.
+    namedByTable: ["gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare"],
   },
   {
     name: "google-gemini",
@@ -351,10 +364,11 @@ const PRICED_CASES: readonly {
         "gemini-embedding-001",
         "imagen-4.0-generate-001",
         "gemini-3.1-flash-image",
+        "gemini-3-pro-image",
       ],
       () => new gemini.GoogleGeminiQueuedProvider(gemini.GEMINI_RUN_FNS)
     ),
-    namedByTable: ["imagen-4.0-generate-001", "gemini-3.1-flash-image"],
+    namedByTable: ["imagen-4.0-generate-001", "gemini-3.1-flash-image", "gemini-3-pro-image"],
   },
   {
     name: "xai",
@@ -400,6 +414,69 @@ const KNOWN_UNPRICED: Readonly<Record<string, readonly string[]>> = {
   typesafeai: [],
 };
 
+/**
+ * Every id each provider's own rate table names, paired with what that same
+ * provider infers for it.
+ *
+ * The fixtures above list the models a reader picked; this lists the table. A
+ * card added to a table and not to a fixture is never examined by the
+ * assertions above, which is exactly how three GPT Image cards and a Gemini
+ * one entered their tables with no recorded decision beside them.
+ */
+const PRICING_TABLES: readonly {
+  readonly name: string;
+  readonly models: readonly PricedModel[];
+}[] = [
+  {
+    name: "anthropic",
+    models: pricedEach(
+      "ANTHROPIC",
+      Object.keys(ANTHROPIC_PRICING),
+      () => new anthropic.AnthropicQueuedProvider(anthropic.ANTHROPIC_RUN_FNS)
+    ),
+  },
+  {
+    name: "openai",
+    models: pricedEach(
+      "OPENAI",
+      Object.keys(OPENAI_PRICING),
+      () => new openai.OpenAiQueuedProvider(openai.OPENAI_RUN_FNS)
+    ),
+  },
+  {
+    name: "google-gemini",
+    models: pricedEach(
+      "GOOGLE_GEMINI",
+      Object.keys(GEMINI_PRICING),
+      () => new gemini.GoogleGeminiQueuedProvider(gemini.GEMINI_RUN_FNS)
+    ),
+  },
+  {
+    name: "xai",
+    models: pricedEach(
+      "XAI",
+      Object.keys(XAI_PRICING),
+      () => new xai.XaiQueuedProvider(xai.XAI_RUN_FNS)
+    ),
+  },
+  {
+    name: "deepseek",
+    models: pricedEach(
+      "DEEPSEEK",
+      Object.keys(DEEPSEEK_PRICING),
+      () => new deepseek.DeepSeekQueuedProvider(deepseek.DEEPSEEK_RUN_FNS)
+    ),
+  },
+  {
+    name: "typesafeai",
+    models: pricedEach(
+      "TYPESAFEAI",
+      Object.keys(TYPESAFEAI_PRICING),
+      () => new typesafeai.TypeSafeAiQueuedProvider(typesafeai.TYPESAFEAI_RUN_FNS)
+    ),
+  },
+];
+
 describe("a rate card matches the model's billing unit", () => {
   it.each(PRICED_CASES)(
     "$name does not borrow a per-token rate",
@@ -411,6 +488,18 @@ describe("a rate card matches the model's billing unit", () => {
   it.each(PRICED_CASES)("$name prices no fewer models than recorded", ({ name, models }) => {
     assertPricedGapDoesNotGrow(name, models, KNOWN_UNPRICED[name] ?? []);
   });
+
+  // The fixtures can only be asked about the ids they list, so walking each
+  // provider's own table is what makes "added a card, forgot the fixture" a
+  // build failure rather than a silent gap.
+  it.each(PRICING_TABLES)(
+    "$name records every non-token-billed id in its table",
+    ({ name, models }) => {
+      const recorded = PRICED_CASES.find((entry) => entry.name === name);
+      expect(recorded, `${name} has a pricing table but no PRICED_CASES entry`).toBeDefined();
+      assertNonTokenPricingRecorded(name, models, recorded!.namedByTable);
+    }
+  );
 
   it("is not vacuous: the fixtures include a non-token-billed model", () => {
     const imageModels = PRICED_CASES.flatMap(({ models }) =>

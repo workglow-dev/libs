@@ -98,6 +98,44 @@ export function assertPricingMatchesModality(
 }
 
 /**
+ * Every non-token-billed id in a provider's own pricing table is recorded.
+ *
+ * {@link assertPricingMatchesModality} can only ask about the ids a fixture
+ * happens to list, so a rate card added to a table and not to the fixture is
+ * never examined — which is the one failure the recorded set exists to make
+ * impossible. Walking the table itself closes that: the recorded set must be
+ * exactly the table's non-token-billed, token-priced ids, so adding an image
+ * card without writing the decision down fails the build instead of passing
+ * silently.
+ *
+ * `tableModels` is every key of the provider's exported pricing table, paired
+ * with what that same provider infers for it. A free card is exempt for the
+ * same reason it is exempt above.
+ */
+export function assertNonTokenPricingRecorded(
+  name: string,
+  tableModels: readonly PricedModel[],
+  namedByTable: readonly string[]
+): void {
+  const shouldBeRecorded = tableModels
+    .filter(
+      ({ capabilities, pricing }) =>
+        capabilities.some((capability) => NOT_TOKEN_BILLED.has(capability)) &&
+        quotesTokenRate(pricing) &&
+        !((pricing?.input ?? 0) === 0 && (pricing?.output ?? 0) === 0)
+    )
+    .map(({ id }) => id)
+    .sort();
+
+  expect(
+    shouldBeRecorded,
+    `${name}: its pricing table quotes a per-token rate for these non-token-billed ids; ` +
+      `each is a decision to record in the fixture's namedByTable (with the reason) ` +
+      `or a borrowed rate to remove`
+  ).toEqual([...namedByTable].sort());
+}
+
+/**
  * The weaker direction: a token-billed model SHOULD carry a card.
  *
  * A ratchet rather than an assertion, deliberately. Real gaps exist today —
