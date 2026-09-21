@@ -15,10 +15,10 @@
   "homepage": "https://workglow.dev",
   "scripts": {
     "watch": "concurrently -c 'auto' 'bun:watch-*'",
-    "watch-js": "bun build --watch --no-clear-screen --target=node --sourcemap=external --packages=external --root ./src --outdir ./dist ./src/ai-provider.ts ./src/browser-context.ts ./src/entitlement-profile.ts ./src/human-connector.ts ./src/storage-migrations.ts ./src/tabular-migrations.ts ./src/tabular-storage.ts ./src/vector-storage.ts ./src/web-search.ts ./src/worker-proxy.ts ./src/creditExhaustedSkip.ts ./src/itExpectFail.ts",
+    "watch-js": "bun build --watch --no-clear-screen --target=node --sourcemap=external --packages=external --root ./src --outdir ./dist ./src/ai-provider.ts ./src/browser-context.ts ./src/entitlement-profile.ts ./src/human-connector.ts ./src/job-queue.ts ./src/storage-migrations.ts ./src/tabular-migrations.ts ./src/tabular-storage.ts ./src/vector-storage.ts ./src/web-search.ts ./src/worker-proxy.ts ./src/creditExhaustedSkip.ts ./src/itExpectFail.ts",
     "watch-types": "tsc --watch --preserveWatchOutput",
     "build-package": "bun run build-js && bun run build-types",
-    "build-js": "bun build --target=node --sourcemap=external --packages=external --root ./src --outdir ./dist ./src/ai-provider.ts ./src/browser-context.ts ./src/entitlement-profile.ts ./src/human-connector.ts ./src/storage-migrations.ts ./src/tabular-migrations.ts ./src/tabular-storage.ts ./src/vector-storage.ts ./src/web-search.ts ./src/worker-proxy.ts ./src/creditExhaustedSkip.ts ./src/itExpectFail.ts",
+    "build-js": "bun build --target=node --sourcemap=external --packages=external --root ./src --outdir ./dist ./src/ai-provider.ts ./src/browser-context.ts ./src/entitlement-profile.ts ./src/human-connector.ts ./src/job-queue.ts ./src/storage-migrations.ts ./src/tabular-migrations.ts ./src/tabular-storage.ts ./src/vector-storage.ts ./src/web-search.ts ./src/worker-proxy.ts ./src/creditExhaustedSkip.ts ./src/itExpectFail.ts",
     "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
     "build-types": "rm -f tsconfig.tsbuildinfo && tsc"
   },
@@ -38,6 +38,10 @@
     "./human-connector": {
       "types": "./dist/human-connector.d.ts",
       "import": "./dist/human-connector.js"
+    },
+    "./job-queue": {
+      "types": "./dist/job-queue.d.ts",
+      "import": "./dist/job-queue.js"
     },
     "./storage-migrations": {
       "types": "./dist/storage-migrations.d.ts",
@@ -75,6 +79,7 @@
   "peerDependencies": {
     "@workglow/ai": "workspace:*",
     "@workglow/browser-control": "workspace:*",
+    "@workglow/job-queue": "workspace:*",
     "@workglow/storage": "workspace:*",
     "@workglow/task-graph": "workspace:*",
     "@workglow/util": "workspace:*",
@@ -86,6 +91,9 @@
       "optional": true
     },
     "@workglow/browser-control": {
+      "optional": true
+    },
+    "@workglow/job-queue": {
       "optional": true
     },
     "@workglow/storage": {
@@ -104,6 +112,7 @@
   "devDependencies": {
     "@workglow/ai": "workspace:*",
     "@workglow/browser-control": "workspace:*",
+    "@workglow/job-queue": "workspace:*",
     "@workglow/storage": "workspace:*",
     "@workglow/task-graph": "workspace:*",
     "@workglow/util": "workspace:*",
