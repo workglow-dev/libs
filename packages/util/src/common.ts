@@ -15,6 +15,7 @@ export * from "./logging";
 export * from "./utilities/BaseError";
 export * from "./utilities/asText";
 export * from "./utilities/Misc";
+export * from "./utilities/regexShape";
 export * from "./utilities/objectOfArraysAsArrayOfObjects";
 export * from "./utilities/TypeUtilities";
 export * from "./worker/WorkerManager";

@@ -135,8 +135,26 @@ describe("input an agent controls, reaching a runtime that throws on it", () => 
     expect(call("regex", { pattern: "(a|aa)+", value: "aaaa" })).toBe(false);
   });
 
+  it("refuses a group body quantified with {n,m}", () => {
+    // `^(a{1,10})*$` doubles its running time every two characters — 35 ms at
+    // 18, 1.5 s at 26 — and `MAX_REGEX_SUBJECT` is 4096, so the match never
+    // returns. The match runs on the renderer's own thread, so that is a
+    // frozen tab.
+    const started = performance.now();
+    expect(call("regex", { pattern: "^(a{1,10})*$", value: `${"a".repeat(40)}!` })).toBe(false);
+    expect(performance.now() - started).toBeLessThan(100);
+
+    // `{10}` is bounded and still repeats, which is what makes `(a+){10}`
+    // catastrophic.
+    expect(call("regex", { pattern: "(a+){10}", value: "aaaa" })).toBe(false);
+  });
+
   it("still runs an ordinary pattern", () => {
     expect(call("regex", { pattern: "^[a-z]+$", value: "abc" })).toBe(true);
     expect(call("regex", { pattern: "^\\d{3}$", value: "123" })).toBe(true);
+    // A `{n,m}` that is NOT on a group body is ordinary, and a group bounded to
+    // at most one repetition stays linear whatever its body quantifies.
+    expect(call("regex", { pattern: "^a{1,10}$", value: "aaa" })).toBe(true);
+    expect(call("regex", { pattern: "^(\\.\\d+)?$", value: ".25" })).toBe(true);
   });
 });
