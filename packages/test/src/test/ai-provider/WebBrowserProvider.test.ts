@@ -1525,6 +1525,76 @@ describe("WebBrowser_ToolCalling multi-round context", () => {
     }
   });
 
+  /**
+   * Rendered as the empty string, a tool that returned an image told the model
+   * it returned nothing — which is indistinguishable from a tool that produced
+   * nothing, and is the input most likely to make a model call the tool again.
+   * That is the loop this function was written to end.
+   */
+  it("names a non-text tool result rather than rendering it as an empty body", () => {
+    const text = chatHistory.flattenToolExchange([
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "c1", name: "screenshot_page", input: {} }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "c1",
+            content: [{ type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" }],
+            is_error: undefined,
+          },
+        ],
+      },
+    ]);
+
+    expect(text).not.toMatch(/Tool result from screenshot_page:\s*$/);
+    expect(text).toContain("Tool result from screenshot_page: [image content (image/png)");
+  });
+
+  it("says so when a tool result carried no content at all", () => {
+    const text = chatHistory.flattenToolExchange([
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "c1", name: "tool_a", input: {} }],
+      },
+      {
+        role: "tool",
+        content: [{ type: "tool_result", tool_use_id: "c1", content: [], is_error: undefined }],
+      },
+    ]);
+
+    expect(text).toContain("Tool result from tool_a: (no content returned)");
+  });
+
+  it("keeps the text of a mixed tool result and names the part it cannot carry", () => {
+    const text = chatHistory.flattenToolExchange([
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "c1", name: "tool_a", input: {} }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "c1",
+            content: [
+              { type: "text", text: "here is the chart" },
+              { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+            ],
+            is_error: undefined,
+          },
+        ],
+      },
+    ]);
+
+    expect(text).toContain("here is the chart");
+    expect(text).toContain("[image content (image/png)");
+  });
+
   it("marks a failed tool result as an error rather than as its answer", () => {
     const text = chatHistory.flattenToolExchange([
       {
