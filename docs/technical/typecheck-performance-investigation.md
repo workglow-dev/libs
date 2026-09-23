@@ -135,8 +135,11 @@ There is no surgical fix. Real remediation is either:
 
 A CI guard that type-checks each composite package in isolation and compares its
 **instantiation count** against committed per-package budgets
-(`scripts/typecheck-budget.json`, default tolerance +15%, packages under 50k
-instantiations are not gated). Instantiations are deterministic and
+(`scripts/typecheck-budget.json`, default tolerance +15%, or +2,000
+instantiations where that is more generous). Every composite package carries an
+entry, and one the file does not name fails the check until `--update` records
+it — otherwise a newly added package is measured and gated by nothing.
+Instantiations are deterministic and
 machine-independent, so the gate is stable across runners while catching exactly
 the class of regression documented here.
 
