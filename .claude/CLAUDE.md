@@ -68,6 +68,7 @@ util, sqlite            (foundation)
   → dataset, tasks      (KnowledgeBase, documents, chunks; utility tasks)
   → ai                  (AI task base classes, model registry, provider helpers)
      web-search         (WebSearchTask + provider registry; depends on tasks, NOT on ai)
+  → bootstrap           (installs every built-in default onto a service registry)
   → providers/*         (anthropic, openai, gemini, ollama, ...)
   → test                (integration tests), workglow (meta-package), debug (DevTools formatters)
 ```
@@ -577,6 +578,16 @@ it needs a host HTTP server, which is the dependency every other trigger here av
 `InputTask`, `OutputTask`, `LambdaTask`, `DelayTask`, `FetchUrlTask`, `JavaScriptTask`,
 `JsonTask`, `MergeTask`, `SplitTask`, `ArrayTask`, MCP tasks, scalar/vector math.
 Register with `registerCommonTasks({ fileSystemTasks })` — the flag is required, and decides whether `FileGrepTask`/`FileLoaderTask`/`FileSedTask` are resolvable by type name (and so nameable by graph JSON the host did not author).
+
+### `@workglow/bootstrap` — default registration
+
+Each registrar self-registers on the **global** registry when its module happens to be imported — `registerModelDefaults()`, `registerTabularStorageDefaults()` and the twelve others run at module scope, and default their `registry` parameter to the global one. What is populated therefore depends on which modules your import graph has pulled in, which is import-order dependent and easy to mis-diagnose. `bootstrapWorkglow()` is the guarantee: it installs the full set in dependency order, idempotently. An isolated registry gets **nothing** until `registerAllDefaults(registry)` (or `createOrchestrationContext()`) is called explicitly. This package is that seam, and **the implementation lives here** — `packages/workglow/src/bootstrap.ts` is now a pure `export * from "@workglow/bootstrap"` re-export shim. Add a new default registration in `packages/bootstrap/src/bootstrap/registerAllDefaults.ts`; editing the shim does nothing.
+
+- `bootstrapWorkglow(opts?)` — installs defaults onto the global registry, idempotent. The normal application entry point.
+- `createOrchestrationContext(opts?)` — a fresh, disposable registry backed by its own container (tests, multi-tenant servers, embedded use).
+- `registerAllDefaults(registry)` — the 14 `register*Defaults` calls in dependency order. The registry parameter is **required**: the function mutates whichever container it is handed, so the target is stated at the call site rather than silently defaulting to the global one.
+
+`vitest.setup.ts` calls `bootstrapWorkglow()` by source path — the isolated linker keeps workspace packages out of the repo root's `node_modules`, so neither `@workglow/bootstrap` nor `@workglow/util` resolves from there.
 
 ## Testing
 
