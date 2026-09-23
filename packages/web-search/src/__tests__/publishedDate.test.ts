@@ -31,6 +31,20 @@ describe("toIsoPublishedDate", () => {
     expect(toIsoPublishedDate("2 weeks ago")).toBeUndefined();
   });
 
+  it("reports an inherited object key as unknown instead of throwing", () => {
+    // The month lookup lowercases, which leaves `constructor` as the one
+    // inherited key a provider row can still reach. Through an object literal
+    // it resolved to `Object`, `Date.UTC(2025, Object, 1)` was NaN, and
+    // `toISOString()` threw a RangeError — failing the WHOLE search over one
+    // bad row, which is the opposite of what this function exists to do.
+    // Brave's `age`, Anthropic's `page_age`, Tavily and SearXNG all call it
+    // unwrapped.
+    expect(toIsoPublishedDate("constructor 1, 2025")).toBeUndefined();
+    expect(toIsoPublishedDate("Constructor 1, 2025")).toBeUndefined();
+    expect(toIsoPublishedDate("toString 1, 2025")).toBeUndefined();
+    expect(toIsoPublishedDate("hasOwnProperty 1, 2025")).toBeUndefined();
+  });
+
   it("treats absent and blank alike", () => {
     expect(toIsoPublishedDate(undefined)).toBeUndefined();
     expect(toIsoPublishedDate("   ")).toBeUndefined();
