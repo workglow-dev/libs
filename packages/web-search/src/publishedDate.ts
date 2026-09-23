@@ -4,20 +4,26 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-const MONTH_INDEX: Record<string, number> = {
-  january: 0,
-  february: 1,
-  march: 2,
-  april: 3,
-  may: 4,
-  june: 5,
-  july: 6,
-  august: 7,
-  september: 8,
-  october: 9,
-  november: 10,
-  december: 11,
-};
+/**
+ * A `Map`, not an object literal: the lookup key is provider text, and an
+ * object's inherited keys are reachable through it — `constructor` survives the
+ * lowercasing this does, so a row reading "constructor 1, 2025" would resolve
+ * to `Object` and be carried into `Date.UTC` as the month.
+ */
+const MONTH_INDEX = new Map<string, number>([
+  ["january", 0],
+  ["february", 1],
+  ["march", 2],
+  ["april", 3],
+  ["may", 4],
+  ["june", 5],
+  ["july", 6],
+  ["august", 7],
+  ["september", 8],
+  ["october", 9],
+  ["november", 10],
+  ["december", 11],
+]);
 
 /** Anthropic `page_age` and similar: "April 30, 2025". */
 const HUMAN_CALENDAR_DATE = /^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/;
@@ -45,12 +51,21 @@ export function toIsoPublishedDate(value: string | undefined): string | undefine
 
   const human = HUMAN_CALENDAR_DATE.exec(trimmed);
   if (human) {
-    const month = MONTH_INDEX[human[1].toLowerCase()];
+    const month = MONTH_INDEX.get(human[1].toLowerCase());
     if (month !== undefined) {
-      return new Date(Date.UTC(Number(human[3]), month, Number(human[2]))).toISOString();
+      return toIso(Date.UTC(Number(human[3]), month, Number(human[2])));
     }
   }
 
-  const parsed = Date.parse(trimmed);
-  return Number.isNaN(parsed) ? undefined : new Date(parsed).toISOString();
+  return toIso(Date.parse(trimmed));
+}
+
+/**
+ * `toISOString()` throws on a timestamp outside the representable range. No
+ * input reaching here produces one today, so this is a backstop: the contract
+ * is that an unusable value reports unknown rather than failing the search that
+ * produced it, and a throw would break that from anywhere.
+ */
+function toIso(timestamp: number): string | undefined {
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
 }
