@@ -423,6 +423,42 @@ declarations. This is important because `.d.ts` files may differ across platform
 the browser build exports `globalThis.Worker` while the Node build exports a `WorkerPolyfill`
 with a different constructor signature.
 
+**A block's `"types"` must name the declaration of the implementation in that same block.**
+`tsc` compiles all of `src/**/*`, so every entry file already has its own `.d.ts` in `dist` —
+there is never a reason to borrow another target's. A block that points `"browser"` at the node
+`.d.ts` type-checks browser consumers against the node build: they get autocomplete and
+successful compiles for symbols that are `undefined` at runtime, because the browser bundle
+never exported them. `packages/test/src/test/util/ExportTypesPairing.test.ts` walks every
+condition branch of every workspace manifest and fails on any pair that has drifted apart.
+
+**TypeScript applies the `"browser"` condition only when the consumer asks for it.** Its condition
+set is `["import", "types"]` under `moduleResolution: "bundler"` and `["node", "import", "types"]`
+under `node16`/`nodenext` — `"browser"` is in neither. A Vite or webpack app therefore _bundles_
+`dist/browser.js` while `tsc` resolves the outer `"types"` and type-checks it against the node
+declaration. Correct manifests do not fix that on their own; they move the drift from the manifest
+to the consumer's tsconfig. Browser consumers must opt in:
+
+```json
+{
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "customConditions": ["browser"]
+  }
+}
+```
+
+`examples/web/tsconfig.json` is the in-repo example. Downstream apps that bundle for the browser
+need the same line — without it, `import { _testOnly } from "@workglow/openai/ai"` compiles with
+full autocomplete and is `undefined` at runtime.
+
+CI proves that condition still resolves. The `Typecheck the browser condition` step in
+`test.yml`'s `typecheck-budget` job runs `bun run typecheck:browser`, which compiles
+`packages/test/src/browser-conditions/browserConditionResolution.types.ts` under
+`customConditions: ["browser"]` — the only compiler run in CI that resolves a provider or
+meta-package subpath that way. Every other browser-split guard reads manifests and barrels as
+text, so an `export *` dropped from **both** halves of a pair passes them all and surfaces only
+in a downstream browser app.
+
 ---
 
 ## Developer Workflow

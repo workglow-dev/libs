@@ -61,6 +61,15 @@ jobs:
       - name: Typecheck co-located tests
         run: bun run typecheck:tests
 
+      # The only compiler run in CI that resolves a provider or meta-package
+      # subpath under the `browser` condition. Every other browser-split guard
+      # reads manifests and barrels as TEXT, so an `export *` dropped from both
+      # halves of a pair passes them all and surfaces only in a downstream
+      # browser app. Must follow the budget guard, which is what emits the
+      # `dist/*.d.ts` this program resolves against.
+      - name: Typecheck the browser condition
+        run: bun run typecheck:browser
+
   test-discovery:
     runs-on: ubuntu-latest
     steps:

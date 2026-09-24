@@ -38,7 +38,7 @@
     },
     "./ai-runtime": {
       "browser": {
-        "types": "./dist/ai-runtime.d.ts",
+        "types": "./dist/ai-runtime.browser.d.ts",
         "import": "./dist/ai-runtime.browser.js"
       },
       "types": "./dist/ai-runtime.d.ts",
