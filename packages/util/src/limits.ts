@@ -72,6 +72,26 @@ export const SECURITY_LIMITS = {
   imageMaxInputBytesBrowser: 32 * 1024 * 1024,
   /** Max redirect hops followed by the SSRF-aware `safeFetch` wrapper. */
   safeFetchMaxRedirectHops: 20,
+  /**
+   * Max bytes buffered from a webhook response body before the read is
+   * abandoned. Truncation constants apply only after a body is fully in
+   * memory, so without this ceiling a hostile endpoint answering with an
+   * unbounded body would OOM the runner.
+   */
+  webhookMaxResponseBodyBytes: 1024 * 1024,
+  /**
+   * Shortest fragment of a webhook URL that may be redacted out of an echoed
+   * response body. Below this length a path segment is far likelier to be an
+   * ordinary word than a token, and replacing it would mangle the diagnostic
+   * the redaction exists to preserve.
+   */
+  webhookMinRedactableSegmentChars: 8,
+  /**
+   * Max nesting depth walked when escaping Slack Block Kit structures. Real
+   * Block Kit nests about six levels; exceeding this means a hostile payload
+   * or a cycle, both of which are rejected rather than followed.
+   */
+  slackBlocksMaxDepth: 32,
   /** Max accepted length (characters) of an encoded tabular storage pagination cursor. */
   tabularMaxCursorLength: 8 * 1024,
   /** Lines matched per interruptible regex batch (ReDoS defence, see below). */
@@ -83,4 +103,14 @@ export const SECURITY_LIMITS = {
    * the task instead of blocking forever.
    */
   regexMatchBatchTimeoutMs: 1_000,
+  /**
+   * Max seconds an endpoint's `Retry-After` (header or JSON body) may defer a
+   * retry by. The value is remote-controlled, so without a ceiling a hostile
+   * or broken server parks a job indefinitely — and a large enough number
+   * pushes the computed timestamp past the maximum representable Date, whose
+   * NaN then propagates into the job queue's reschedule arithmetic. 24h is
+   * far beyond any real provider's back-off and keeps the millisecond
+   * arithmetic well inside the safe-integer range.
+   */
+  httpRetryAfterMaxSeconds: 86_400,
 } as const satisfies Record<string, number>;
