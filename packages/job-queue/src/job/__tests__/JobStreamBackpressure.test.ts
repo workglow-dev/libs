@@ -227,3 +227,55 @@ describe("a parked stream dispatch holds the job's claim", () => {
     }
   });
 });
+
+/** Parks BEFORE its first stream event, where the stream heartbeat has not armed. */
+class ParkedBeforeFirstEventJob extends Job<EmitInput, { emitted: number }> {
+  static readonly type = "ParkedBeforeFirstEventJob";
+  public static executions = 0;
+  public static gate: Promise<void> = Promise.resolve();
+  override async execute(): Promise<{ emitted: number }> {
+    ParkedBeforeFirstEventJob.executions++;
+    await ParkedBeforeFirstEventJob.gate;
+    return { emitted: 0 };
+  }
+}
+
+describe("a server passes its lease options to its workers", () => {
+  async function executionsWhileParked(options: {
+    readonly leaseMs: number;
+    readonly extendLeaseWhileRunning?: boolean;
+  }): Promise<number> {
+    ParkedBeforeFirstEventJob.executions = 0;
+    const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+    ParkedBeforeFirstEventJob.gate = gate;
+    const queueName = `server-lease-${uuid4()}`;
+    const storage = new InMemoryQueueStorage<EmitInput, { emitted: number }>(queueName);
+    await storage.migrate();
+    const { messageQueue, jobStore } = wrapQueueStorage(storage);
+    const server = new JobQueueServer<EmitInput, { emitted: number }>(
+      ParkedBeforeFirstEventJob as any,
+      { messageQueue, jobStore, queueName, pollIntervalMs: 1, stopTimeoutMs: 0, ...options }
+    );
+    await messageQueue.send({ queue: queueName, input: { count: 0 }, status: "NEW" } as any);
+    await server.start();
+    try {
+      // Several lease periods' worth of running.
+      await new Promise((r) => setTimeout(r, 400));
+      return ParkedBeforeFirstEventJob.executions;
+    } finally {
+      release();
+      await server.stop();
+    }
+  }
+
+  it("reaches the worker's lease: a short one is reclaimed while the job still runs", async () => {
+    // The control. The default lease is 30s, so a reclaim inside 400ms proves
+    // the server's `leaseMs` reached the worker — and shows the hazard the
+    // stream heartbeat cannot cover, since this job has emitted nothing.
+    expect(await executionsWhileParked({ leaseMs: 60 })).toBeGreaterThan(1);
+  });
+
+  it("reaches extendLeaseWhileRunning: the running job keeps its claim", async () => {
+    expect(await executionsWhileParked({ leaseMs: 60, extendLeaseWhileRunning: true })).toBe(1);
+  });
+});
