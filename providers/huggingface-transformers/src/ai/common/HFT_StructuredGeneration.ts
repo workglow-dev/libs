@@ -6,12 +6,12 @@
 
 import type { Message, TextGenerationPipeline } from "@huggingface/transformers";
 import type { ResponseFormat } from "@huggingface/transformers-structured-output";
-import { StructuredOutputProcessor } from "@huggingface/transformers-structured-output";
 import type {
   AiProviderRunFn,
   StructuredGenerationTaskInput,
   StructuredGenerationTaskOutput,
 } from "@workglow/ai";
+import { promptWithJsonSchema } from "@workglow/ai/provider-utils";
 import { createPartialJsonStream } from "@workglow/util/worker";
 import type { HfTransformersOnnxModelConfig } from "./HFT_ModelSchema";
 import {
@@ -22,6 +22,11 @@ import {
 } from "./HFT_Pipeline";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
 
+/**
+ * Decode is greedy unless the caller asks for sampling: `temperature` only
+ * reaches transformers.js' logits warpers under `do_sample`, so the two are
+ * derived from one another rather than set independently.
+ */
 export const HFT_StructuredGeneration: AiProviderRunFn<
   StructuredGenerationTaskInput,
   StructuredGenerationTaskOutput,
@@ -30,7 +35,7 @@ export const HFT_StructuredGeneration: AiProviderRunFn<
   await withHftPipelineInUse(getPipelineCacheKey(model!), async () => {
     const generateText = (await getPipeline(model!, emit, {}, signal)) as TextGenerationPipeline;
     const { TextStreamer, InterruptableStoppingCriteria } = await loadTransformersSDK();
-    const prompt = input.prompt; //promptWithJsonSchema(input.prompt, input.outputSchema);
+    const prompt = promptWithJsonSchema(input.prompt, input.outputSchema);
 
     const messages: Message[] = [{ role: "user", content: prompt }];
 
@@ -90,15 +95,21 @@ export const HFT_StructuredGeneration: AiProviderRunFn<
 
     // Prompt injection tells the model what the fields mean; the logits
     // processor is what actually constrains decode to valid JSON for the schema.
+    // Loaded dynamically because it statically imports the transformers SDK,
+    // which the main-thread `/ai` entry must not pull in.
+    const { StructuredOutputProcessor } =
+      await import("@huggingface/transformers-structured-output");
     const processor = new StructuredOutputProcessor(generateText.tokenizer, {
       type: "json_schema",
       json_schema: input.outputSchema,
     } as Extract<ResponseFormat, { type: "json_schema" }>);
 
+    const temperature = input.temperature ?? 0;
+
     await generateText(formattedPrompt, {
       max_new_tokens: input.maxTokens ?? 1024,
-      temperature: input.temperature ?? undefined,
-      do_sample: false,
+      temperature,
+      do_sample: temperature > 0,
       return_full_text: false,
       streamer,
       stopping_criteria: [stopping_criteria],
