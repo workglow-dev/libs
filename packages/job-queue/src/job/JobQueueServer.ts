@@ -89,6 +89,21 @@ export interface JobQueueServerOptions<Input, Output> {
   readonly deadLetter?: IMessageQueue<DeadLetter<Input>> | "discard";
   /** Number of jobs to pre-fetch per poll iteration. Defaults to 1. */
   readonly prefetch?: number;
+  /**
+   * Passed to every worker; see {@link JobQueueWorkerOptions.leaseMs}. Without
+   * it a server's workers always took the default lease, however long its jobs
+   * run.
+   */
+  readonly leaseMs?: number;
+  /**
+   * Passed to every worker; see
+   * {@link JobQueueWorkerOptions.extendLeaseWhileRunning}. A queue whose
+   * storage lives only in this process should set it: a lease reclaim exists to
+   * recover a job from a worker that died, and when the worker dies the queue
+   * dies with it, so the only reclaim that can happen is the live worker's own
+   * poll loop re-executing a job that is still running.
+   */
+  readonly extendLeaseWhileRunning?: boolean;
 }
 
 /**
@@ -114,6 +129,8 @@ export class JobQueueServer<
   protected readonly stopTimeoutMs?: number;
   protected readonly deadLetter: IMessageQueue<DeadLetter<Input>> | "discard";
   protected readonly prefetch: number;
+  protected readonly leaseMs?: number;
+  protected readonly extendLeaseWhileRunning?: boolean;
 
   protected readonly events = new EventEmitter<JobQueueServerEventListeners<Input, Output>>();
   protected readonly workers: JobQueueWorker<Input, Output, QueueJob>[] = [];
@@ -148,6 +165,8 @@ export class JobQueueServer<
     this.stopTimeoutMs = options.stopTimeoutMs;
     this.deadLetter = options.deadLetter ?? "discard";
     this.prefetch = Math.max(1, options.prefetch ?? 1);
+    this.leaseMs = options.leaseMs;
+    this.extendLeaseWhileRunning = options.extendLeaseWhileRunning;
 
     this.initializeWorkers();
   }
@@ -422,6 +441,8 @@ export class JobQueueServer<
       stopTimeoutMs: this.stopTimeoutMs,
       deadLetter: this.deadLetter,
       prefetch: this.prefetch,
+      leaseMs: this.leaseMs,
+      extendLeaseWhileRunning: this.extendLeaseWhileRunning,
       onStreamEvent: (jobId, event) => this.dispatchStreamToClients(jobId, event),
     });
 
