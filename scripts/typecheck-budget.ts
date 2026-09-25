@@ -22,8 +22,13 @@
  * A package is over budget only once it exceeds BOTH the relative tolerance
  * and the absolute slack — see {@link TypecheckBudget.slack}.
  *
+ * Every package carries an entry, whatever its size: `--update` writes one for
+ * each, so a package the budget file does not name means the baseline was never
+ * taken and the guard is not watching it. That fails the check rather than
+ * printing a line among forty others.
+ *
  * Usage:
- *   bun scripts/typecheck-budget.ts            # check against budgets, exit 1 on regression
+ *   bun scripts/typecheck-budget.ts            # check against budgets, exit 1 on regression or unrecorded package
  *   bun scripts/typecheck-budget.ts --update   # rewrite budgets from current measurements
  *   bun scripts/typecheck-budget.ts --json     # emit measurements as JSON to stdout
  *   bun scripts/typecheck-budget.ts --no-build # skip the warm `tsc -b` (reuse existing dist .d.ts)
@@ -47,12 +52,6 @@ export interface TypecheckBudget {
   /** Fractional headroom allowed over budget before failing (e.g. 0.15 = +15%). */
   readonly tolerance: number;
   /**
-   * Packages whose instantiation count is below this are not gated (the
-   * relative tolerance is meaningless for trivially small packages and only
-   * produces noise).
-   */
-  readonly floor: number;
-  /**
    * Absolute headroom allowed over budget, applied when it is more generous
    * than {@link tolerance}. A few-hundred-instantiation package moves by well
    * over 15% when one type reference is added, so the percentage alone gates
@@ -72,7 +71,6 @@ export interface PackageMeasurement {
 }
 
 const DEFAULT_TOLERANCE = 0.15;
-const DEFAULT_FLOOR = 50_000;
 const DEFAULT_SLACK = 2_000;
 
 function listPackageDirs(): string[] {
@@ -121,7 +119,6 @@ function loadBudget(): TypecheckBudget {
   if (!existsSync(BUDGET_FILE)) {
     return {
       tolerance: DEFAULT_TOLERANCE,
-      floor: DEFAULT_FLOOR,
       slack: DEFAULT_SLACK,
       packages: {},
     };
@@ -129,7 +126,6 @@ function loadBudget(): TypecheckBudget {
   const parsed = JSON.parse(readFileSync(BUDGET_FILE, "utf8")) as Partial<TypecheckBudget>;
   return {
     tolerance: parsed.tolerance ?? DEFAULT_TOLERANCE,
-    floor: parsed.floor ?? DEFAULT_FLOOR,
     slack: parsed.slack ?? DEFAULT_SLACK,
     packages: parsed.packages ?? {},
   };
@@ -156,8 +152,7 @@ export function checkAgainstBudget(
   for (const m of measurements) {
     const allowed = budget.packages[m.pkg];
     if (allowed === undefined) {
-      if (m.instantiations >= budget.floor)
-        newPackages.push({ pkg: m.pkg, actual: m.instantiations });
+      newPackages.push({ pkg: m.pkg, actual: m.instantiations });
       continue;
     }
     const ceiling = Math.max(Math.round(allowed * (1 + budget.tolerance)), allowed + budget.slack);
@@ -172,6 +167,15 @@ export function checkAgainstBudget(
     }
   }
   return { regressions, newPackages, improvements };
+}
+
+/**
+ * What fails the build. An unrecorded package counts: it is measured, printed
+ * and then gated by nothing, so leaving it to a line on stderr means the
+ * ratchet is never written and the guard silently covers one package less.
+ */
+export function isBudgetCheckFailure(result: BudgetCheckResult): boolean {
+  return result.regressions.length > 0 || result.newPackages.length > 0;
 }
 
 function formatPct(actual: number, base: number): string {
@@ -216,7 +220,7 @@ function main(): void {
     for (const m of measurements.sort((a, b) => a.pkg.localeCompare(b.pkg))) {
       packages[m.pkg] = m.instantiations;
     }
-    writeBudget({ tolerance, floor: existing.floor, slack: existing.slack, packages });
+    writeBudget({ tolerance, slack: existing.slack, packages });
     process.stderr.write(`typecheck-budget: wrote ${BUDGET_FILE}\n`);
     return;
   }
@@ -229,9 +233,16 @@ function main(): void {
       `improved: ${i.pkg} ${i.actual} vs budget ${i.budget} (${formatPct(i.actual, i.budget)}) — consider \`--update\` to ratchet\n`
     );
   }
-  for (const n of newPackages) {
+  if (newPackages.length > 0) {
     process.stderr.write(
-      `new package not in budget: ${n.pkg} (inst=${n.actual}) — run \`--update\` to record it\n`
+      `\ntypecheck-budget: ${newPackages.length} package(s) not in the budget file:\n`
+    );
+    for (const n of newPackages) {
+      process.stderr.write(`  ${n.pkg}: ${n.actual} instantiations, no budget recorded\n`);
+    }
+    process.stderr.write(
+      `\nRecord them with: bun scripts/typecheck-budget.ts --update\n` +
+        `Until then these packages are not gated at all.\n`
     );
   }
 
@@ -248,6 +259,9 @@ function main(): void {
     process.stderr.write(
       `\nIf this growth is expected, re-baseline with: bun scripts/typecheck-budget.ts --update\n`
     );
+  }
+
+  if (isBudgetCheckFailure({ regressions, newPackages, improvements })) {
     process.exit(1);
   }
 

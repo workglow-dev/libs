@@ -8,6 +8,7 @@ import {
   Task,
   TaskAbortedError,
   TaskGraph,
+  TaskGraphTimeoutError,
   Workflow,
   type IExecuteContext,
 } from "@workglow/task-graph";
@@ -23,6 +24,7 @@ import {
 } from "../run-events/runEventChannel";
 import { resetRunReportingForTesting } from "../run-events/runReporting";
 import { withCli } from "../run-interactive";
+import { runFailureExitCode } from "../run-signal-abort";
 
 const EMPTY = { type: "object", properties: {} } as const satisfies DataPortSchema;
 
@@ -142,6 +144,30 @@ describe("withCli process-signal abort", { timeout: 5_000 }, () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>)
       .at(-1);
     expect(last).toMatchObject({ k: "run_end", state: "aborted" });
+  });
+
+  // A graph timeout arrives as a TaskGraphTimeoutError, which extends
+  // TaskAbortedError — so a run that expires must still report as a failure
+  // carrying its message, not as the cancellation a Ctrl-C would produce.
+  it("reports an expired graph as failed, with the timeout message", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wg-withcli-timeout-"));
+    const file = join(dir, "events.ndjson");
+    installRunEventChannel(`file:${file}`);
+    const { task, started } = hangingTask();
+    const graph = new TaskGraph();
+    graph.addTask(task);
+    const run = withCli(graph, { interactive: false }).run({}, { timeout: 25 });
+    await started;
+    await expect(run).rejects.toBeInstanceOf(TaskGraphTimeoutError);
+    const last = readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .at(-1);
+    expect(last).toMatchObject({ k: "run_end", state: "failed" });
+    expect(String((last as { error?: unknown }).error)).toMatch(/timed out/i);
+    expect(runFailureExitCode(new TaskGraphTimeoutError(25))).toBe(1);
   });
 
   it("does not leave SIGINT listeners after the run finishes", async () => {
