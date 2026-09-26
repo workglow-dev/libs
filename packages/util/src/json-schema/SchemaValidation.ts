@@ -34,9 +34,15 @@ const VALID_RESULT: SchemaValidationResult = Object.freeze({
  * A base "name" (letter-led) optionally followed by one or more colon-separated
  * narrowing segments (each may start with a digit), e.g. `model`,
  * `model:EmbeddingTask`, `points:3d:meters`.
+ *
+ * A segment may also be a comma-separated list of dotted tags, so a model port
+ * can state the capabilities it needs — `model:text.generation,tool-use` — in
+ * the vocabulary model dispatch matches on, rather than naming a task whose
+ * `requires` happens to imply them. Each tag still starts with a letter or
+ * digit, so an empty tag (`a,,b`, `a.`) is refused like an empty segment.
  * Reused from SchemaUtils.ts areFormatStringsCompatible().
  */
-export const FORMAT_PATTERN = /^[a-z][\w-]*(?::[a-z0-9][\w-]*)*$/i;
+export const FORMAT_PATTERN = /^[a-z][\w-]*(?::[a-z0-9][\w-]*(?:[.,][a-z0-9][\w-]*)*)*$/i;
 
 const VALID_JSON_SCHEMA_TYPES = new Set([
   "string",

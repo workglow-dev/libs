@@ -57,6 +57,28 @@ describe("SchemaUtils", () => {
       });
     });
 
+    describe("capability-list formats", () => {
+      const caps = "model:text.generation,tool-use";
+
+      it("matches the same capability list statically", () => {
+        const source: JsonSchema = { type: "string", format: caps };
+        const target: JsonSchema = { type: "string", format: caps };
+        expect(areSemanticallyCompatible(source, target)).toBe("static");
+      });
+
+      it("narrows a plain model port at runtime", () => {
+        const source: JsonSchema = { type: "string", format: "model" };
+        const target: JsonSchema = { type: "string", format: caps };
+        expect(areSemanticallyCompatible(source, target)).toBe("runtime");
+      });
+
+      it("feeds a plain model port statically", () => {
+        const source: JsonSchema = { type: "string", format: caps };
+        const target: JsonSchema = { type: "string", format: "model" };
+        expect(areSemanticallyCompatible(source, target)).toBe("static");
+      });
+    });
+
     describe("allOf in source", () => {
       it("should return incompatible if any allOf schema is incompatible", () => {
         const source: JsonSchema = {
