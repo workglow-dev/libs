@@ -174,34 +174,33 @@ export function resolvePromptCacheKey(
  * the model's `reasoning` config and a stable `prompt_cache_key`. Mutates and
  * returns `params` so callers can inline it into the create call. Call this
  * last, after model/instructions/tools/temperature are populated, so the cache
- * key sees the full prefix and the reasoning default can see the temperature.
+ * key sees the full prefix and a pinned temperature can be reconciled with it.
  *
- * `temperature` and reasoning are not independently selectable on the
- * reasoning families: `gpt-5.6-luna` answers `temperature` alone with
- * `400 Unsupported parameter: 'temperature' is not supported with this model`,
- * yet accepts `{reasoning: {effort: "none"}, temperature: 0}`. So when the
- * caller pinned a `temperature` but expressed no reasoning preference, reasoning
- * is turned off where the model allows it — a caller asking for a specific
- * temperature is asking for controlled sampling. Where it does not (gpt-6
- * rejects `effort: "none"`), and wherever reasoning ends up on, the temperature
- * cannot be honoured and is dropped rather than failing the request. A model
- * that takes no `reasoning` at all keeps its temperature and gets no
- * `reasoning` field, which it would 400 on. An explicit `reasoning` in the
- * model config always wins.
+ * A reasoning model with no effort configured is sent its class default
+ * (`medium`) rather than left to the vendor's, so the effort the UI shows as
+ * "Default" is the one that runs — unless the record's `effort_options`
+ * leaves that level out. A model that takes no `reasoning` gets no
+ * field, which it would 400 on. An explicit `reasoning` in the model config
+ * always wins.
+ *
+ * `temperature` is rejected alongside any reasoning effort but `"none"` —
+ * verified live against `gpt-5.6-luna` and `gpt-6-astra` — so it is dropped
+ * whenever reasoning is on rather than failing the request. To sample at a
+ * pinned temperature, set the effort to `none` on a model that allows it.
  */
 export function finalizeResponsesRequest(
   model: OpenAiModelConfig | undefined,
   params: Record<string, unknown>
 ): Record<string, unknown> {
-  const supported = openaiEffortPolicy(model).supported;
+  const policy = openaiEffortPolicy(model);
+  const fallback = resolveEnabledEffort({ ...model, effort: policy.default }, policy);
   const reasoning =
     getReasoningConfig(model) ??
-    (params.temperature !== undefined && supported.includes("none")
-      ? { effort: "none" }
-      : undefined);
-  if (reasoning !== undefined) params.reasoning = reasoning;
-  const reasons = reasoning !== undefined ? reasoning.effort !== "none" : supported.length > 0;
-  if (reasons) delete params.temperature;
+    (fallback !== undefined ? { effort: EFFORT_TO_OPENAI[fallback] } : undefined);
+  if (reasoning !== undefined) {
+    params.reasoning = reasoning;
+    if (reasoning.effort !== "none") delete params.temperature;
+  }
   params.prompt_cache_key = resolvePromptCacheKey(model, params);
   return params;
 }

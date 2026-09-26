@@ -11,62 +11,57 @@ const { finalizeResponsesRequest } = _testOnly;
 /**
  * `temperature` and `reasoning` are not independently selectable on the OpenAI
  * reasoning families. Verified live against `gpt-5.6-luna`:
- *   temperature: 0                              -> 400 Unsupported parameter
+ *   temperature: 0.4                            -> 400 Unsupported parameter
  *   reasoning: {effort:"none"}                  -> 200
- *   reasoning: {effort:"none"}, temperature: 0  -> 200
- * So a request that pins a temperature must turn reasoning off to be accepted.
+ *   reasoning: {effort:"low"}, temperature: 0.4 -> 400 Unsupported parameter
+ *   reasoning: {effort:"low"}                   -> 200
+ * A reasoning model runs at its class default effort unless configured
+ * otherwise, and the temperature only survives an effort of `none`.
  */
-describe("finalizeResponsesRequest reasoning/temperature coupling", () => {
-  const model = (reasoning?: unknown) =>
+describe("finalizeResponsesRequest on a reasoning model", () => {
+  const luna = (extra: Record<string, unknown> = {}, reasoning?: unknown) =>
     ({
       provider_config: { model_name: "gpt-5.6-luna", ...(reasoning ? { reasoning } : {}) },
+      ...extra,
     }) as never;
 
-  it("forces reasoning off when a temperature is pinned and none is configured", () => {
-    const params = finalizeResponsesRequest(model(), { model: "gpt-5.6-luna", temperature: 0 });
-    expect(params.reasoning).toEqual({ effort: "none" });
+  it("sends the class default effort when none is configured", () => {
+    const params = finalizeResponsesRequest(luna(), { model: "gpt-5.6-luna" });
+    expect(params.reasoning).toEqual({ effort: "medium" });
   });
 
-  it("does so for any pinned temperature, not just zero", () => {
-    const params = finalizeResponsesRequest(model(), { model: "gpt-5.6-luna", temperature: 0.7 });
-    expect(params.reasoning).toEqual({ effort: "none" });
+  it("sends the default and drops a pinned temperature rather than turning reasoning off", () => {
+    const params = finalizeResponsesRequest(luna(), { model: "gpt-5.6-luna", temperature: 0.7 });
+    expect(params.reasoning).toEqual({ effort: "medium" });
+    expect(params.temperature).toBeUndefined();
   });
 
-  it("sends no reasoning field when no temperature is pinned", () => {
-    const params = finalizeResponsesRequest(model(), { model: "gpt-5.6-luna" });
-    expect(params.reasoning).toBeUndefined();
+  it("maps model.effort over the class default", () => {
+    const params = finalizeResponsesRequest(luna({ effort: "extra" }), { model: "gpt-5.6-luna" });
+    expect(params.reasoning).toEqual({ effort: "xhigh" });
   });
 
   it("never overrides an explicitly configured reasoning effort", () => {
-    const params = finalizeResponsesRequest(model({ effort: "high" }), {
+    const params = finalizeResponsesRequest(luna({ effort: "ultra" }, { effort: "high" }), {
       model: "gpt-5.6-luna",
       temperature: 0,
     });
     expect(params.reasoning).toEqual({ effort: "high" });
-  });
-
-  it("honours model.effort over the temperature auto-none default", () => {
-    const params = finalizeResponsesRequest(
-      { provider_config: { model_name: "gpt-5.6-luna" }, effort: "medium" } as never,
-      { model: "gpt-5.6-luna", temperature: 0 }
-    );
-    expect(params.reasoning).toEqual({ effort: "medium" });
-  });
-
-  it("drops the temperature when an effort turns reasoning on", () => {
-    const params = finalizeResponsesRequest(
-      { provider_config: { model_name: "gpt-5.6-luna" }, effort: "medium" } as never,
-      { model: "gpt-5.6-luna", temperature: 0 }
-    );
     expect(params.temperature).toBeUndefined();
   });
 
-  it("keeps the temperature alongside an explicit effort of none", () => {
-    const params = finalizeResponsesRequest(model({ effort: "none" }), {
+  it("keeps the temperature alongside an effort of none", () => {
+    for (const model of [luna({ effort: "none" }), luna({}, { effort: "none" })]) {
+      const params = finalizeResponsesRequest(model, { model: "gpt-5.6-luna", temperature: 0.2 });
+      expect(params).toMatchObject({ reasoning: { effort: "none" }, temperature: 0.2 });
+    }
+  });
+
+  it("sends no default when the record's effort_options leave it out", () => {
+    const params = finalizeResponsesRequest(luna({ effort_options: ["low", "high"] }), {
       model: "gpt-5.6-luna",
-      temperature: 0.2,
     });
-    expect(params).toMatchObject({ reasoning: { effort: "none" }, temperature: 0.2 });
+    expect("reasoning" in params).toBe(false);
   });
 });
 
@@ -76,31 +71,25 @@ describe("finalizeResponsesRequest reasoning/temperature coupling", () => {
  *   reasoning: {effort:"none"}                  -> 400 Supported values are: 'low' ... 'max'
  *   reasoning: {effort:"low"}, temperature: 0.4 -> 400 Unsupported parameter
  *   reasoning: {effort:"low"}                   -> 200
- * So the temperature cannot be bought by turning reasoning off; it is dropped.
  */
 describe("finalizeResponsesRequest on a model that cannot turn reasoning off", () => {
   const astra = (extra: Record<string, unknown> = {}) =>
     ({ provider_config: { model_name: "gpt-6-astra" }, ...extra }) as never;
 
-  it("sends no effort of none and drops the pinned temperature", () => {
+  it("sends the default effort and drops a pinned temperature", () => {
     const params = finalizeResponsesRequest(astra(), { model: "gpt-6-astra", temperature: 0.4 });
-    expect(params.reasoning).toBeUndefined();
-    expect("reasoning" in params).toBe(false);
+    expect(params.reasoning).toEqual({ effort: "medium" });
     expect(params.temperature).toBeUndefined();
   });
 
   it("does not map model.effort none onto the request", () => {
     const params = finalizeResponsesRequest(astra({ effort: "none" }), { model: "gpt-6-astra" });
-    expect(params.reasoning).toBeUndefined();
+    expect(params.reasoning).toEqual({ effort: "medium" });
   });
 
-  it("maps a supported effort and drops the temperature", () => {
-    const params = finalizeResponsesRequest(astra({ effort: "high" }), {
-      model: "gpt-6-astra",
-      temperature: 0,
-    });
+  it("maps a supported effort", () => {
+    const params = finalizeResponsesRequest(astra({ effort: "high" }), { model: "gpt-6-astra" });
     expect(params.reasoning).toEqual({ effort: "high" });
-    expect(params.temperature).toBeUndefined();
   });
 });
 
