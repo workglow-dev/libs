@@ -746,6 +746,21 @@ export class PostgresTabularStorage<
    * vs. a transaction-bound client).
    */
   private buildPutSql(entity: InsertType): { sql: string; params: ValueOptionType[] } {
+    const { columnsToInsert, paramsToInsert, pkColumns, valueColumns } = this.putColumns(entity);
+    return this.putSqlFor(columnsToInsert, paramsToInsert, pkColumns, valueColumns);
+  }
+
+  /**
+   * The columns an INSERT of `entity` names and their parameters, applying the
+   * auto-generated-key policy: a backend-assigned key the client did not supply
+   * is left out for the database to fill.
+   */
+  private putColumns(entity: InsertType): {
+    columnsToInsert: string[];
+    paramsToInsert: ValueOptionType[];
+    pkColumns: Array<keyof PrimaryKey>;
+    valueColumns: Array<keyof Value>;
+  } {
     // Determine which columns to include in INSERT
     const columnsToInsert: string[] = [];
     const paramsToInsert: ValueOptionType[] = [];
@@ -801,7 +816,15 @@ export class PostgresTabularStorage<
       const value = entityRecord[colStr];
       paramsToInsert.push(this.jsToSqlValue(colStr, value as Entity[keyof Entity]));
     }
+    return { columnsToInsert, paramsToInsert, pkColumns, valueColumns };
+  }
 
+  private putSqlFor(
+    columnsToInsert: string[],
+    paramsToInsert: ValueOptionType[],
+    pkColumns: Array<keyof PrimaryKey>,
+    valueColumns: Array<keyof Value>
+  ): { sql: string; params: ValueOptionType[] } {
     const columnList = columnsToInsert.map((c) => `"${c}"`).join(", ");
     const placeholders = columnsToInsert.map((_, i) => `$${i + 1}`).join(", ");
 
@@ -1088,6 +1111,43 @@ export class PostgresTabularStorage<
    */
   async put(entity: InsertType): Promise<Entity> {
     return this.guardedWrite(() => this._putInternal(entity));
+  }
+
+  /**
+   * {@link ITabularStorage.putByUniqueKey} in one statement:
+   * `INSERT … ON CONFLICT (<unique key>) DO UPDATE SET <every non-key column>
+   * RETURNING *`. The unique index settles two writers of one key, and the
+   * update leaves the primary key as it was.
+   *
+   * An update still draws from a serial key's sequence, and the value is spent.
+   */
+  override async putByUniqueKey(
+    entity: InsertType,
+    uniqueKey: ReadonlyArray<keyof Entity>
+  ): Promise<Entity> {
+    this.uniqueKeyMatch(entity, uniqueKey);
+    const index = this.declaredUniqueIndex(uniqueKey);
+    return this.guardedWrite(async () => {
+      const { columnsToInsert, paramsToInsert, pkColumns } = this.putColumns(entity);
+      const keyColumns = new Set((pkColumns as unknown as string[]).map(String));
+      const assignments = columnsToInsert
+        .filter((col) => !keyColumns.has(col))
+        .map((col) => `"${col}" = EXCLUDED."${col}"`);
+      const target = index.map((col) => `"${String(col)}"`).join(", ");
+      // With nothing but the unique key to write there is nothing to update,
+      // and `DO NOTHING` would return no row: self-assign a key column so
+      // RETURNING yields the existing one, as `put` does for an all-key row.
+      const first = `"${String(index[0])}"`;
+      const set = assignments.length > 0 ? assignments.join(", ") : `${first} = EXCLUDED.${first}`;
+      const sql =
+        `INSERT INTO "${this.table}" (${columnsToInsert.map((c) => `"${c}"`).join(", ")}) ` +
+        `VALUES (${columnsToInsert.map((_, i) => `$${i + 1}`).join(", ")}) ` +
+        `ON CONFLICT (${target}) DO UPDATE SET ${set} RETURNING *`;
+      const result = await this.db.query(sql, paramsToInsert);
+      const stored = this.hydrateRow(result.rows[0]);
+      this.emitPut(stored);
+      return stored;
+    });
   }
 
   private async _putInternal(entity: InsertType): Promise<Entity> {

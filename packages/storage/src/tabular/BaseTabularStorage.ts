@@ -250,6 +250,80 @@ export abstract class BaseTabularStorage<
 
   abstract put(value: InsertType): Promise<Entity>;
   abstract putBulk(values: InsertType[]): Promise<Entity[]>;
+
+  /**
+   * {@link ITabularStorage.putByUniqueKey} for any backend: an in-place
+   * {@link updateWhere} on the unique key, and an insert through {@link put}
+   * when nothing matched. `updateWhere` never touches the primary key, so the
+   * row keeps its id whatever the key-generation policy.
+   *
+   * An insert refused because another writer inserted the key first is not a
+   * failure: the value is written onto the winner instead. SQL backends that
+   * can say all of it in one statement override this.
+   */
+  async putByUniqueKey(value: InsertType, uniqueKey: ReadonlyArray<keyof Entity>): Promise<Entity> {
+    const match = this.uniqueKeyMatch(value, uniqueKey);
+    const patch = this.withoutPrimaryKey(value);
+    const updated = await this.updateWhere(match, patch);
+    if (updated !== undefined) return updated;
+    try {
+      return await this.put(value);
+    } catch (err) {
+      const converged = await this.updateWhere(match, patch);
+      if (converged !== undefined) return converged;
+      throw err;
+    }
+  }
+
+  /**
+   * The equality match on `uniqueKey` for `value`, refusing a key that is not
+   * one of this storage's unique indexes or that `value` leaves null.
+   */
+  protected uniqueKeyMatch(
+    value: InsertType,
+    uniqueKey: ReadonlyArray<keyof Entity>
+  ): SearchCriteria<Entity> {
+    this.declaredUniqueIndex(uniqueKey);
+    const record = value as Record<string, unknown>;
+    const match: Record<string, unknown> = {};
+    for (const column of uniqueKey) {
+      const v = record[String(column)];
+      if (v === null || v === undefined) {
+        throw new StorageValidationError(
+          `putByUniqueKey: "${String(column)}" is null; a null never matches a unique key`
+        );
+      }
+      match[String(column)] = v;
+    }
+    return match as SearchCriteria<Entity>;
+  }
+
+  /**
+   * The declared unique index `uniqueKey` names, in the index's own column
+   * order — which a SQL conflict target must follow. Throws when it names none.
+   */
+  protected declaredUniqueIndex(uniqueKey: ReadonlyArray<keyof Entity>): Array<keyof Entity> {
+    const wanted = new Set(uniqueKey);
+    const declared =
+      wanted.size === uniqueKey.length
+        ? this.uniqueIndexes.find(
+            (index) => index.length === wanted.size && index.every((column) => wanted.has(column))
+          )
+        : undefined;
+    if (declared === undefined) {
+      throw new StorageValidationError(
+        `putByUniqueKey: (${uniqueKey.map(String).join(", ")}) is not a unique index of this storage`
+      );
+    }
+    return declared;
+  }
+
+  /** `value` without its primary-key columns: what an in-place update may set. */
+  protected withoutPrimaryKey(value: InsertType): Partial<Entity> {
+    const patch: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+    for (const column of this.primaryKeyColumns()) delete patch[String(column)];
+    return patch as Partial<Entity>;
+  }
   abstract get(key: PrimaryKey): Promise<Entity | undefined>;
   abstract delete(key: PrimaryKey | Entity): Promise<void>;
   abstract getAll(options?: QueryOptions<Entity>): Promise<Entity[] | undefined>;

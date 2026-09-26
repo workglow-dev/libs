@@ -157,6 +157,74 @@ function runContract(backend: UniqueIndexBackend): void {
       const all = (await storage.getAll())!;
       expect(all.length).toBe(3);
     });
+
+    it("putByUniqueKey inserts a new key, then overwrites it in place keeping the PK", async () => {
+      const storage = (await backend.create("pbuk_ins")) as any;
+      const puts: PersonEntity[] = [];
+      storage.on("put", (row: PersonEntity) => puts.push(row));
+
+      const first = await storage.putByUniqueKey(
+        { id: "p1", email: "alice@example.com", org_id: "orgA", name: "Alice" },
+        ["email"]
+      );
+      expect(first).toMatchObject({ id: "p1", name: "Alice" });
+
+      // Same email under another PK: written onto the existing row, whose PK stays.
+      const second = await storage.putByUniqueKey(
+        { id: "p2", email: "alice@example.com", org_id: "orgB", name: "Alice B" },
+        ["email"]
+      );
+      expect(second).toEqual({
+        id: "p1",
+        email: "alice@example.com",
+        org_id: "orgB",
+        name: "Alice B",
+      });
+      const all = (await storage.getAll())!;
+      expect(all).toHaveLength(1);
+      expect(all[0]).toEqual(second);
+      expect(puts.length).toBeGreaterThanOrEqual(2);
+      expect(puts[puts.length - 1]).toEqual(second);
+    });
+
+    it("putByUniqueKey matches a compound key in any column order", async () => {
+      const storage = (await backend.create("pbuk_cmp")) as any;
+      await storage.putByUniqueKey(
+        { id: "p1", email: "a@example.com", org_id: "orgA", name: "Alice" },
+        ["org_id", "name"]
+      );
+      const again = await storage.putByUniqueKey(
+        { id: "p9", email: "b@example.com", org_id: "orgA", name: "Alice" },
+        ["name", "org_id"]
+      );
+      expect(again).toMatchObject({ id: "p1", email: "b@example.com" });
+      // A different tuple is a different row.
+      await storage.putByUniqueKey(
+        { id: "p2", email: "c@example.com", org_id: "orgB", name: "Alice" },
+        ["org_id", "name"]
+      );
+      expect((await storage.getAll())!).toHaveLength(2);
+    });
+
+    it("putByUniqueKey refuses an undeclared key or a null key value, writing nothing", async () => {
+      const storage = (await backend.create("pbuk_ref")) as any;
+      await expect(
+        storage.putByUniqueKey(
+          { id: "p1", email: "a@example.com", org_id: "orgA", name: "Alice" },
+          ["name"]
+        )
+      ).rejects.toThrow(/not a unique index/);
+      await expect(
+        storage.putByUniqueKey(
+          { id: "p1", email: "a@example.com", org_id: "orgA", name: "Alice" },
+          ["org_id"]
+        )
+      ).rejects.toThrow(/not a unique index/);
+      await expect(
+        storage.putByUniqueKey({ id: "p1", email: null, org_id: "orgA", name: "Alice" }, ["email"])
+      ).rejects.toThrow(/null/);
+      expect((await storage.getAll()) ?? []).toHaveLength(0);
+    });
   });
 }
 
@@ -379,5 +447,95 @@ describe("BaseTabularStorage — indexes / uniqueIndexes overlap dedup", () => {
       [["email"]]
     );
     expect(probe.getEffectiveIndexes()).toEqual([["name"]]);
+  });
+});
+
+// A surrogate integer key the caller never knows, and identity held by a
+// unique natural key — the shape `putByUniqueKey` exists for.
+const ObservationSchema = {
+  type: "object",
+  properties: {
+    id: { type: "integer", "x-auto-generated": true },
+    doc: { type: "string" },
+    idx: { type: "integer" },
+    label: { type: "string" },
+  },
+  required: ["id", "doc", "idx", "label"],
+  additionalProperties: false,
+} as const satisfies DataPortSchemaObject;
+
+const ObservationPK = ["id"] as const;
+
+function runSurrogateKeyContract(name: string, create: () => Promise<any>): void {
+  describe(`${name} — putByUniqueKey over a generated key`, () => {
+    it("assigns the key once, and keeps it across rewrites", async () => {
+      const storage = await create();
+      const first = await storage.putByUniqueKey({ doc: "d1", idx: 0, label: "a" }, ["doc", "idx"]);
+      expect(typeof first.id).toBe("number");
+      const again = await storage.putByUniqueKey({ doc: "d1", idx: 0, label: "b" }, ["doc", "idx"]);
+      expect(again).toEqual({ id: first.id, doc: "d1", idx: 0, label: "b" });
+      const other = await storage.putByUniqueKey({ doc: "d1", idx: 1, label: "c" }, ["doc", "idx"]);
+      expect(other.id).not.toBe(first.id);
+      expect((await storage.getAll())!).toHaveLength(2);
+    });
+
+    it("converges two concurrent writers of one key on one row", async () => {
+      const storage = await create();
+      const [a, b] = await Promise.all([
+        storage.putByUniqueKey({ doc: "d2", idx: 0, label: "x" }, ["doc", "idx"]),
+        storage.putByUniqueKey({ doc: "d2", idx: 0, label: "y" }, ["doc", "idx"]),
+      ]);
+      expect(a.id).toBe(b.id);
+      const rows = (await storage.getAll())!;
+      expect(rows).toHaveLength(1);
+      expect(["x", "y"]).toContain(rows[0].label);
+    });
+  });
+}
+
+runSurrogateKeyContract(
+  "InMemoryTabularStorage",
+  async () =>
+    new InMemoryTabularStorage<typeof ObservationSchema, typeof ObservationPK>(
+      ObservationSchema,
+      ObservationPK,
+      [],
+      "if-missing",
+      undefined,
+      "inmemory",
+      [["doc", "idx"]]
+    )
+);
+
+runSurrogateKeyContract("PostgresTabularStorage", async () => {
+  const storage = new PostgresTabularStorage<typeof ObservationSchema, typeof ObservationPK>(
+    pgliteDb,
+    `obs_${uuid4().replace(/-/g, "_")}`,
+    ObservationSchema,
+    ObservationPK,
+    [],
+    "if-missing",
+    undefined,
+    [["doc", "idx"]]
+  );
+  await storage.setupDatabase();
+  return storage;
+});
+
+describe("SqliteTabularStorage — putByUniqueKey over a generated key", async () => {
+  await Sqlite.init();
+  runSurrogateKeyContract("SqliteTabularStorage", async () => {
+    const storage = new SqliteTabularStorage<typeof ObservationSchema, typeof ObservationPK>(
+      ":memory:",
+      `obs_${uuid4().replace(/-/g, "_")}`,
+      ObservationSchema,
+      ObservationPK,
+      [],
+      "if-missing",
+      undefined,
+      [["doc", "idx"]]
+    );
+    await storage.setupDatabase();
+    return storage;
   });
 });

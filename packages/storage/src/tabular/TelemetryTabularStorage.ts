@@ -66,6 +66,12 @@ export class TelemetryTabularStorage<
     );
   }
 
+  putByUniqueKey(value: InsertType, uniqueKey: ReadonlyArray<keyof Entity>): Promise<Entity> {
+    return traced("workglow.storage.tabular.putByUniqueKey", this.storageName, () =>
+      this.inner.putByUniqueKey(value, uniqueKey)
+    );
+  }
+
   get(key: PrimaryKey): Promise<Entity | undefined> {
     return traced("workglow.storage.tabular.get", this.storageName, () => this.inner.get(key));
   }

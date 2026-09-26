@@ -592,6 +592,25 @@ export interface ITabularStorage<
 > {
   put(value: InsertType): Promise<Entity>;
   /**
+   * Stores `value` under the row it shares a UNIQUE key with — `put`, but
+   * matched on `uniqueKey` rather than on the primary key.
+   *
+   * For a table whose primary key is a surrogate the caller does not know (an
+   * auto-generated id) and whose identity is a natural key held by a unique
+   * index. A row with the same `uniqueKey` values is overwritten in place,
+   * keeping its primary key; otherwise `value` is inserted and its key
+   * assigned as `put` would. Two writers of one key converge on one row.
+   *
+   * `uniqueKey` must name exactly the columns of one of the storage's declared
+   * unique indexes, in any order, and `value` must carry a non-null value for
+   * each — a null never matches under a SQL unique index, so the rows would
+   * fork. Either failing throws before anything is written.
+   *
+   * @returns The stored row, primary key included.
+   * @emits "put" with the stored row, as `put` does.
+   */
+  putByUniqueKey(value: InsertType, uniqueKey: ReadonlyArray<keyof Entity>): Promise<Entity>;
+  /**
    * Stores multiple entities in a single bulk operation.
    *
    * **Ordering guarantee:** the returned array is in the same order as the

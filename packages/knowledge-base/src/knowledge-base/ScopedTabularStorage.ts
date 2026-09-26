@@ -110,6 +110,17 @@ export class ScopedTabularStorage<
     return stripped;
   }
 
+  /** The key gains `kb_id`: a scope's rows are unique within the scope, not across it. */
+  async putByUniqueKey(value: InsertType, uniqueKey: ReadonlyArray<keyof Entity>): Promise<Entity> {
+    const key = uniqueKey.includes("kb_id" as keyof Entity)
+      ? uniqueKey
+      : [...uniqueKey, "kb_id" as keyof Entity];
+    const result = await this.inner.putByUniqueKey(this.inject(value), key as never);
+    const stripped = this.strip(result);
+    this.events.emit("put", stripped);
+    return stripped;
+  }
+
   async putBulk(values: InsertType[]): Promise<Entity[]> {
     const injected = values.map((v) => this.inject(v));
     const results = await this.inner.putBulk(injected);

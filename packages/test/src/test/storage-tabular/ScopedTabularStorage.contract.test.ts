@@ -203,3 +203,51 @@ describe("ScopedTabularStorage join scoping", () => {
     ).rejects.toBeInstanceOf(StorageValidationError);
   });
 });
+
+describe("ScopedTabularStorage.putByUniqueKey", () => {
+  const ItemSchema = {
+    type: "object",
+    properties: {
+      kb_id: { type: "string" },
+      id: { type: "string" },
+      slug: { type: "string" },
+      title: { type: "string" },
+    },
+    required: ["kb_id", "id", "slug", "title"],
+    additionalProperties: false,
+  } as const satisfies DataPortSchemaObject;
+
+  it("matches the key within its own scope only, and hides kb_id", async () => {
+    const inner = new InMemoryTabularStorage(
+      ItemSchema,
+      ["kb_id", "id"] as const,
+      [],
+      "if-missing",
+      undefined,
+      "inmemory",
+      [["kb_id", "slug"]]
+    ) as unknown as AnyTabularStorage;
+    const a = new ScopedTabularStorage(inner, "kb-a") as ScopedTabularStorage<
+      any,
+      any,
+      any,
+      any,
+      any
+    >;
+    const b = new ScopedTabularStorage(inner, "kb-b") as ScopedTabularStorage<
+      any,
+      any,
+      any,
+      any,
+      any
+    >;
+
+    await a.putByUniqueKey({ id: "1", slug: "intro", title: "A" }, ["slug"]);
+    const rewritten = await a.putByUniqueKey({ id: "9", slug: "intro", title: "A2" }, ["slug"]);
+    expect(rewritten).toEqual({ id: "1", slug: "intro", title: "A2" });
+    // The same slug in another scope is another row.
+    await b.putByUniqueKey({ id: "1", slug: "intro", title: "B" }, ["slug"]);
+    expect(await a.getAll()).toEqual([{ id: "1", slug: "intro", title: "A2" }]);
+    expect(await b.getAll()).toEqual([{ id: "1", slug: "intro", title: "B" }]);
+  });
+});
