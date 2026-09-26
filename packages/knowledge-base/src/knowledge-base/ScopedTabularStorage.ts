@@ -24,6 +24,7 @@ import type {
   TabularEventParameters,
   TabularSubscribeOptions,
 } from "@workglow/storage";
+import type { UniqueKeyPutResult } from "@workglow/storage";
 import {
   decodeCursor,
   deleteSearchIdentity,
@@ -111,14 +112,17 @@ export class ScopedTabularStorage<
   }
 
   /** The key gains `kb_id`: a scope's rows are unique within the scope, not across it. */
-  async putByUniqueKey(value: InsertType, uniqueKey: ReadonlyArray<keyof Entity>): Promise<Entity> {
+  async putByUniqueKey(
+    value: InsertType,
+    uniqueKey: ReadonlyArray<keyof Entity>
+  ): Promise<UniqueKeyPutResult<Entity>> {
     const key = uniqueKey.includes("kb_id" as keyof Entity)
       ? uniqueKey
       : [...uniqueKey, "kb_id" as keyof Entity];
     const result = await this.inner.putByUniqueKey(this.inject(value), key as never);
-    const stripped = this.strip(result);
+    const stripped = this.strip(result.entity);
     this.events.emit("put", stripped);
-    return stripped;
+    return { entity: stripped, inserted: result.inserted };
   }
 
   async putBulk(values: InsertType[]): Promise<Entity[]> {

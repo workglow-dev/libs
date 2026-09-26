@@ -167,14 +167,16 @@ function runContract(backend: UniqueIndexBackend): void {
         { id: "p1", email: "alice@example.com", org_id: "orgA", name: "Alice" },
         ["email"]
       );
-      expect(first).toMatchObject({ id: "p1", name: "Alice" });
+      expect(first.inserted).toBe(true);
+      expect(first.entity).toMatchObject({ id: "p1", name: "Alice" });
 
       // Same email under another PK: written onto the existing row, whose PK stays.
       const second = await storage.putByUniqueKey(
         { id: "p2", email: "alice@example.com", org_id: "orgB", name: "Alice B" },
         ["email"]
       );
-      expect(second).toEqual({
+      expect(second.inserted).toBe(false);
+      expect(second.entity).toEqual({
         id: "p1",
         email: "alice@example.com",
         org_id: "orgB",
@@ -182,9 +184,9 @@ function runContract(backend: UniqueIndexBackend): void {
       });
       const all = (await storage.getAll())!;
       expect(all).toHaveLength(1);
-      expect(all[0]).toEqual(second);
+      expect(all[0]).toEqual(second.entity);
       expect(puts.length).toBeGreaterThanOrEqual(2);
-      expect(puts[puts.length - 1]).toEqual(second);
+      expect(puts[puts.length - 1]).toEqual(second.entity);
     });
 
     it("putByUniqueKey matches a compound key in any column order", async () => {
@@ -197,7 +199,10 @@ function runContract(backend: UniqueIndexBackend): void {
         { id: "p9", email: "b@example.com", org_id: "orgA", name: "Alice" },
         ["name", "org_id"]
       );
-      expect(again).toMatchObject({ id: "p1", email: "b@example.com" });
+      expect(again).toMatchObject({
+        inserted: false,
+        entity: { id: "p1", email: "b@example.com" },
+      });
       // A different tuple is a different row.
       await storage.putByUniqueKey(
         { id: "p2", email: "c@example.com", org_id: "orgB", name: "Alice" },
@@ -471,11 +476,16 @@ function runSurrogateKeyContract(name: string, create: () => Promise<any>): void
     it("assigns the key once, and keeps it across rewrites", async () => {
       const storage = await create();
       const first = await storage.putByUniqueKey({ doc: "d1", idx: 0, label: "a" }, ["doc", "idx"]);
-      expect(typeof first.id).toBe("number");
+      expect(first.inserted).toBe(true);
+      expect(typeof first.entity.id).toBe("number");
       const again = await storage.putByUniqueKey({ doc: "d1", idx: 0, label: "b" }, ["doc", "idx"]);
-      expect(again).toEqual({ id: first.id, doc: "d1", idx: 0, label: "b" });
+      expect(again).toEqual({
+        entity: { id: first.entity.id, doc: "d1", idx: 0, label: "b" },
+        inserted: false,
+      });
       const other = await storage.putByUniqueKey({ doc: "d1", idx: 1, label: "c" }, ["doc", "idx"]);
-      expect(other.id).not.toBe(first.id);
+      expect(other.inserted).toBe(true);
+      expect(other.entity.id).not.toBe(first.entity.id);
       expect((await storage.getAll())!).toHaveLength(2);
     });
 
@@ -485,7 +495,9 @@ function runSurrogateKeyContract(name: string, create: () => Promise<any>): void
         storage.putByUniqueKey({ doc: "d2", idx: 0, label: "x" }, ["doc", "idx"]),
         storage.putByUniqueKey({ doc: "d2", idx: 0, label: "y" }, ["doc", "idx"]),
       ]);
-      expect(a.id).toBe(b.id);
+      expect(a.entity.id).toBe(b.entity.id);
+      // Exactly one of the two inserted the row.
+      expect([a.inserted, b.inserted].filter(Boolean)).toHaveLength(1);
       const rows = (await storage.getAll())!;
       expect(rows).toHaveLength(1);
       expect(["x", "y"]).toContain(rows[0].label);

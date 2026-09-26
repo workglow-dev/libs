@@ -244,7 +244,7 @@ describe("ScopedTabularStorage.putByUniqueKey", () => {
 
     await a.putByUniqueKey({ id: "1", slug: "intro", title: "A" }, ["slug"]);
     const rewritten = await a.putByUniqueKey({ id: "9", slug: "intro", title: "A2" }, ["slug"]);
-    expect(rewritten).toEqual({ id: "1", slug: "intro", title: "A2" });
+    expect(rewritten).toEqual({ entity: { id: "1", slug: "intro", title: "A2" }, inserted: false });
     // The same slug in another scope is another row.
     await b.putByUniqueKey({ id: "1", slug: "intro", title: "B" }, ["slug"]);
     expect(await a.getAll()).toEqual([{ id: "1", slug: "intro", title: "A2" }]);

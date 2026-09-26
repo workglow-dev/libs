@@ -33,6 +33,7 @@ import type {
   TabularEventParameters,
   TabularSubscribeOptions,
 } from "./ITabularStorage";
+import type { UniqueKeyPutResult } from "./ITabularStorage";
 
 /**
  * Telemetry wrapper for any ITabularStorage implementation.
@@ -66,7 +67,10 @@ export class TelemetryTabularStorage<
     );
   }
 
-  putByUniqueKey(value: InsertType, uniqueKey: ReadonlyArray<keyof Entity>): Promise<Entity> {
+  putByUniqueKey(
+    value: InsertType,
+    uniqueKey: ReadonlyArray<keyof Entity>
+  ): Promise<UniqueKeyPutResult<Entity>> {
     return traced("workglow.storage.tabular.putByUniqueKey", this.storageName, () =>
       this.inner.putByUniqueKey(value, uniqueKey)
     );

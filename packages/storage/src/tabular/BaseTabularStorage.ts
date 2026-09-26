@@ -44,6 +44,7 @@ import type {
   TabularSubscribeOptions,
   ValueOptionType,
 } from "./ITabularStorage";
+import type { UniqueKeyPutResult } from "./ITabularStorage";
 import { runHashJoin } from "./hashJoin";
 import { resolveJoinDelegate } from "./joinDelegate";
 import type { KeysetPageDeps } from "./keysetPage";
@@ -261,16 +262,19 @@ export abstract class BaseTabularStorage<
    * failure: the value is written onto the winner instead. SQL backends that
    * can say all of it in one statement override this.
    */
-  async putByUniqueKey(value: InsertType, uniqueKey: ReadonlyArray<keyof Entity>): Promise<Entity> {
+  async putByUniqueKey(
+    value: InsertType,
+    uniqueKey: ReadonlyArray<keyof Entity>
+  ): Promise<UniqueKeyPutResult<Entity>> {
     const match = this.uniqueKeyMatch(value, uniqueKey);
     const patch = this.withoutPrimaryKey(value);
     const updated = await this.updateWhere(match, patch);
-    if (updated !== undefined) return updated;
+    if (updated !== undefined) return { entity: updated, inserted: false };
     try {
-      return await this.put(value);
+      return { entity: await this.put(value), inserted: true };
     } catch (err) {
       const converged = await this.updateWhere(match, patch);
-      if (converged !== undefined) return converged;
+      if (converged !== undefined) return { entity: converged, inserted: false };
       throw err;
     }
   }

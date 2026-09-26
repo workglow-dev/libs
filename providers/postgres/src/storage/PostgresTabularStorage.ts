@@ -25,6 +25,7 @@ import type {
   TabularSubscribeOptions,
   ValueOptionType,
 } from "@workglow/storage";
+import type { UniqueKeyPutResult } from "@workglow/storage";
 import {
   assertNotForeignConnectionTx,
   assertSharedConnectionHandle,
@@ -1124,7 +1125,7 @@ export class PostgresTabularStorage<
   override async putByUniqueKey(
     entity: InsertType,
     uniqueKey: ReadonlyArray<keyof Entity>
-  ): Promise<Entity> {
+  ): Promise<UniqueKeyPutResult<Entity>> {
     this.uniqueKeyMatch(entity, uniqueKey);
     const index = this.declaredUniqueIndex(uniqueKey);
     return this.guardedWrite(async () => {
@@ -1142,11 +1143,14 @@ export class PostgresTabularStorage<
       const sql =
         `INSERT INTO "${this.table}" (${columnsToInsert.map((c) => `"${c}"`).join(", ")}) ` +
         `VALUES (${columnsToInsert.map((_, i) => `$${i + 1}`).join(", ")}) ` +
-        `ON CONFLICT (${target}) DO UPDATE SET ${set} RETURNING *`;
+        `ON CONFLICT (${target}) DO UPDATE SET ${set} RETURNING *, (xmax = 0) AS "__inserted"`;
       const result = await this.db.query(sql, paramsToInsert);
-      const stored = this.hydrateRow(result.rows[0]);
+      // `xmax` is zero only on a row version this statement inserted: an
+      // update through ON CONFLICT stamps it with the updating transaction.
+      const { __inserted: inserted, ...row } = result.rows[0];
+      const stored = this.hydrateRow(row);
       this.emitPut(stored);
-      return stored;
+      return { entity: stored, inserted: inserted === true };
     });
   }
 
