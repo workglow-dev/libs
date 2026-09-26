@@ -55,7 +55,7 @@
   },
   "dependencies": {
     "ipaddr.js": "^2.5.0",
-    "undici": "^8.10.2"
+    "undici": "^8.11.2"
   },
   "peerDependencies": {
     "@workglow/task-graph": "workspace:*",
