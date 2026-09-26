@@ -87,6 +87,28 @@ describe("finalizeResponsesRequest on a model that cannot turn reasoning off", (
     expect(params.reasoning).toEqual({ effort: "medium" });
   });
 
+  it("never sends none, however the record asks for it", () => {
+    const records = [
+      astra({ effort: "none", effort_options: ["none", "low", "medium"] }),
+      { provider_config: { model_name: "gpt-6-astra", reasoning: { effort: "none" } } } as never,
+    ];
+    for (const record of records) {
+      const params = finalizeResponsesRequest(record, { model: "gpt-6-astra", temperature: 0.4 });
+      expect(params.reasoning).toEqual({ effort: "medium" });
+      expect(params.temperature).toBeUndefined();
+    }
+  });
+
+  it("keeps the rest of a native config when dropping its none", () => {
+    const params = finalizeResponsesRequest(
+      {
+        provider_config: { model_name: "gpt-6-astra", reasoning: { effort: "none", mode: "pro" } },
+      } as never,
+      { model: "gpt-6-astra" }
+    );
+    expect(params.reasoning).toEqual({ mode: "pro" });
+  });
+
   it("maps a supported effort", () => {
     const params = finalizeResponsesRequest(astra({ effort: "high" }), { model: "gpt-6-astra" });
     expect(params.reasoning).toEqual({ effort: "high" });

@@ -124,17 +124,25 @@ export function getModelName(model: OpenAiModelConfig | undefined): string {
  * Resolves the `reasoning` object for reasoning-capable models (GPT-5.6
  * sol/terra/luna and the o-series). Native `provider_config.reasoning` wins;
  * otherwise map `model.effort`. Returns `undefined` when neither is set.
+ *
+ * A model whose class policy leaves out `none` cannot turn reasoning off, and
+ * answers `effort: "none"` with a 400. A record asking for it anyway — natively,
+ * or through an `effort_options` list pinned before the policy said so — has
+ * that effort dropped, so the request falls back to the class default.
  */
 export function getReasoningConfig(
   model: OpenAiModelConfig | undefined
 ): { effort?: string; mode?: string } | undefined {
+  const policy = openaiEffortPolicy(model);
+  const cannotDisable = policy.supported.length > 0 && !policy.supported.includes("none");
   const reasoning = (model?.provider_config as ResolvedProviderConfig | undefined)?.reasoning;
   if (reasoning && (reasoning.effort !== undefined || reasoning.mode !== undefined)) {
-    return reasoning;
+    if (!cannotDisable || reasoning.effort !== "none") return reasoning;
+    return reasoning.mode !== undefined ? { mode: reasoning.mode } : undefined;
   }
-  const effort = resolveEnabledEffort(model, openaiEffortPolicy(model));
-  if (effort !== undefined) return { effort: EFFORT_TO_OPENAI[effort] };
-  return undefined;
+  const effort = resolveEnabledEffort(model, policy);
+  if (effort === undefined || (cannotDisable && effort === "none")) return undefined;
+  return { effort: EFFORT_TO_OPENAI[effort] };
 }
 
 /** Deterministic 32-bit FNV-1a hash → 8-char hex. Worker-safe (no crypto import). */
