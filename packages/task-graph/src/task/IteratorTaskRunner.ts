@@ -36,6 +36,13 @@ export class IteratorTaskRunner<
   private aggregatingParentMapProgress = false;
   private mapPartialProgress: number[] = [];
   private mapPartialIterationCount = 0;
+  /**
+   * The sum of {@link mapPartialProgress} and how many of its entries are at 100, kept as the
+   * entries change: every iteration reports progress several times, so recomputing them from
+   * the array made each report cost the iteration count and a map of N iterations cost N².
+   */
+  private mapPartialSum = 0;
+  private mapPartialDone = 0;
 
   /**
    * For iterator tasks, runPreview() invokes only the task's executePreview hook —
@@ -101,6 +108,8 @@ export class IteratorTaskRunner<
     this.aggregatingParentMapProgress = true;
     this.mapPartialIterationCount = iterationCount;
     this.mapPartialProgress = new Array(iterationCount).fill(0);
+    this.mapPartialSum = 0;
+    this.mapPartialDone = 0;
 
     try {
       for (let batchStart = 0; batchStart < iterationCount; batchStart += batchSize) {
@@ -146,6 +155,14 @@ export class IteratorTaskRunner<
     }
   }
 
+  /** Sets one iteration's partial progress, keeping the running sum and done count in step. */
+  private setMapPartialProgress(index: number, value: number): void {
+    const prior = this.mapPartialProgress[index] ?? 0;
+    this.mapPartialProgress[index] = value;
+    this.mapPartialSum += value - prior;
+    this.mapPartialDone += (value >= 100 ? 1 : 0) - (prior >= 100 ? 1 : 0);
+  }
+
   /**
    * Updates parent MapTask / workflow progress from per-iteration partial completion (0–100 each).
    */
@@ -155,9 +172,8 @@ export class IteratorTaskRunner<
   ): void {
     const n = this.mapPartialIterationCount;
     if (n <= 0) return;
-    const sum = this.mapPartialProgress.reduce((a, b) => a + b, 0);
-    const overall = Math.round(sum / n);
-    const done = this.mapPartialProgress.filter((v) => v >= 100).length;
+    const overall = Math.round(this.mapPartialSum / n);
+    const done = this.mapPartialDone;
     const displayIteration =
       activeIterationIndex === undefined ? done : Math.min(activeIterationIndex + 1, n);
     const base = `Map ${displayIteration}/${n}`;
@@ -302,7 +318,7 @@ export class IteratorTaskRunner<
         this.aggregatingParentMapProgress &&
         this.mapPartialIterationCount > 0
       ) {
-        this.mapPartialProgress[index] = Math.max(this.mapPartialProgress[index] ?? 0, p);
+        this.setMapPartialProgress(index, Math.max(this.mapPartialProgress[index] ?? 0, p));
         this.emitMapParentProgressFromPartials(message, index);
       }
     };
@@ -337,7 +353,7 @@ export class IteratorTaskRunner<
       unsubscribeGraphProgress();
       unbridge();
       if (this.aggregatingParentMapProgress && this.mapPartialIterationCount > 0) {
-        this.mapPartialProgress[index] = 100;
+        this.setMapPartialProgress(index, 100);
         this.emitMapParentProgressFromPartials();
       }
       this.task.completeIterationGraph(index);
