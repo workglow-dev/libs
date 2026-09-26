@@ -176,22 +176,32 @@ export function resolvePromptCacheKey(
  * last, after model/instructions/tools/temperature are populated, so the cache
  * key sees the full prefix and the reasoning default can see the temperature.
  *
- * When the caller pinned a `temperature` but expressed no reasoning preference,
- * reasoning is forced off. The two are not independently selectable on the
+ * `temperature` and reasoning are not independently selectable on the
  * reasoning families: `gpt-5.6-luna` answers `temperature` alone with
  * `400 Unsupported parameter: 'temperature' is not supported with this model`,
- * yet accepts `{reasoning: {effort: "none"}, temperature: 0}`. A caller asking
- * for a specific temperature is asking for controlled sampling, so honouring
- * that request — rather than failing it — is the useful reading. An explicit
- * `reasoning` in the model config always wins.
+ * yet accepts `{reasoning: {effort: "none"}, temperature: 0}`. So when the
+ * caller pinned a `temperature` but expressed no reasoning preference, reasoning
+ * is turned off where the model allows it — a caller asking for a specific
+ * temperature is asking for controlled sampling. Where it does not (gpt-6
+ * rejects `effort: "none"`), and wherever reasoning ends up on, the temperature
+ * cannot be honoured and is dropped rather than failing the request. A model
+ * that takes no `reasoning` at all keeps its temperature and gets no
+ * `reasoning` field, which it would 400 on. An explicit `reasoning` in the
+ * model config always wins.
  */
 export function finalizeResponsesRequest(
   model: OpenAiModelConfig | undefined,
   params: Record<string, unknown>
 ): Record<string, unknown> {
-  const reasoning = getReasoningConfig(model);
+  const supported = openaiEffortPolicy(model).supported;
+  const reasoning =
+    getReasoningConfig(model) ??
+    (params.temperature !== undefined && supported.includes("none")
+      ? { effort: "none" }
+      : undefined);
   if (reasoning !== undefined) params.reasoning = reasoning;
-  else if (params.temperature !== undefined) params.reasoning = { effort: "none" };
+  const reasons = reasoning !== undefined ? reasoning.effort !== "none" : supported.length > 0;
+  if (reasons) delete params.temperature;
   params.prompt_cache_key = resolvePromptCacheKey(model, params);
   return params;
 }
