@@ -1,5 +1,21 @@
 # @workglow/tasks
 
+## 0.6.8
+
+### Bug Fixes
+
+#### a2ui
+
+- screen agent regexes with the repo's own shape check
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `undici`: ^8.11.2
+
 ## 0.6.7
 
 _No changes in this package._

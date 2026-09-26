@@ -1,5 +1,21 @@
 # @workglow/cli
 
+## 0.6.8
+
+### Bug Fixes
+
+#### cli
+
+- window each run list on the work in flight
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `smol-toml`: ^1.9.0
+
 ## 0.6.7
 
 ### Features

@@ -1,5 +1,19 @@
 # workglow
 
+## 0.6.8
+
+### Bug Fixes
+
+#### workglow
+
+- make judgment.systemone reachable from the meta-package
+
+### Chores
+
+#### workglow
+
+- wire @workglow/a2ui into the meta-package and the guide
+
 ## 0.6.7
 
 _No changes in this package._

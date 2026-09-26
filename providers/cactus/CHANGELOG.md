@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.8
+
+### Bug Fixes
+
+#### providers
+
+- stop four run-fns accumulating on finish, and keep v3's reasoning off the text port
+
 ## 0.6.7
 
 ### Features

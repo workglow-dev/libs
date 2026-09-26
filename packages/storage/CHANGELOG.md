@@ -1,5 +1,37 @@
 # @workglow/storage
 
+## 0.6.8
+
+### Features
+
+#### storage
+
+- putByUniqueKey — upsert on a declared unique index
+
+### Bug Fixes
+
+#### knowledge-base
+
+- emit `delete` from the scoped bulk delete path
+
+#### storage
+
+- carry the array-default check into the type
+
+### Refactors
+
+- enhance SQL default value handling in migration applier
+
+#### storage
+
+- update putByUniqueKey to return UniqueKeyPutResult
+
+### Tests
+
+#### storage
+
+- hold ScopedTabularStorage to the tabular and join contracts
+
 ## 0.6.7
 
 _No changes in this package._

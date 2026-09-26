@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.8
+
+### Bug Fixes
+
+#### sqlite
+
+- report the vector-extension fallback instead of swallowing it
+
 ## 0.6.7
 
 ### Features

@@ -1,5 +1,84 @@
 # @workglow/test
 
+## 0.6.8
+
+### Features
+
+#### storage
+
+- putByUniqueKey — upsert on a declared unique index
+
+### Bug Fixes
+
+#### knowledge-base
+
+- emit `delete` from the scoped bulk delete path
+
+#### test
+
+- declare usesPolling on the scoped contract caller
+
+#### workglow
+
+- make judgment.systemone reachable from the meta-package
+
+#### sqlite
+
+- report the vector-extension fallback instead of swallowing it
+
+#### job-queue
+
+- isolate a rejecting stream subscriber on the replay paths
+
+#### hft
+
+- cap the model-file guard by engine, not by `process.versions.node`
+
+#### chrome-ai
+
+- name a tool result this prompt surface cannot carry
+
+#### typesafeai
+
+- key classification labels on a null-prototype map
+
+#### providers
+
+- stop four run-fns accumulating on finish, and keep v3's reasoning off the text port
+
+### Refactors
+
+#### storage
+
+- update putByUniqueKey to return UniqueKeyPutResult
+
+### Tests
+
+#### contract
+
+- publish the tabular CRUD and job-queue suites
+
+#### storage
+
+- hold ScopedTabularStorage to the tabular and join contracts
+
+#### ai-provider
+
+- record the per-token image cards, and check the tables
+
+### Chores
+
+- update deps
+
+### CI
+
+- run every job on the latest Bun
+- read the Bun pin from one file instead of thirteen steps
+
+### Updated Dependencies
+
+- `miniflare`: ^5.20260925.0-alpha
+
 ## 0.6.7
 
 ### Features

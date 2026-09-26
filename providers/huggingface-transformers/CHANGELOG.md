@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.8
+
+### Bug Fixes
+
+#### hft
+
+- cap the model-file guard by engine, not by `process.versions.node`
+
+#### providers
+
+- stop four run-fns accumulating on finish, and keep v3's reasoning off the text port
+
 ## 0.6.7
 
 _No changes in this package._

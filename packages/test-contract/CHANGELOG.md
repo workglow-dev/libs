@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.8
+
+### Bug Fixes
+
+#### providers
+
+- stop four run-fns accumulating on finish, and keep v3's reasoning off the text port
+
+### Tests
+
+#### contract
+
+- publish the tabular CRUD and job-queue suites
+
+#### ai-provider
+
+- record the per-token image cards, and check the tables
+
 ## 0.6.7
 
 _No changes in this package._

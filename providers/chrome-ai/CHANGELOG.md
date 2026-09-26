@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.8
+
+### Bug Fixes
+
+#### chrome-ai
+
+- name a tool result this prompt surface cannot carry
+
 ## 0.6.7
 
 _No changes in this package._

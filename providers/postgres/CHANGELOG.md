@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.8
+
+### Features
+
+#### storage
+
+- putByUniqueKey — upsert on a declared unique index
+
+### Refactors
+
+#### storage
+
+- update putByUniqueKey to return UniqueKeyPutResult
+
 ## 0.6.7
 
 _No changes in this package._

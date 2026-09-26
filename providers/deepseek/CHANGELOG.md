@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.8
+
+### Refactors
+
+- remove deprecated DeepSeek v4.1 references
+
 ## 0.6.7
 
 _No changes in this package._

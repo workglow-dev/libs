@@ -1,5 +1,19 @@
 # @workglow/job-queue
 
+## 0.6.8
+
+### Features
+
+#### job-queue
+
+- add lease options to JobQueueServer for worker management
+
+### Bug Fixes
+
+#### job-queue
+
+- isolate a rejecting stream subscriber on the replay paths
+
 ## 0.6.7
 
 ### Refactors

@@ -1,7 +1,7 @@
 {
   "name": "@workglow/web",
   "private": true,
-  "version": "0.6.7",
+  "version": "0.6.8",
   "bugs": {
     "url": "https://github.com/workglow-dev/libs/issues"
   },

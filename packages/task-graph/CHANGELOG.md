@@ -1,5 +1,13 @@
 # @workglow/task-graph
 
+## 0.6.8
+
+### Features
+
+#### task-graph
+
+- optimize progress tracking in IteratorTaskRunner
+
 ## 0.6.7
 
 _No changes in this package._

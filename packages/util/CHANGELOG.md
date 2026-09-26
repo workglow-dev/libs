@@ -1,5 +1,17 @@
 # @workglow/util
 
+## 0.6.8
+
+### Bug Fixes
+
+#### util
+
+- drop the import the split left behind in regexShape
+
+#### a2ui
+
+- screen agent regexes with the repo's own shape check
+
 ## 0.6.7
 
 _No changes in this package._

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.8
+
+### Bug Fixes
+
+#### a2ui
+
+- screen agent regexes with the repo's own shape check
+
 ## 0.6.7
 
 ### Features
