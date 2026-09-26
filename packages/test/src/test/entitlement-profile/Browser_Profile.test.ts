@@ -31,6 +31,7 @@ runEntitlementProfileConformance({
       Entitlements.MCP_TOOL_CALL,
       Entitlements.STORAGE,
       Entitlements.CREDENTIAL,
+      Entitlements.CODE_EXECUTION_JS,
     ],
     surfaceExcludes: [
       Entitlements.FILESYSTEM,

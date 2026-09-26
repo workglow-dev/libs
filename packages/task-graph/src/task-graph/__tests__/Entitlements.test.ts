@@ -566,12 +566,22 @@ describe("Entitlements", () => {
       expect(denied).toHaveLength(1);
     });
 
-    it("browser profile denies code-execution", async () => {
+    it("browser profile grants code-execution:javascript", async () => {
       const enforcer = createProfileEnforcer("browser");
       const denied = await enforcer.checkAll({
         entitlements: [{ id: "code-execution:javascript" }],
       });
-      expect(denied).toHaveLength(1);
+      expect(denied).toHaveLength(0);
+    });
+
+    // Only the JavaScript leaf: a broader grant would cover any runtime a task
+    // declares under `code-execution`.
+    it("browser profile denies other code-execution", async () => {
+      const enforcer = createProfileEnforcer("browser");
+      const denied = await enforcer.checkAll({
+        entitlements: [{ id: "code-execution" }, { id: "code-execution:python" }],
+      });
+      expect(denied).toHaveLength(2);
     });
 
     it("browser profile denies mcp:stdio", async () => {
