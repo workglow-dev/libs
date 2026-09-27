@@ -923,11 +923,12 @@ export class PostgresTabularStorage<
     return row as Entity;
   }
 
-  /** Memo for {@link hydrateRecord}: each schema column with its plan. */
+  /** Memo for {@link hydrateRecord}: the schema's columns and their plans, index-aligned. */
   private _hydrateColumns:
     | {
         readonly schema: Schema;
-        readonly columns: ReadonlyArray<readonly [string, PgColumnPlan]>;
+        readonly keys: readonly string[];
+        readonly plans: readonly PgColumnPlan[];
       }
     | undefined;
 
@@ -937,6 +938,12 @@ export class PostgresTabularStorage<
    * order, which is what it falls back to when a subclass overrides
    * `sqlToJsValue`. Otherwise it walks a per-schema list of columns paired
    * with their {@link columnPlan}, so a row costs no per-cell lookup at all.
+   *
+   * A cell whose decoded value is the value already there is not written back:
+   * keyed stores on driver rows are the dominant cost left, and most cells
+   * (text, already-numeric) decode to themselves. A cell reading `undefined`
+   * is still written, so a column absent from the row becomes an own
+   * property exactly as before.
    */
   private hydrateRecord(record: Record<string, unknown>): void {
     if (this.sqlToJsValue !== PostgresTabularStorage.prototype.sqlToJsValue) {
@@ -947,13 +954,21 @@ export class PostgresTabularStorage<
     }
     let memo = this._hydrateColumns;
     if (memo === undefined || memo.schema !== this.schema) {
-      const columns: Array<readonly [string, PgColumnPlan]> = [];
-      for (const key in this.schema.properties) columns.push([key, this.columnPlan(key)]);
-      memo = { schema: this.schema, columns };
+      const keys: string[] = [];
+      const plans: PgColumnPlan[] = [];
+      for (const key in this.schema.properties) {
+        keys.push(key);
+        plans.push(this.columnPlan(key));
+      }
+      memo = { schema: this.schema, keys, plans };
       this._hydrateColumns = memo;
     }
-    for (const [key, info] of memo.columns) {
-      record[key] = this.decodeColumnValue(key, info, record[key] as ValueOptionType);
+    const { keys, plans } = memo;
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i]!;
+      const value = record[key] as ValueOptionType;
+      const decoded = this.decodeColumnValue(key, plans[i]!, value);
+      if (decoded !== value || value === undefined) record[key] = decoded;
     }
   }
 
