@@ -64,16 +64,62 @@ const STREAM_LOG_RETENTION_MS = 30_000;
  */
 const STREAM_LOG_MAX_BYTES = 8 * 1024 * 1024;
 
+/** Per-row bookkeeping charged on top of whatever payload a row carries. */
+const STREAM_ROW_OVERHEAD_BYTES = 64;
+
 /**
- * Bytes a row costs the log. Binary deltas are the only events whose size is
- * unbounded, so they are measured exactly; everything else is charged a flat
- * overhead, which keeps a long stream of tiny events bounded too.
+ * Memo of {@link streamRowBytes}, keyed by the event object.
+ *
+ * Two jobs. It keeps the measurement off the eviction path, which re-reads
+ * every row it drops. And it PINS the figure: an `object-delta` may alias a
+ * live root the producer keeps growing (see `createPartialJsonStream`), so
+ * re-measuring at eviction time would subtract a larger number than was added
+ * and walk the running total negative.
+ */
+const streamRowByteCache = new WeakMap<StreamEventLike, number>();
+
+/**
+ * Bytes a row costs the log.
+ *
+ * Every row is measured from the payload it carries, not just a binary delta:
+ * `object-delta` and `snapshot` each hold a whole value — a progressively more
+ * complete object, or an entire `Output` — so a flat per-row charge would put
+ * {@link STREAM_LOG_MAX_BYTES} out of reach for exactly the streams most able
+ * to exhaust the heap, and leave a log that only looks bounded.
+ *
+ * `JSON.stringify` stands in for the retained size of a structured payload: a
+ * proxy rather than a measurement, but one that tracks it within a small
+ * constant factor, which is all a cap needs to engage. It runs once per row
+ * (see {@link streamRowByteCache}) over data the producer already paid to
+ * serialize across the worker boundary. A payload it cannot encode — a cycle,
+ * a bigint — is charged the overhead alone; the alternative is throwing inside
+ * a publish that must not fail the job.
  */
 function streamRowBytes(event: StreamEventLike): number {
-  const delta = (event as { binaryDelta?: unknown }).binaryDelta;
-  if (ArrayBuffer.isView(delta)) return delta.byteLength + 64;
-  if (delta instanceof ArrayBuffer) return delta.byteLength + 64;
-  return 64;
+  const cached = streamRowByteCache.get(event);
+  if (cached !== undefined) return cached;
+  const bytes = measureStreamRow(event);
+  streamRowByteCache.set(event, bytes);
+  return bytes;
+}
+
+function measureStreamRow(event: StreamEventLike): number {
+  const binaryDelta = (event as { binaryDelta?: unknown }).binaryDelta;
+  if (ArrayBuffer.isView(binaryDelta)) return binaryDelta.byteLength + STREAM_ROW_OVERHEAD_BYTES;
+  if (binaryDelta instanceof ArrayBuffer) {
+    return binaryDelta.byteLength + STREAM_ROW_OVERHEAD_BYTES;
+  }
+  // The hot path: one token per row, where encoding the whole event to learn
+  // the length of a five-character string is all cost and no information.
+  const textDelta = (event as { textDelta?: unknown }).textDelta;
+  if (typeof textDelta === "string") return textDelta.length + STREAM_ROW_OVERHEAD_BYTES;
+  try {
+    // `undefined` when the payload declares a `toJSON` returning nothing.
+    const encoded = JSON.stringify(event) as string | undefined;
+    return (encoded?.length ?? 0) + STREAM_ROW_OVERHEAD_BYTES;
+  } catch {
+    return STREAM_ROW_OVERHEAD_BYTES;
+  }
 }
 
 /**

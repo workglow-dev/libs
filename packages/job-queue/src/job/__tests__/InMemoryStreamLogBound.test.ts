@@ -70,6 +70,78 @@ describe("InMemoryQueueStorage stream log bound", () => {
     expect(seen[0]!.seq).toBe(1);
   });
 
+  it("bounds a run of object deltas, whose payload grows per row", async () => {
+    // Structured generation publishes each `objectDelta` as a progressively
+    // more complete snapshot, so N deltas retain roughly N × the final size.
+    // While every non-binary row was charged a flat 64 bytes the cap could not
+    // see that at all: 1,000 rows reported 64 KB against an 8 MB cap, so
+    // nothing was ever trimmed and ~32 MB of payload sat on the heap until the
+    // retention sweep — a log that looked bounded and was not.
+    const field = "y".repeat(32 * 1024);
+    for (let i = 1; i <= 1000; i++) {
+      await storage.publishStreamChunk!("objects", {
+        type: "object-delta",
+        port: "object",
+        objectDelta: { [`f${i}`]: field },
+      });
+    }
+
+    const all: StreamChunkRow[] = [];
+    storage.subscribeToStream!("objects", 0, (r) => all.push(r));
+
+    // Eviction happened: the log holds a bounded suffix, and the refusal that
+    // replaces the dropped prefix is the first thing a full replay sees.
+    expect(all[0]!.event.type).toBe("error");
+    expect(String((all[0]!.event as { error?: { message?: string } }).error?.message)).toContain(
+      "Stream replay unavailable"
+    );
+
+    const tail: StreamChunkRow[] = [];
+    storage.subscribeToStream!("objects", 999, (r) => tail.push(r));
+    expect(tail).toHaveLength(1);
+    expect(tail[0]!.seq).toBe(1000);
+  });
+
+  it("bounds a run of whole-output snapshots", async () => {
+    // Replace-mode ports and the agent turn loop publish a whole `Output` per
+    // row, which has the same shape as the object-delta case above.
+    const data = { transcript: "z".repeat(64 * 1024) };
+    for (let i = 0; i < 500; i++) {
+      await storage.publishStreamChunk!("snapshots", { type: "snapshot", data });
+    }
+
+    const all: StreamChunkRow[] = [];
+    storage.subscribeToStream!("snapshots", 0, (r) => all.push(r));
+    expect(all[0]!.event.type).toBe("error");
+
+    const tail: StreamChunkRow[] = [];
+    storage.subscribeToStream!("snapshots", 499, (r) => tail.push(r));
+    expect(tail).toHaveLength(1);
+    expect(tail[0]!.seq).toBe(500);
+  });
+
+  it("charges a text delta its own length", async () => {
+    // A long-running token stream is the other way a flat per-row charge lets
+    // the log outgrow the cap.
+    const chunk = "t".repeat(64 * 1024);
+    for (let i = 0; i < 300; i++) {
+      await storage.publishStreamChunk!("tokens", {
+        type: "text-delta",
+        port: "text",
+        textDelta: chunk,
+      });
+    }
+
+    const all: StreamChunkRow[] = [];
+    storage.subscribeToStream!("tokens", 0, (r) => all.push(r));
+    expect(all[0]!.event.type).toBe("error");
+
+    const tail: StreamChunkRow[] = [];
+    storage.subscribeToStream!("tokens", 299, (r) => tail.push(r));
+    expect(tail).toHaveLength(1);
+    expect(tail[0]!.seq).toBe(300);
+  });
+
   it("leaves an ordinary small stream fully replayable", async () => {
     for (let i = 0; i < 20; i++) {
       await storage.publishStreamChunk!("small", { type: "text-delta", port: "p", textDelta: "x" });
