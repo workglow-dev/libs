@@ -38,6 +38,7 @@ import {
   snapshotHftSession,
   withHftPipelineInUse,
 } from "./HFT_Pipeline";
+import { hftSamplingOptions } from "./HFT_Sampling";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
 import { createToolCallMarkupFilter } from "./HFT_ToolMarkup";
 
@@ -502,7 +503,8 @@ export const HFT_ToolCalling: AiProviderRunFn<
     try {
       await generateText(prompt, {
         max_new_tokens: input.maxTokens ?? 1024,
-        temperature: input.temperature ?? undefined,
+        // As for a chat turn, an unset temperature defers to the model's config.
+        ...hftSamplingOptions(input.temperature, "model-default"),
         return_full_text: false,
         streamer,
         stopping_criteria: [stopping_criteria],
