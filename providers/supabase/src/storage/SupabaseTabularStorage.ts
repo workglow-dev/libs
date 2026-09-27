@@ -319,14 +319,12 @@ export class SupabaseTabularStorage<
    * Convert Supabase values to JS values. Ensures numeric strings become numbers where schema says number.
    */
   protected override sqlToJsValue(column: string, value: ValueOptionType): Entity[keyof Entity] {
-    const typeDef = this.schema.properties[column as keyof typeof this.schema.properties] as
-      | JsonSchema
-      | undefined;
-    if (typeDef) {
-      if (value === null && this.isNullable(typeDef)) {
+    const info = this.columnInfo(column);
+    if (info) {
+      if (value === null && info.nullable) {
         return null as Entity[keyof Entity];
       }
-      const actualType = this.getNonNullType(typeDef);
+      const actualType = info.actualType;
 
       // Handle numeric types - Supabase can return them as strings
       if (

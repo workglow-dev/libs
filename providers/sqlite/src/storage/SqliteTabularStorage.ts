@@ -338,22 +338,18 @@ export class SqliteTabularStorage<
     }
 
     // Handle null values
+    const info = this.columnInfo(column);
     if (value === null) {
-      const typeDef = this.schema.properties[column as keyof typeof this.schema.properties] as
-        | JsonSchema
-        | undefined;
-      if (typeDef && this.isNullable(typeDef)) {
+      if (info && info.nullable) {
         return null;
       }
       // If not nullable, fall through to base class
     }
 
     // Schema-based type handling for non-object/array values
-    const typeDef = this.schema.properties[column as keyof typeof this.schema.properties] as
-      | JsonSchema
-      | undefined;
-    if (typeDef) {
-      const actualType = this.getNonNullType(typeDef);
+    if (info) {
+      const typeDef = info.typeDef;
+      const actualType = info.actualType;
       const isObject =
         typeDef === true || (typeof actualType !== "boolean" && actualType.type === "object");
       const isArray =
@@ -405,14 +401,13 @@ export class SqliteTabularStorage<
    * Convert SQLite values to JS values. Ensures 0/1 become booleans where schema says boolean.
    */
   protected override sqlToJsValue(column: string, value: ValueOptionType): Entity[keyof Entity] {
-    const typeDef = this.schema.properties[column as keyof typeof this.schema.properties] as
-      | JsonSchema
-      | undefined;
-    if (typeDef) {
-      if (value === null && this.isNullable(typeDef)) {
+    const info = this.columnInfo(column);
+    if (info) {
+      const typeDef = info.typeDef;
+      if (value === null && info.nullable) {
         return null as Entity[keyof Entity];
       }
-      const actualType = this.getNonNullType(typeDef);
+      const actualType = info.actualType;
       const isObject =
         typeDef === true || (typeof actualType !== "boolean" && actualType.type === "object");
       const isArray =

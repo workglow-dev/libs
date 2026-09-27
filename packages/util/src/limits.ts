@@ -22,6 +22,11 @@ export const DEFAULT_LIMITS = {
   jobMaxAttempts: 10,
   /** Default interval (ms) between JobQueueWorker poll iterations. */
   jobQueuePollIntervalMs: 100,
+  /**
+   * Ceiling (ms) an idle JobQueueWorker's poll interval backs off to while the
+   * queue stays empty. Never below the worker's own poll interval.
+   */
+  jobQueueMaxIdlePollIntervalMs: 1_000,
   /** Floor (ms) applied when deriving a worker's lease duration from its poll interval. */
   jobQueueLeaseFloorMs: 30_000,
   /** Upper bound (ms) on how long JobQueueWorker will sleep before re-checking a rate limiter. */

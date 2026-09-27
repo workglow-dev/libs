@@ -85,6 +85,19 @@ export interface JobQueueWorkerOptions<Input, Output> {
   readonly limiter?: ILimiter;
   readonly pollIntervalMs?: number;
   /**
+   * Ceiling (ms) the idle poll interval backs off to. While the queue is empty
+   * and this worker runs nothing, each consecutive empty poll doubles the wait,
+   * starting at {@link pollIntervalMs}, up to this value; {@link
+   * JobQueueWorker.notify} or a successful claim drops it straight back.
+   * Same-process submits and change-subscribing storages wake the worker
+   * through `notify`, so this only bounds how late the worker notices work that
+   * nothing announced — rows another process wrote to a storage without change
+   * notifications, or a lease that expired. Clamped to at least
+   * {@link pollIntervalMs}; set it equal to disable the backoff.
+   * Defaults to {@link DEFAULT_LIMITS.jobQueueMaxIdlePollIntervalMs}.
+   */
+  readonly maxIdlePollIntervalMs?: number;
+  /**
    * Optional worker ID. If not provided, a random UUID will be generated.
    * Use a persistent ID if you want the worker to reclaim its own jobs after restart.
    */
@@ -161,6 +174,7 @@ export class JobQueueWorker<
   protected readonly jobClass: JobClass<Input, Output>;
   protected readonly limiter: ILimiter;
   protected readonly pollIntervalMs: number;
+  protected readonly maxIdlePollIntervalMs: number;
   protected readonly stopTimeoutMs: number;
   protected readonly extendLeaseWhileRunning: boolean;
   protected readonly leaseMs: number;
@@ -215,6 +229,14 @@ export class JobQueueWorker<
   private readyRetryStreak = 0;
 
   /**
+   * Consecutive idle waits that found nothing claimable and nothing ready at
+   * the head of the queue. Drives the idle-poll backoff in
+   * {@link nextIdlePollInterval}; reset by {@link notify}, by a successful
+   * claim, and whenever this worker is running jobs.
+   */
+  private idleStreak = 0;
+
+  /**
    * Promise for the running `processJobs` loop. Captured in {@link start} so
    * {@link stop} can await actual loop exit instead of returning while the
    * loop is still suspended mid-iteration. Without this, a loop parked in
@@ -266,6 +288,10 @@ export class JobQueueWorker<
     this.jobClass = jobClass;
     this.limiter = options.limiter ?? new NullLimiter();
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_LIMITS.jobQueuePollIntervalMs;
+    this.maxIdlePollIntervalMs = Math.max(
+      this.pollIntervalMs,
+      options.maxIdlePollIntervalMs ?? DEFAULT_LIMITS.jobQueueMaxIdlePollIntervalMs
+    );
     this.stopTimeoutMs = options.stopTimeoutMs ?? 30_000;
     this.extendLeaseWhileRunning = options.extendLeaseWhileRunning ?? false;
     this.leaseMs =
@@ -313,6 +339,7 @@ export class JobQueueWorker<
    */
   public notify(): void {
     this.wakePending = true;
+    this.idleStreak = 0;
     if (this.wakeResolve) {
       if (this.wakeTimer) {
         clearTimeout(this.wakeTimer);
@@ -631,6 +658,7 @@ export class JobQueueWorker<
         }
 
         this.readyRetryStreak = 0;
+        this.idleStreak = 0;
 
         const { dispatched, limiterFull } = await this.processClaimsInternal(claims);
 
@@ -685,8 +713,9 @@ export class JobQueueWorker<
    * Determine how long to sleep when idle.
    *
    * Peeks at the earliest PENDING job: if it has a future `visible_at`,
-   * returns the time until it becomes ready (clamped to `pollIntervalMs`); an
-   * empty queue returns `pollIntervalMs`.
+   * returns the time until it becomes ready (clamped to the current idle poll
+   * interval); an empty queue returns the current idle poll interval. See
+   * {@link nextIdlePollInterval} for how that interval backs off.
    *
    * A head job that is *already* visible means the claim attempt that just
    * came back empty raced its `visible_at` deadline — the claim ran before the
@@ -707,8 +736,9 @@ export class JobQueueWorker<
         const delay = visibleAt ? new Date(visibleAt).getTime() - Date.now() : 0;
         if (delay > 0) {
           this.readyRetryStreak = 0;
-          return Math.min(delay, this.pollIntervalMs);
+          return Math.min(delay, this.nextIdlePollInterval());
         }
+        this.idleStreak = 0;
         const step = IDLE_READY_RETRY_BASE_MS * 2 ** this.readyRetryStreak;
         if (step < this.pollIntervalMs) {
           this.readyRetryStreak++;
@@ -716,10 +746,46 @@ export class JobQueueWorker<
         return Math.min(step, this.pollIntervalMs);
       }
       this.readyRetryStreak = 0;
+      return this.nextIdlePollInterval();
     } catch {
       // If peek fails, fall back to default
     }
     return this.pollIntervalMs;
+  }
+
+  /**
+   * The next idle poll interval: {@link pollIntervalMs} first, then doubling
+   * per consecutive idle wait up to {@link maxIdlePollIntervalMs}.
+   *
+   * An empty queue polled at a short interval is pure overhead — a claim and
+   * a peek per iteration, forever, in every process that merely constructed a
+   * server. The backoff costs no latency for work that announces itself (a
+   * same-process submit, a change-subscribing storage, a finished job freeing
+   * a slot all call {@link notify}, which resets it), and bounds the delay for
+   * work that does not.
+   *
+   * No backoff while this worker is running jobs: {@link checkForAbortingJobs}
+   * rides on these iterations, and an abort requested through storage by
+   * another process is only seen by polling, so its latency stays at
+   * {@link pollIntervalMs}.
+   */
+  private nextIdlePollInterval(): number {
+    if (this.activeJobAbortControllers.size > 0) {
+      this.idleStreak = 0;
+      return this.pollIntervalMs;
+    }
+    if (this.idleStreak === 0) {
+      this.idleStreak = 1;
+      return this.pollIntervalMs;
+    }
+    const step = Math.min(
+      Math.max(this.pollIntervalMs, 1) * 2 ** this.idleStreak,
+      this.maxIdlePollIntervalMs
+    );
+    if (step < this.maxIdlePollIntervalMs) {
+      this.idleStreak++;
+    }
+    return step;
   }
 
   /**

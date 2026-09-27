@@ -202,11 +202,35 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
   ): Promise<Array<JobStorageFormat<Input, Output>>> {
     await sleep(0);
     num = Number(num) || 100;
-    return this.jobQueue
-      .filter((j) => this.matchesPrefixes(j))
+    // Filter before sorting: the sort is stable, so dropping rows first leaves
+    // the survivors in the same relative order while sorting only the rows of
+    // the requested status rather than the queue's whole history.
+    const matching: Array<JobStorageFormat<Input, Output>> = [];
+    for (const j of this.jobQueue) {
+      if (j.status === status && this.matchesPrefixes(j)) matching.push(j);
+    }
+    return matching
       .sort((a, b) => (a.visible_at || "").localeCompare(b.visible_at || ""))
-      .filter((j) => j.status === status)
       .slice(0, num);
+  }
+
+  /**
+   * The row a stable sort by `visible_at` would put first among those `accept`
+   * admits: the earliest `visible_at`, ties going to the earlier array
+   * position. One pass, no intermediate arrays — this runs on every claim
+   * attempt, including every idle poll.
+   */
+  private firstByVisibleAt(
+    accept: (job: JobStorageFormat<Input, Output> & Record<string, unknown>) => boolean
+  ): (JobStorageFormat<Input, Output> & Record<string, unknown>) | undefined {
+    let best: (JobStorageFormat<Input, Output> & Record<string, unknown>) | undefined;
+    for (const job of this.jobQueue) {
+      if (!accept(job)) continue;
+      if (best === undefined || (job.visible_at || "").localeCompare(best.visible_at || "") < 0) {
+        best = job;
+      }
+    }
+    return best;
   }
 
   /**
@@ -227,21 +251,21 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
     const now = new Date().toISOString();
     const leaseExpiry = new Date(Date.now() + leaseMs).toISOString();
 
-    // First look for a normal PENDING job ready to run
-    const pending = this.jobQueue
-      .filter((job) => this.matchesPrefixes(job))
-      .filter((job) => job.status === JobStatus.PENDING)
-      .filter((job) => !job.visible_at || job.visible_at <= now)
-      .sort((a, b) => (a.visible_at || "").localeCompare(b.visible_at || ""));
-
-    // Also look for PROCESSING jobs with expired leases
-    const expiredLease = this.jobQueue
-      .filter((job) => this.matchesPrefixes(job))
-      .filter((job) => job.status === JobStatus.PROCESSING)
-      .filter((job) => !job.lease_expires_at || job.lease_expires_at < now)
-      .sort((a, b) => (a.visible_at || "").localeCompare(b.visible_at || ""));
-
-    const job = pending[0] ?? expiredLease[0];
+    // First look for a normal PENDING job ready to run, then fall back to a
+    // PROCESSING job whose lease expired.
+    const job =
+      this.firstByVisibleAt(
+        (j) =>
+          j.status === JobStatus.PENDING &&
+          (!j.visible_at || j.visible_at <= now) &&
+          this.matchesPrefixes(j)
+      ) ??
+      this.firstByVisibleAt(
+        (j) =>
+          j.status === JobStatus.PROCESSING &&
+          (!j.lease_expires_at || j.lease_expires_at < now) &&
+          this.matchesPrefixes(j)
+      );
     if (job) {
       const oldJob = { ...job };
       // Lease-expiry reclaim (job was PROCESSING with expired lease) consumes

@@ -12,6 +12,7 @@ describe("DEFAULT_LIMITS", () => {
     expect(DEFAULT_LIMITS.bridgeMaxDepth).toBe(16);
     expect(DEFAULT_LIMITS.jobMaxAttempts).toBe(10);
     expect(DEFAULT_LIMITS.jobQueuePollIntervalMs).toBe(100);
+    expect(DEFAULT_LIMITS.jobQueueMaxIdlePollIntervalMs).toBe(1_000);
     expect(DEFAULT_LIMITS.jobQueueLeaseFloorMs).toBe(30_000);
     expect(DEFAULT_LIMITS.jobQueueLimiterMaxWakeMs).toBe(30_000);
     expect(DEFAULT_LIMITS.jobQueueMaxProcessingTimeSamples).toBe(1_000);

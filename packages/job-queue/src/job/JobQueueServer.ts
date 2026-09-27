@@ -73,6 +73,11 @@ export interface JobQueueServerOptions<Input, Output> {
   readonly limiter?: ILimiter;
   readonly workerCount?: number;
   readonly pollIntervalMs?: number;
+  /**
+   * Ceiling (ms) an idle worker's poll interval backs off to while the queue is
+   * empty. See {@link JobQueueWorkerOptions.maxIdlePollIntervalMs}.
+   */
+  readonly maxIdlePollIntervalMs?: number;
   readonly deleteAfterCompletionMs?: number;
   readonly deleteAfterFailureMs?: number;
   readonly deleteAfterDisabledMs?: number;
@@ -122,6 +127,7 @@ export class JobQueueServer<
   public readonly limiter: ILimiter;
   protected readonly workerCount: number;
   protected readonly pollIntervalMs: number;
+  protected readonly maxIdlePollIntervalMs: number | undefined;
   protected readonly deleteAfterCompletionMs?: number;
   protected readonly deleteAfterFailureMs?: number;
   protected readonly deleteAfterDisabledMs?: number;
@@ -158,6 +164,7 @@ export class JobQueueServer<
     this.limiter = options.limiter ?? new NullLimiter();
     this.workerCount = options.workerCount ?? 1;
     this.pollIntervalMs = options.pollIntervalMs ?? 100;
+    this.maxIdlePollIntervalMs = options.maxIdlePollIntervalMs;
     this.deleteAfterCompletionMs = options.deleteAfterCompletionMs;
     this.deleteAfterFailureMs = options.deleteAfterFailureMs;
     this.deleteAfterDisabledMs = options.deleteAfterDisabledMs;
@@ -438,6 +445,7 @@ export class JobQueueServer<
       queueName: this.queueName,
       limiter: this.limiter,
       pollIntervalMs: this.pollIntervalMs,
+      maxIdlePollIntervalMs: this.maxIdlePollIntervalMs,
       stopTimeoutMs: this.stopTimeoutMs,
       deadLetter: this.deadLetter,
       prefetch: this.prefetch,

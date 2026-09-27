@@ -92,6 +92,19 @@ interface SqlJoinPlan {
 }
 
 /**
+ * What value conversion needs to know about one schema column, derived once per
+ * column instead of once per cell. See {@link BaseSqlTabularStorage.columnInfo}.
+ */
+export interface SqlColumnInfo {
+  /** The column's schema exactly as declared. */
+  readonly typeDef: JsonSchema;
+  /** `isNullable(typeDef)`. */
+  readonly nullable: boolean;
+  /** `getNonNullType(typeDef)`: the non-null branch of a `T | null` union. */
+  readonly actualType: JsonSchema;
+}
+
+/**
  * Base class for SQL-based tabular repositories, shared by SQLite and PostgreSQL
  * implementations.
  */
@@ -394,6 +407,44 @@ export abstract class BaseSqlTabularStorage<
     return getNonNullSchema(typeDef);
   }
 
+  /** Memo for {@link columnInfo}, and the schema object it was derived from. */
+  private _columnInfoCache: Map<string, SqlColumnInfo | undefined> | undefined;
+  private _columnInfoSchema: Schema | undefined;
+
+  /**
+   * The schema-derived facts {@link jsToSqlValue} / {@link sqlToJsValue} need
+   * for `column`, or `undefined` when the schema has no such property.
+   *
+   * Row hydration converts every cell, and deriving these per cell — a
+   * property lookup, an `anyOf` scan for the null branch, another for the
+   * non-null one — dominated read-heavy workloads. The answers depend only on
+   * the column's schema, so each is computed once per column (through the
+   * overridable {@link isNullable} / {@link getNonNullType}, which must stay
+   * pure) and reused. The memo is keyed by the schema object, so replacing
+   * `this.schema` wholesale starts a fresh one.
+   */
+  protected columnInfo(column: string): SqlColumnInfo | undefined {
+    let cache = this._columnInfoCache;
+    if (cache === undefined || this._columnInfoSchema !== this.schema) {
+      cache = new Map();
+      this._columnInfoCache = cache;
+      this._columnInfoSchema = this.schema;
+    }
+    let info = cache.get(column);
+    if (info === undefined && !cache.has(column)) {
+      const typeDef = this.schema.properties[column] as JsonSchema | undefined;
+      info = typeDef
+        ? {
+            typeDef,
+            nullable: this.isNullable(typeDef),
+            actualType: this.getNonNullType(typeDef),
+          }
+        : undefined;
+      cache.set(column, info);
+    }
+    return info;
+  }
+
   /**
    * Determines if a numeric field should be treated as unsigned, i.e. it is a
    * `number`/`integer` schema with a `minimum` of zero or greater. Shared by
@@ -452,16 +503,16 @@ export abstract class BaseSqlTabularStorage<
   }
 
   protected jsToSqlValue(column: string, value: Entity[keyof Entity]): ValueOptionType {
-    const typeDef = this.schema.properties[column];
-    if (!typeDef) {
+    const info = this.columnInfo(column);
+    if (!info) {
       return value as ValueOptionType;
     }
 
-    if (value === null && this.isNullable(typeDef)) {
+    if (value === null && info.nullable) {
       return null;
     }
 
-    const actualType = this.getNonNullType(typeDef);
+    const actualType = info.actualType;
     if (typeof actualType === "boolean") {
       return value as ValueOptionType;
     }
@@ -486,16 +537,16 @@ export abstract class BaseSqlTabularStorage<
   }
 
   protected sqlToJsValue(column: string, value: ValueOptionType): Entity[keyof Entity] {
-    const typeDef = this.schema.properties[column];
-    if (!typeDef) {
+    const info = this.columnInfo(column);
+    if (!info) {
       return value as Entity[keyof Entity];
     }
 
-    if (value === null && this.isNullable(typeDef)) {
+    if (value === null && info.nullable) {
       return null as Entity[keyof Entity];
     }
 
-    const actualType = this.getNonNullType(typeDef);
+    const actualType = info.actualType;
     if (typeof actualType === "boolean") {
       return value as Entity[keyof Entity];
     }

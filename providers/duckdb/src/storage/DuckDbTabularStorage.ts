@@ -478,11 +478,9 @@ export class DuckDbTabularStorage<
 
     // Null handling is inherited from the base class (returns null for
     // nullable columns, passes through otherwise).
-    const typeDef = this.schema.properties[column as keyof typeof this.schema.properties] as
-      | JsonSchema
-      | undefined;
-    if (typeDef) {
-      const actualType = this.getNonNullType(typeDef);
+    const info = this.columnInfo(column);
+    if (info) {
+      const actualType = info.actualType;
       // `typeDef === true` (accept-anything schema) maps to a VARCHAR
       // passthrough column, so only coerce for explicit boolean schemas.
       const isBoolean = typeof actualType !== "boolean" && actualType.type === "boolean";
@@ -502,14 +500,12 @@ export class DuckDbTabularStorage<
    * re-hydrates JSON text into arrays/objects/TypedArrays per the schema.
    */
   protected override sqlToJsValue(column: string, value: ValueOptionType): Entity[keyof Entity] {
-    const typeDef = this.schema.properties[column as keyof typeof this.schema.properties] as
-      | JsonSchema
-      | undefined;
-    if (typeDef) {
-      if (value === null && this.isNullable(typeDef)) {
+    const info = this.columnInfo(column);
+    if (info) {
+      if (value === null && info.nullable) {
         return null as Entity[keyof Entity];
       }
-      const actualType = this.getNonNullType(typeDef);
+      const actualType = info.actualType;
       // `typeDef === true` (accept-anything schema) stores as passthrough
       // VARCHAR, so no coercion branches apply to it.
       const isObject = typeof actualType !== "boolean" && actualType.type === "object";
