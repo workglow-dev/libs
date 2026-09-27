@@ -18,6 +18,15 @@ const REASONING = {
 } as const satisfies ModelEffortPolicy;
 
 /**
+ * The gpt-6 family always reasons: `reasoning.effort: "none"` is a 400
+ * (`Supported values are: 'low', 'medium', 'high', 'xhigh', and 'max'`).
+ */
+const ALWAYS_REASONING = {
+  supported: MODEL_EFFORTS.filter((effort) => effort !== "none"),
+  default: "medium",
+} as const satisfies ModelEffortPolicy;
+
+/**
  * OpenAI rejects `reasoning` with a 400 on the chat models that do not take it,
  * and those — `gpt-4o`, `gpt-4.1`, `chatgpt-*` — are most of what does not match
  * a rule here, so an unrecognized id keeps the plain no-reasoning path. A new
@@ -26,7 +35,8 @@ const REASONING = {
 export const openaiEffortPolicy: ModelEffortPolicyFn = makeEffortPolicy({
   rules: [
     { when: [/^text-embedding/i, /^gpt-image/i, /^dall-e/i], policy: EFFORT_POLICY_NONE },
-    { when: [/^gpt-5/i, /^gpt-6/i, /^o[134]/i], policy: REASONING },
+    { when: /^gpt-6/i, policy: ALWAYS_REASONING },
+    { when: [/^gpt-5/i, /^o[134]/i], policy: REASONING },
   ],
   fallback: EFFORT_POLICY_NONE,
 });

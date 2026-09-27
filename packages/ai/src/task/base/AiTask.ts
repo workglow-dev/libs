@@ -30,6 +30,7 @@ import { accumulatingEmit } from "../../capability/accumulatingEmit";
 import type { AiEmit } from "../../capability/AiEmit";
 import { noopEmit } from "../../capability/AiEmit";
 import type { Capability } from "../../capability/Capabilities";
+import { CAPABILITIES } from "../../capability/Capabilities";
 import { readUsage, recordUsageTelemetry } from "../../capability/UsageTelemetry";
 import type { AiJobInput } from "../../job/AiJob";
 import { AiJob } from "../../job/AiJob";
@@ -62,17 +63,29 @@ function modelSemanticFromPropertySchema(schema: JsonSchema): string | undefined
   return undefined;
 }
 
+/**
+ * The capabilities a `model:<a>,<b>` narrowing states, when every tag is one.
+ * A port saying what it needs — `model:text.generation,tool-use` — is the
+ * direct spelling; `model:SomeTask` borrows that task's `requires`.
+ */
+function capabilityList(narrowing: string): readonly Capability[] | undefined {
+  const tags = narrowing.split(",");
+  return tags.every((tag) => Object.hasOwn(CAPABILITIES, tag)) ? (tags as Capability[]) : undefined;
+}
+
 function requiresForModelProperty(
   propertySchema: JsonSchema,
   hostTaskClass: typeof AiTask
 ): readonly Capability[] {
   const semantic = modelSemanticFromPropertySchema(propertySchema);
   if (semantic?.startsWith("model:")) {
-    const referencedTaskType = semantic.slice("model:".length);
-    const ctor = TaskRegistry.all.get(referencedTaskType) as typeof AiTask | undefined;
+    const narrowing = semantic.slice("model:".length);
+    const ctor = TaskRegistry.all.get(narrowing) as typeof AiTask | undefined;
     if (ctor) {
       return ctor.requires;
     }
+    const listed = capabilityList(narrowing);
+    if (listed) return listed;
   }
   return hostTaskClass.requires;
 }
@@ -448,8 +461,10 @@ export class AiTask<
         if (!modelMeetsRequires(model as ModelConfig, requires)) {
           const modelId = (model as ModelConfig).model_id ?? "(inline config)";
           const semantic = modelSemanticFromPropertySchema(propertySchema);
+          const narrowing =
+            semantic?.startsWith("model:") === true ? semantic.slice("model:".length) : undefined;
           const referencedTaskType =
-            semantic?.startsWith("model:") === true ? semantic.slice("model:".length) : this.type;
+            narrowing !== undefined && TaskRegistry.all.has(narrowing) ? narrowing : this.type;
           throw new TaskConfigurationError(
             `AiTask: Model "${modelId}" for '${key}' is not compatible with task '${referencedTaskType}'. ` +
               `Requires: [${requires.join(", ")}]; model has: [${capabilities?.join(", ") ?? ""}]`

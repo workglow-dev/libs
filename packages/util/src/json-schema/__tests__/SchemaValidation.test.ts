@@ -252,6 +252,36 @@ describe("SchemaValidation", () => {
       expect(result.valid).toBe(true);
     });
 
+    it("should accept a capability list as a narrowing segment", () => {
+      const schema: DataPortSchema = {
+        type: "object",
+        properties: {
+          one: { type: "string", format: "model:text.generation" },
+          two: { type: "string", format: "model:text.generation,tool-use" },
+          three: { type: "string", format: "model:text.generation,tool-use,json-mode" },
+        },
+      } as const satisfies DataPortSchema;
+
+      expect(validateFormatAnnotations(schema).valid).toBe(true);
+    });
+
+    it("should reject a capability list with an empty tag", () => {
+      for (const format of [
+        "model:text.generation,",
+        "model:,tool-use",
+        "model:text..generation",
+        "model:text.",
+        "model:a,,b",
+        "model.text",
+      ]) {
+        const schema = {
+          type: "object",
+          properties: { field: { type: "string", format } },
+        } as unknown as DataPortSchema;
+        expect(validateFormatAnnotations(schema).valid, format).toBe(false);
+      }
+    });
+
     it("should reject empty format string", () => {
       const schema = {
         type: "object",

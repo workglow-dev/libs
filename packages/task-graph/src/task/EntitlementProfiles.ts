@@ -23,7 +23,13 @@ import { Entitlements } from "./TaskEntitlements";
 
 /**
  * Browser environment grants.
- * No filesystem access, no code execution, no stdio MCP.
+ * No filesystem access, no stdio MCP, and no code execution beyond JavaScript.
+ *
+ * `code-execution:javascript` is granted, and only that leaf: `JavaScriptTask`
+ * runs its code in its own interpreter, not through `eval` or `Function`, so
+ * the code reaches nothing the interpreter does not hand it. The broader
+ * `code-execution` grant is NOT issued, for the same reason as `network` below —
+ * its hierarchical cover would admit any other runtime a task declares.
  *
  * Network grants are intentionally narrow: `network:http` + `network:websocket`.
  * The broader `network` grant is NOT issued because its hierarchical cover
@@ -41,6 +47,7 @@ export const BROWSER_GRANTS: readonly EntitlementGrant[] = [
   { id: Entitlements.MCP_PROMPT_GET },
   { id: Entitlements.STORAGE },
   { id: Entitlements.CREDENTIAL },
+  { id: Entitlements.CODE_EXECUTION_JS },
 ];
 
 /**

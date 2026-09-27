@@ -23,16 +23,21 @@ describe("openaiEffortPolicy", () => {
     expect(openaiEffortPolicy(cfg("babbage-002"))?.supported).toEqual([]);
   });
 
-  it("treats gpt-5, gpt-6, and o-series as reasoning with default medium", () => {
+  it("treats gpt-5 and o-series as reasoning with default medium", () => {
     expect(openaiEffortPolicy(cfg("gpt-5.6-sol"))).toEqual({
       supported: [...MODEL_EFFORTS],
       default: "medium",
     });
+    expect(openaiEffortPolicy(cfg("o3-mini"))?.default).toBe("medium");
+  });
+
+  // gpt-6-astra: `'none' is not supported ... Supported values are: 'low',
+  // 'medium', 'high', 'xhigh', and 'max'.`
+  it("offers gpt-6 every level but none, since it cannot turn reasoning off", () => {
     expect(openaiEffortPolicy(cfg("gpt-6-astra"))).toEqual({
-      supported: [...MODEL_EFFORTS],
+      supported: ["low", "medium", "high", "extra", "ultra"],
       default: "medium",
     });
-    expect(openaiEffortPolicy(cfg("o3-mini"))?.default).toBe("medium");
   });
 
   it("returns no levels for embeddings, image, and gpt-4o", () => {
