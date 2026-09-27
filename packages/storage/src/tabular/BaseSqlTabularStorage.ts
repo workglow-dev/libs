@@ -102,6 +102,8 @@ export interface SqlColumnInfo {
   readonly nullable: boolean;
   /** `getNonNullType(typeDef)`: the non-null branch of a `T | null` union. */
   readonly actualType: JsonSchema;
+  /** `actualType` is an object schema declaring `contentEncoding: "blob"`. */
+  readonly blob: boolean;
 }
 
 /**
@@ -433,13 +435,15 @@ export abstract class BaseSqlTabularStorage<
     let info = cache.get(column);
     if (info === undefined && !cache.has(column)) {
       const typeDef = this.schema.properties[column] as JsonSchema | undefined;
-      info = typeDef
-        ? {
-            typeDef,
-            nullable: this.isNullable(typeDef),
-            actualType: this.getNonNullType(typeDef),
-          }
-        : undefined;
+      if (typeDef) {
+        const actualType = this.getNonNullType(typeDef);
+        info = {
+          typeDef,
+          nullable: this.isNullable(typeDef),
+          actualType,
+          blob: typeof actualType !== "boolean" && actualType.contentEncoding === "blob",
+        };
+      }
       cache.set(column, info);
     }
     return info;
@@ -537,7 +541,20 @@ export abstract class BaseSqlTabularStorage<
   }
 
   protected sqlToJsValue(column: string, value: ValueOptionType): Entity[keyof Entity] {
-    const info = this.columnInfo(column);
+    return this.sqlToJsValueFor(this.columnInfo(column), value);
+  }
+
+  /**
+   * This class's own {@link sqlToJsValue} conversion, given the column's
+   * already-looked-up {@link columnInfo}. Lets a subclass whose override has
+   * the info in hand fall through to the base conversion without a second
+   * lookup — exactly `super.sqlToJsValue(column, value)` for a class
+   * extending this one directly.
+   */
+  protected sqlToJsValueFor(
+    info: SqlColumnInfo | undefined,
+    value: ValueOptionType
+  ): Entity[keyof Entity] {
     if (!info) {
       return value as Entity[keyof Entity];
     }
@@ -546,12 +563,7 @@ export abstract class BaseSqlTabularStorage<
       return null as Entity[keyof Entity];
     }
 
-    const actualType = info.actualType;
-    if (typeof actualType === "boolean") {
-      return value as Entity[keyof Entity];
-    }
-
-    if (actualType.contentEncoding === "blob") {
+    if (info.blob) {
       if (typeof Buffer !== "undefined" && value instanceof Buffer) {
         return new Uint8Array(value) as Entity[keyof Entity];
       }

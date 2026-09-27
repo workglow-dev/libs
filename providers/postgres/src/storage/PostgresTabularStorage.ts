@@ -51,7 +51,7 @@ import {
   TYPED_ARRAY_CTORS,
   type VectorIndexOptions,
 } from "@workglow/storage";
-import type { SqlJoinDialect } from "@workglow/storage";
+import type { SqlColumnInfo, SqlJoinDialect } from "@workglow/storage";
 import { createServiceToken } from "@workglow/util";
 import type {
   DataPortSchemaObject,
@@ -95,6 +95,24 @@ const pad = (n: number, width = 2): string => String(n).padStart(width, "0");
  * just below it. The cost is only extra round-trips on very large reads.
  */
 const COMPOUND_IN_TUPLE_LIMIT = 2000;
+
+/**
+ * How {@link PostgresTabularStorage}'s value decoding treats one column,
+ * derived once from the column's schema.
+ */
+interface PgColumnPlan {
+  readonly info: SqlColumnInfo | undefined;
+  /** The non-null schema's `format`. */
+  readonly format: string | undefined;
+  /** `format` names a TypedArray, decoded from pgvector text or a JSONB array. */
+  readonly vector: boolean;
+  /** The TypedArray constructor `format` names; unused unless {@link vector}. */
+  readonly vectorCtor: new (values: number[]) => unknown;
+  /** Declared `number`/`integer`: numeric strings are parsed. */
+  readonly numeric: boolean;
+  /** Declared `string`: a driver-hydrated `Date` is turned back into one. */
+  readonly string: boolean;
+}
 
 /**
  * Renders a Date the driver produced for a TIMESTAMP / DATE column back into
@@ -532,15 +550,67 @@ export class PostgresTabularStorage<
    * Convert PostgreSQL values to JS values. Ensures numeric strings become numbers where schema says number.
    */
   protected override sqlToJsValue(column: string, value: ValueOptionType): Entity[keyof Entity] {
-    const info = this.columnInfo(column);
+    return this.decodeColumnValue(column, this.columnPlan(column), value);
+  }
+
+  /** Memo for {@link columnPlan}, and the schema object it was derived from. */
+  private _columnPlans: Map<string, PgColumnPlan> | undefined;
+  private _columnPlansSchema: Schema | undefined;
+
+  /**
+   * What {@link sqlToJsValue} branches on for `column`, derived once from its
+   * {@link columnInfo}. Flat fields on one object shape, so the per-cell reads
+   * do not go through the column schemas' own (many, differently shaped)
+   * objects.
+   */
+  private columnPlan(column: string): PgColumnPlan {
+    let plans = this._columnPlans;
+    if (plans === undefined || this._columnPlansSchema !== this.schema) {
+      plans = new Map();
+      this._columnPlans = plans;
+      this._columnPlansSchema = this.schema;
+    }
+    let plan = plans.get(column);
+    if (plan === undefined) {
+      const info = this.columnInfo(column);
+      const actualType = info?.actualType;
+      const schema =
+        actualType !== undefined && typeof actualType !== "boolean" ? actualType : null;
+      const format = schema?.format;
+      const vector = schema !== null && this.isVectorFormat(format);
+      plan = {
+        info,
+        format,
+        vector,
+        vectorCtor: vector
+          ? (TYPED_ARRAY_CTORS[
+              typeof format === "string" && format !== "TypedArray"
+                ? format.slice("TypedArray:".length)
+                : "Float32Array"
+            ] ?? Float32Array)
+          : Float32Array,
+        numeric: schema !== null && (schema.type === "number" || schema.type === "integer"),
+        string: schema !== null && schema.type === "string",
+      };
+      plans.set(column, plan);
+    }
+    return plan;
+  }
+
+  /** {@link sqlToJsValue}'s body, given the column's {@link columnPlan}. */
+  private decodeColumnValue(
+    column: string,
+    plan: PgColumnPlan,
+    value: ValueOptionType
+  ): Entity[keyof Entity] {
+    const info = plan.info;
     if (info) {
       if (value === null && info.nullable) {
         return null as Entity[keyof Entity];
       }
-      const actualType = info.actualType;
 
       // Handle vector format - convert pgvector string to TypedArray
-      if (typeof actualType !== "boolean" && this.isVectorFormat(actualType.format)) {
+      if (plan.vector) {
         if (typeof value === "string") {
           try {
             // Parse the vector string format [1.0, 2.0, ...] to TypedArray
@@ -548,24 +618,14 @@ export class PostgresTabularStorage<
             const nums: number[] = Array.isArray(parsed)
               ? (parsed as number[])
               : Object.values(parsed as Record<string, number>);
-            const ctorName =
-              typeof actualType.format === "string" && actualType.format !== "TypedArray"
-                ? actualType.format.slice("TypedArray:".length)
-                : "Float32Array";
-            const Ctor = TYPED_ARRAY_CTORS[ctorName] ?? Float32Array;
-            return new Ctor(nums) as Entity[keyof Entity];
+            return new plan.vectorCtor(nums) as Entity[keyof Entity];
           } catch (e) {
             console.warn(`Failed to parse vector for column ${column}:`, e);
           }
         }
         // Value returned from JSONB as a parsed JS array — reconstruct TypedArray
         if (value && typeof value === "object" && Array.isArray(value)) {
-          const ctorName =
-            typeof actualType.format === "string" && actualType.format !== "TypedArray"
-              ? actualType.format.slice("TypedArray:".length)
-              : "Float32Array";
-          const Ctor = TYPED_ARRAY_CTORS[ctorName] ?? Float32Array;
-          return new Ctor(value as number[]) as Entity[keyof Entity];
+          return new plan.vectorCtor(value as number[]) as Entity[keyof Entity];
         }
         // If it's already a TypedArray, return as-is
         if (value && typeof value === "object") {
@@ -574,10 +634,7 @@ export class PostgresTabularStorage<
       }
 
       // Handle numeric types - PostgreSQL can return them as strings
-      if (
-        typeof actualType !== "boolean" &&
-        (actualType.type === "number" || actualType.type === "integer")
-      ) {
+      if (plan.numeric) {
         if (typeof value === "number") return value as Entity[keyof Entity];
         if (typeof value === "string") {
           const parsed = Number(value);
@@ -594,15 +651,11 @@ export class PostgresTabularStorage<
       // stores these as TEXT and returns strings, so the divergence is
       // invisible until a Postgres deployment sorts a history table.
       // Same shape as the numeric coercion above: restore the declared type.
-      if (
-        typeof actualType !== "boolean" &&
-        actualType.type === "string" &&
-        value instanceof Date
-      ) {
-        return dateToSchemaString(value, actualType.format) as Entity[keyof Entity];
+      if (plan.string && value instanceof Date) {
+        return dateToSchemaString(value, plan.format) as Entity[keyof Entity];
       }
     }
-    return super.sqlToJsValue(column, value);
+    return this.sqlToJsValueFor(info, value);
   }
 
   /**
@@ -866,12 +919,42 @@ export class PostgresTabularStorage<
 
   /** Hydrate a row returned by Postgres back into entity-shaped JS values. */
   private hydrateRow(row: unknown): Entity {
-    const entity = row as Entity;
-    const record = entity as Record<string, unknown>;
-    for (const key in this.schema.properties) {
-      record[key] = this.sqlToJsValue(key, record[key] as ValueOptionType);
+    this.hydrateRecord(row as Record<string, unknown>);
+    return row as Entity;
+  }
+
+  /** Memo for {@link hydrateRecord}: each schema column with its plan. */
+  private _hydrateColumns:
+    | {
+        readonly schema: Schema;
+        readonly columns: ReadonlyArray<readonly [string, PgColumnPlan]>;
+      }
+    | undefined;
+
+  /**
+   * Converts every schema column of `record` in place — the same as calling
+   * {@link sqlToJsValue} for each key of `this.schema.properties`, in that
+   * order, which is what it falls back to when a subclass overrides
+   * `sqlToJsValue`. Otherwise it walks a per-schema list of columns paired
+   * with their {@link columnPlan}, so a row costs no per-cell lookup at all.
+   */
+  private hydrateRecord(record: Record<string, unknown>): void {
+    if (this.sqlToJsValue !== PostgresTabularStorage.prototype.sqlToJsValue) {
+      for (const key in this.schema.properties) {
+        record[key] = this.sqlToJsValue(key, record[key] as ValueOptionType);
+      }
+      return;
     }
-    return entity;
+    let memo = this._hydrateColumns;
+    if (memo === undefined || memo.schema !== this.schema) {
+      const columns: Array<readonly [string, PgColumnPlan]> = [];
+      for (const key in this.schema.properties) columns.push([key, this.columnPlan(key)]);
+      memo = { schema: this.schema, columns };
+      this._hydrateColumns = memo;
+    }
+    for (const [key, info] of memo.columns) {
+      record[key] = this.decodeColumnValue(key, info, record[key] as ValueOptionType);
+    }
   }
 
   /**
@@ -1384,10 +1467,7 @@ export class PostgresTabularStorage<
     if (result.rows.length > 0) {
       val = result.rows[0] as Entity;
       // Convert all columns according to schema
-      const valRecord = val as Record<string, unknown>;
-      for (const key in this.schema.properties) {
-        valRecord[key] = this.sqlToJsValue(key, valRecord[key] as ValueOptionType);
-      }
+      this.hydrateRecord(val as Record<string, unknown>);
     } else {
       val = undefined;
     }
@@ -1466,10 +1546,7 @@ export class PostgresTabularStorage<
     const result = await db.query(sql, params);
 
     for (const row of result.rows) {
-      const record = row as Record<string, unknown>;
-      for (const key in this.schema.properties) {
-        record[key] = this.sqlToJsValue(key, record[key] as ValueOptionType);
-      }
+      this.hydrateRecord(row as Record<string, unknown>);
     }
     return result.rows as Entity[];
   }
@@ -1535,10 +1612,7 @@ export class PostgresTabularStorage<
     if (result.rows.length > 0) {
       // Convert all columns according to schema
       for (const row of result.rows) {
-        const record = row as Record<string, unknown>;
-        for (const key in this.schema.properties) {
-          record[key] = this.sqlToJsValue(key, record[key] as ValueOptionType);
-        }
+        this.hydrateRecord(row as Record<string, unknown>);
       }
       return result.rows;
     }
@@ -1629,10 +1703,7 @@ export class PostgresTabularStorage<
 
     // Convert all columns according to schema (consistent with getAll)
     for (const row of result.rows) {
-      const record = row as Record<string, unknown>;
-      for (const key in this.schema.properties) {
-        record[key] = this.sqlToJsValue(key, record[key] as ValueOptionType);
-      }
+      this.hydrateRecord(row as Record<string, unknown>);
     }
 
     return result.rows as Entity[];
@@ -1741,10 +1812,7 @@ export class PostgresTabularStorage<
         const result = await this.db.query(sql, params as unknown[]);
         const rows = (result.rows ?? []) as Entity[];
         for (const row of rows) {
-          const record = row as Record<string, unknown>;
-          for (const k in this.schema.properties) {
-            record[k] = this.sqlToJsValue(k, record[k] as ValueOptionType);
-          }
+          this.hydrateRecord(row as Record<string, unknown>);
         }
         return rows;
       },
@@ -1901,10 +1969,7 @@ export class PostgresTabularStorage<
 
     if (result.rows.length > 0) {
       for (const row of result.rows) {
-        const record = row as Record<string, unknown>;
-        for (const k in this.schema.properties) {
-          record[k] = this.sqlToJsValue(k, record[k] as ValueOptionType);
-        }
+        this.hydrateRecord(row as Record<string, unknown>);
       }
       safeEmit(this.events, "query", criteria as Partial<Entity>, result.rows as Entity[]);
       return result.rows as Entity[];

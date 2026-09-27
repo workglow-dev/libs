@@ -7,6 +7,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { PostgresTabularStorage } from "@workglow/postgres/storage";
 import { Sqlite, SqliteTabularStorage } from "@workglow/sqlite/storage";
+import type { ValueOptionType } from "@workglow/storage";
 import type { JsonSchema } from "@workglow/util/schema";
 import type { Pool } from "pg";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -156,4 +157,30 @@ describe("SQL tabular value conversion memoizes per-column schema facts", () => 
       });
     });
   }
+});
+
+describe("PostgresTabularStorage row hydration", () => {
+  it("still routes every cell through an overridden sqlToJsValue", async () => {
+    const seen: string[] = [];
+    class Overriding extends PostgresTabularStorage<typeof DecodeSchema, readonly ["id"]> {
+      protected override sqlToJsValue(column: string, value: ValueOptionType) {
+        seen.push(column);
+        const decoded = super.sqlToJsValue(column, value);
+        return (
+          column === "label" && typeof decoded === "string" ? decoded.toUpperCase() : decoded
+        ) as never;
+      }
+    }
+    const s = new Overriding(new PGlite() as unknown as Pool, "decode_override", DecodeSchema, [
+      "id",
+    ] as const);
+    await s.setupDatabase();
+    await s.putBulk([rowFor(1), rowFor(2)]);
+
+    seen.length = 0;
+    const rows = (await s.getAll({ orderBy: [{ column: "id", direction: "ASC" }] })) ?? [];
+    expect(seen).toHaveLength(2 * COLUMN_COUNT);
+    expect(rows.map((r) => r.label)).toEqual(["LABEL 1", "LABEL 2"]);
+    expect(rows[0]).toEqual({ ...rowFor(1), label: "LABEL 1" });
+  });
 });
