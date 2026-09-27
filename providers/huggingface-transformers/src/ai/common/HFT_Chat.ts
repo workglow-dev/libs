@@ -24,6 +24,7 @@ import {
   snapshotHftSession,
   withHftPipelineInUse,
 } from "./HFT_Pipeline";
+import { hftSamplingOptions } from "./HFT_Sampling";
 import type { HftStreamEmit } from "./HFT_Streaming";
 import { createStreamingTextStreamer, createTextStreamer } from "./HFT_Streaming";
 import { buildHFTMessages, mapHFTTools } from "./HFT_ToolCalling";
@@ -242,7 +243,9 @@ async function generateTurn(
   const output = (await hfModel.generate({
     ...inputs,
     max_new_tokens: input.maxTokens ?? 1024,
-    temperature: input.temperature ?? undefined,
+    // An unset temperature leaves sampling to the model's generation config, so
+    // a chat keeps whatever decoding its model ships tuned for.
+    ...hftSamplingOptions(input.temperature, "model-default"),
     streamer,
     stopping_criteria: [stopping_criteria],
     ...(past_key_values ? { past_key_values } : {}),

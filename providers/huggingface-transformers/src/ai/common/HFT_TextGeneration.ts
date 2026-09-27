@@ -28,6 +28,7 @@ import {
   snapshotHftSession,
   withHftPipelineInUse,
 } from "./HFT_Pipeline";
+import { hftSamplingOptions } from "./HFT_Sampling";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
 
 export const HFT_TextGeneration: AiProviderRunFn<
@@ -58,6 +59,9 @@ export const HFT_TextGeneration: AiProviderRunFn<
 
     const modelPath = model!.provider_config.model_path;
     const cacheKey = getPipelineCacheKey(model!);
+    // Greedy unless a temperature is asked for, whatever the model's generation
+    // config prefers.
+    const sampling = hftSamplingOptions(input.temperature, "greedy");
     const isCheckpoint = sessionContext?.prefix !== undefined;
 
     // Cache-checkpoint consumption: render the full prefix + input.prompt
@@ -137,7 +141,7 @@ export const HFT_TextGeneration: AiProviderRunFn<
 
       await generateText(prompt, {
         streamer,
-        do_sample: false,
+        ...sampling,
         max_new_tokens: input.maxTokens ?? 4 * 1024,
         stopping_criteria: [stopping_criteria],
         return_full_text: false,
@@ -198,7 +202,7 @@ export const HFT_TextGeneration: AiProviderRunFn<
 
     await generateText(messages, {
       streamer,
-      do_sample: false,
+      ...sampling,
       max_new_tokens: input.maxTokens ?? 4 * 1024,
       stopping_criteria: [stopping_criteria],
       ...(past_key_values ? { past_key_values } : {}),
