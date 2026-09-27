@@ -21,7 +21,10 @@ import {
 } from "@workglow/storage";
 import { createServiceToken } from "@workglow/util";
 import { PostgresMigrationRunner } from "../migrations/PostgresMigrationRunner";
-import { postgresRateLimiterMigrations } from "../migrations/postgresRateLimiterMigrations";
+import {
+  postgresRateLimiterMigrations,
+  type PostgresRateLimiterTableOptions,
+} from "../migrations/postgresRateLimiterMigrations";
 
 export const POSTGRES_RATE_LIMITER_STORAGE = createServiceToken<IRateLimiterStorage>(
   "ratelimiter.storage.postgres"
@@ -41,12 +44,15 @@ export class PostgresRateLimiterStorage implements IRateLimiterStorage {
   protected readonly executionTableName: string;
   /** The table name for next available times */
   protected readonly nextAvailableTableName: string;
+  /** How the tables are stored; see {@link PostgresRateLimiterTableOptions}. */
+  protected readonly tableOptions: PostgresRateLimiterTableOptions;
 
   constructor(
     protected readonly db: Pool,
-    options?: RateLimiterStorageOptions
+    options?: RateLimiterStorageOptions & PostgresRateLimiterTableOptions
   ) {
     this.prefixes = options?.prefixes ?? [];
+    this.tableOptions = { unlogged: options?.unlogged === true };
     this.prefixValues = options?.prefixValues ?? {};
     // Validate prefix column names before deriving table names from them.
     assertPrefixesSafe(this.prefixes);
@@ -81,7 +87,8 @@ export class PostgresRateLimiterStorage implements IRateLimiterStorage {
     return postgresRateLimiterMigrations(
       this.executionTableName,
       this.nextAvailableTableName,
-      this.prefixes
+      this.prefixes,
+      this.tableOptions
     );
   }
 

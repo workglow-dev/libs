@@ -15,11 +15,25 @@ import {
 } from "@workglow/storage";
 import type { Pool } from "../storage/_postgres/node-bun";
 
-/** Initial migration set for the Postgres rate-limiter tables. */
+/** Options that change the rate-limiter tables' storage, not their shape. */
+export interface PostgresRateLimiterTableOptions {
+  /**
+   * Keep both tables UNLOGGED: not written to the WAL, and emptied by crash
+   * recovery. A limiter's rows are only a sliding window of recent starts and
+   * the next permitted start, so losing them costs one window of pacing, while
+   * logging them costs WAL on every reservation — the busiest writes a
+   * fetch-heavy deployment makes. Opt-in; once applied it stays applied, since
+   * nothing in the migration history turns it back.
+   */
+  readonly unlogged?: boolean;
+}
+
+/** Migration set for the Postgres rate-limiter tables. */
 export function postgresRateLimiterMigrations(
   executionTableName: string,
   nextAvailableTableName: string,
-  prefixes: readonly PrefixColumn[]
+  prefixes: readonly PrefixColumn[],
+  tableOptions: PostgresRateLimiterTableOptions = {}
 ): IMigration<Pool>[] {
   const component = `rate-limiter:postgres:${executionTableName}`;
   const prefixColumnsSql = buildPrefixColumnsSql(PostgresDialect, prefixes);
@@ -29,7 +43,7 @@ export function postgresRateLimiterMigrations(
   const primaryKeyColumns =
     prefixColumnNames.length > 0 ? `${prefixColumnNames.join(", ")}, queue_name` : "queue_name";
 
-  return [
+  const migrations: IMigration<Pool>[] = [
     {
       component,
       version: 1,
@@ -56,4 +70,17 @@ export function postgresRateLimiterMigrations(
       },
     },
   ];
+  if (tableOptions.unlogged === true) {
+    migrations.push({
+      component,
+      version: 2,
+      description: "Keep the rate-limiter tables UNLOGGED",
+      async up(db: Pool) {
+        // Idempotent: SET UNLOGGED on an unlogged table is a no-op.
+        await db.query(`ALTER TABLE ${executionTableName} SET UNLOGGED`);
+        await db.query(`ALTER TABLE ${nextAvailableTableName} SET UNLOGGED`);
+      },
+    });
+  }
+  return migrations;
 }
