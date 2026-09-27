@@ -20,7 +20,7 @@ import {
 import { promptMissingInput } from "../input/prompt";
 import { deepMerge } from "../input/resolve-input";
 import { withCli } from "../run-interactive";
-import { isAbortError, runFailureExitCode } from "../run-signal-abort";
+import { isSignalCancellation, runFailureExitCode } from "../run-signal-abort";
 import { resolveTaskType } from "../taskTypes";
 import { renderSelectPrompt } from "../ui/render";
 import { formatError, formatTable, outputResult } from "../util";
@@ -190,7 +190,7 @@ export function registerTaskCommand(program: Command): void {
           await outputResult(result, opts.outputJsonFile as string | undefined);
         }
       } catch (err) {
-        if (!isAbortError(err)) {
+        if (!isSignalCancellation(err)) {
           console.error(`Error: ${formatError(err)}`);
         }
         process.exit(runFailureExitCode(err));

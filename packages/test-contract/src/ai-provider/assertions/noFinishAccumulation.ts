@@ -61,11 +61,15 @@ export interface NoFinishAccumulationOptions {
 }
 
 /**
- * Asserts that no `finish` field repeats content the deltas already delivered.
+ * Asserts that a `finish` carries no output of its own.
  *
  * Checks two shapes, which are the two that have actually occurred: a `text`
- * field repeating the accumulated `text-delta` stream, and a non-empty array
- * field (`toolCalls`) on a port an `object-delta` already emitted.
+ * field carrying the generation, and a non-empty array field (`toolCalls`).
+ * Neither is judged against whether a matching delta exists — the run-fn that
+ * emits its tool calls ONLY on `finish` is the plain form of the defect, and
+ * `TaskRunner` accumulates from the deltas, so that output reaches the task's
+ * port empty. A matching delta makes the report more specific, never the
+ * difference between passing and failing.
  *
  * An empty string and an empty array pass — that is what a compliant run-fn
  * emits when the output type requires the field to exist.
@@ -83,12 +87,17 @@ export function expectNoFinishAccumulation(
 
     if (typeof value === "string" && value.length > 0) {
       const streamed = accumulatedText(events, field);
+      const repeatsDeltas =
+        streamed.length > 0 && (streamed.includes(value) || value.includes(streamed));
       expect(
-        streamed.includes(value) || value.includes(streamed),
-        `finish.${field} repeats text the deltas already delivered — the stream is the one copy, ` +
-          `and TaskRunner accumulates it. Emit "" here, or name "${field}" in allowFields if this ` +
-          `capability's output genuinely lives on finish.`
-      ).toBe(false);
+        value,
+        `finish.${field} ` +
+          (repeatsDeltas
+            ? `repeats text the deltas already delivered`
+            : `carries text no text-delta on port "${field}" delivered, so nothing accumulates it`) +
+          ` — the stream is the one copy, and TaskRunner accumulates it. Emit "" here, or name ` +
+          `"${field}" in allowFields if this capability's output genuinely lives on finish.`
+      ).toBe("");
     }
 
     if (Array.isArray(value) && value.length > 0) {
@@ -96,11 +105,14 @@ export function expectNoFinishAccumulation(
         (event) => event.type === "object-delta" && event.port === field
       );
       expect(
-        streamedPort,
-        `finish.${field} carries ${value.length} entr${value.length === 1 ? "y" : "ies"} that an ` +
-          `object-delta on port "${field}" already emitted. Emit [] here, or name "${field}" in ` +
-          `allowFields.`
-      ).toBe(false);
+        value,
+        `finish.${field} carries ${value.length} entr${value.length === 1 ? "y" : "ies"} ` +
+          (streamedPort
+            ? `that an object-delta on port "${field}" already emitted`
+            : `that no object-delta on port "${field}" emitted, so nothing accumulates them and ` +
+              `the task's "${field}" port comes back empty`) +
+          `. Emit [] here, or name "${field}" in allowFields.`
+      ).toEqual([]);
     }
   }
 }

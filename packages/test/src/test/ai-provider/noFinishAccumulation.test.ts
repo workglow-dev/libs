@@ -63,7 +63,32 @@ describe("expectNoFinishAccumulation", () => {
           finish({ text: "", toolCalls: [{ id: "call_0", name: "lookup_weather", input: {} }] })
         )
       )
-    ).toThrow(/finish\.toolCalls carries 1 entry/);
+    ).toThrow(/finish\.toolCalls carries 1 entry that an object-delta on port "toolCalls" already/);
+  });
+
+  // The plain form of the defect, and the one the array branch used to pass:
+  // a run-fn that emits its tool calls only on `finish`. There is no delta to
+  // compare against, and that is exactly why it costs — TaskRunner accumulates
+  // the stream, so the task's `toolCalls` port comes back empty.
+  it("fails when finish carries tool calls no object-delta emitted", () => {
+    expect(() =>
+      expectNoFinishAccumulation(
+        events(
+          finish({ text: "", toolCalls: [{ id: "call_0", name: "lookup_weather", input: {} }] })
+        )
+      )
+    ).toThrow(/finish\.toolCalls carries 1 entry that no object-delta/);
+  });
+
+  it("fails when finish carries text no delta delivered, without claiming a repeat", () => {
+    let message = "";
+    try {
+      expectNoFinishAccumulation(events(finish({ text: "Paris is sunny.", toolCalls: [] })));
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toMatch(/finish\.text carries text no text-delta/);
+    expect(message).not.toMatch(/already delivered/);
   });
 
   it("permits a field named in allowFields", () => {
@@ -74,6 +99,17 @@ describe("expectNoFinishAccumulation", () => {
         events(textDelta('{"city":'), textDelta('"Paris"}'), finish({ object: { city: "Paris" } })),
         { allowFields: ["object"] }
       )
+    ).not.toThrow();
+  });
+
+  // A one-shot run-fn — an embedding, a classification — legitimately puts its
+  // whole Output on finish with no deltas at all. Naming the field is what
+  // separates that from the defect above.
+  it("permits a finish-only array named in allowFields", () => {
+    expect(() =>
+      expectNoFinishAccumulation(events(finish({ vector: [0.1, 0.2, 0.3] })), {
+        allowFields: ["vector"],
+      })
     ).not.toThrow();
   });
 

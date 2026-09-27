@@ -1,6 +1,5 @@
 {
   "tolerance": 0.15,
-  "floor": 50000,
   "slack": 2000,
   "packages": {
     "packages/a2a": 18794,
@@ -45,6 +44,7 @@
     "providers/stable-diffusion-server": 42824,
     "providers/supabase": 39124,
     "providers/tf-mediapipe": 76470,
+    "providers/typesafeai": 45179,
     "providers/xai": 45140
   }
 }

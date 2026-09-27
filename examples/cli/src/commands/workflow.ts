@@ -27,7 +27,7 @@ import { promptEditableInput, promptMissingInput } from "../input/prompt";
 import { deepMerge } from "../input/resolve-input";
 import { ensureCredentialStoreUnlocked } from "../keyring";
 import { withCli } from "../run-interactive";
-import { isAbortError, runFailureExitCode } from "../run-signal-abort";
+import { isSignalCancellation, runFailureExitCode } from "../run-signal-abort";
 import { createWorkflowRepository } from "../storage";
 import { renderSelectPrompt } from "../ui/render";
 import { formatError, formatTable, outputResult } from "../util";
@@ -389,7 +389,7 @@ export function registerWorkflowCommand(program: Command): void {
           await outputResult(result, opts.outputJsonFile as string | undefined);
         }
       } catch (err) {
-        if (!isAbortError(err)) {
+        if (!isSignalCancellation(err)) {
           console.error(`Error: ${formatError(err)}`);
         }
         process.exit(runFailureExitCode(err));
