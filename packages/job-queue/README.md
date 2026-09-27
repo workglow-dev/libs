@@ -210,6 +210,7 @@ const server = new JobQueueServer(MyJob, {
   queueName: "my-queue",
   workerCount: 4, // Number of concurrent workers
   pollIntervalMs: 100, // How often workers check for new jobs
+  maxIdlePollIntervalMs: 1_000, // Ceiling an empty queue's polling backs off to
   deleteAfterCompletionMs: 60_000, // Delete completed jobs after 1 minute
   deleteAfterFailureMs: 300_000, // Delete failed jobs after 5 minutes
   deleteAfterDisabledMs: 60_000, // Delete disabled jobs after 1 minute
@@ -217,6 +218,13 @@ const server = new JobQueueServer(MyJob, {
   limiter: new ConcurrencyLimiter(10), // Rate limiting
 });
 ```
+
+While the queue is empty and a worker runs nothing, its poll interval doubles per empty poll
+from `pollIntervalMs` up to `maxIdlePollIntervalMs` (default 1s). Work that announces itself —
+a submit from an attached client, a storage with change notifications, a job finishing — wakes
+workers at once and resets the backoff, so the ceiling only bounds how late a worker notices
+unannounced work: rows another process wrote to a storage without change notifications (SQLite,
+Postgres), or an expired lease. Set it equal to `pollIntervalMs` to poll at a fixed rate.
 
 ### JobQueueWorker
 
@@ -797,6 +805,7 @@ interface JobQueueServerOptions<Input, Output> {
   readonly limiter?: ILimiter;
   readonly workerCount?: number;
   readonly pollIntervalMs?: number;
+  readonly maxIdlePollIntervalMs?: number;
   readonly deleteAfterCompletionMs?: number;
   readonly deleteAfterFailureMs?: number;
   readonly deleteAfterDisabledMs?: number;
