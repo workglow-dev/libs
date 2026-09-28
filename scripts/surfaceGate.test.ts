@@ -19,7 +19,10 @@ import {
   previousPublishedVersion,
   readChangelogEntry,
   resolveModule,
+  runResolver,
   typeEntryPoints,
+  type EntryPoint,
+  type ExternalResolver,
   type PackageSurface,
   type SurfaceChange,
 } from "./lib/surfaceGate";
@@ -79,18 +82,26 @@ export interface ITabularStorage<Schema, PrimaryKeyNames extends ReadonlyArray<k
 }
 `;
 
-/** Every fixture file doubles as an entry point unless `entries` names them. */
+/**
+ * Every fixture file doubles as an entry point unless `entries` names them. A
+ * plain path is an entry labelled by that path; an {@link EntryPoint} is used as is.
+ */
 const surfaceOf = (
   files: Record<string, string>,
-  entries: readonly string[] = Object.keys(files)
-): PackageSurface => buildPublicSurface(new Map(Object.entries(files)), entries);
+  entries: readonly (string | EntryPoint)[] = Object.keys(files)
+): PackageSurface =>
+  buildPublicSurface(
+    new Map(Object.entries(files)),
+    entries.map((e) => (typeof e === "string" ? { label: e, subpath: `./${e}`, file: e } : e))
+  );
 
 const diff = (
   before: Record<string, string>,
   after: Record<string, string>,
-  entries?: readonly string[],
-  guarded: ReadonlySet<string> = new Set()
-): SurfaceChange[] => diffSurfaces(surfaceOf(before, entries), surfaceOf(after, entries), guarded);
+  entries?: readonly (string | EntryPoint)[],
+  resolveExternal?: ExternalResolver
+): SurfaceChange[] =>
+  diffSurfaces(surfaceOf(before, entries), surfaceOf(after, entries), resolveExternal);
 
 const summary = (changes: readonly SurfaceChange[]): string[] =>
   changes.map((c) => `${c.kind} ${c.key}`);
@@ -184,11 +195,56 @@ describe("parseModule", () => {
     );
   });
 
-  it("drops untyped private members from a class but keeps a private constructor", () => {
+  it("collapses untyped private members into one marker but keeps a private constructor", () => {
     const [block] = parseModule(
       `export declare class A {\n  private cache;\n  private static readonly x;\n  #private;\n  private constructor();\n  m(): void;\n}`
     ).declarations.get("A")!;
-    expect(block!.text).toBe("export declare class A{private constructor();m():void;}");
+    expect(block!.text).toBe("export declare class A{private;private constructor();m():void;}");
+  });
+
+  it("files an `export default` declaration under `default` and its own name", () => {
+    for (const [text, key] of [
+      ["export default class Foo {\n  m(): void;\n}", "class Foo"],
+      ["export default function foo(): void;", "function foo"],
+      ["export default interface IFoo {\n  x: 1;\n}", "interface IFoo"],
+      ["export default abstract class {\n  m(): void;\n}", "class default"],
+    ] as const) {
+      const mod = parseModule(text);
+      expect(mod.declarations.get("default")!.map((b) => b.key)).toEqual([key]);
+      expect(mod.exported.has("default")).toBe(true);
+    }
+    expect(parseModule("export default class Foo {\n}").declarations.get("Foo")).toBeDefined();
+    expect(parseModule("declare class Foo {\n}\nexport default Foo;").named).toEqual([
+      { exported: "default", original: "Foo", from: undefined, typeOnly: false },
+    ]);
+  });
+
+  it("records default, namespace, mixed and type-only imports", () => {
+    const mod = parseModule(
+      [
+        `import Foo from "./foo";`,
+        `import * as Ns from "./ns";`,
+        `import Bar, { a, b as c } from "./bar";`,
+        `import Baz, * as All from "./baz";`,
+        `import type Qux from "./qux";`,
+        `import type * as TNs from "./tns";`,
+        `import type { T } from "./t";`,
+        `import "./side";`,
+      ].join("\n")
+    );
+    expect(Object.fromEntries(mod.imports)).toEqual({
+      Foo: { from: "./foo", original: "default" },
+      Ns: { from: "./ns", original: "*" },
+      Bar: { from: "./bar", original: "default" },
+      a: { from: "./bar", original: "a" },
+      c: { from: "./bar", original: "b" },
+      Baz: { from: "./baz", original: "default" },
+      All: { from: "./baz", original: "*" },
+      Qux: { from: "./qux", original: "default" },
+      TNs: { from: "./tns", original: "*" },
+      T: { from: "./t", original: "T" },
+    });
+    expect(mod.sideEffects).toEqual(["./side"]);
   });
 
   it("keys module augmentations and globals as ambient", () => {
@@ -206,7 +262,7 @@ describe("diffSurfaces", () => {
       { "dist/ILimiter.d.ts": LIMITER_AFTER }
     );
     expect(summary(changes)).toEqual([
-      "added export LimiterToken",
+      "added export dist/ILimiter.d.ts:LimiterToken",
       "changed interface ILimiter",
       "added type LimiterToken",
     ]);
@@ -215,7 +271,7 @@ describe("diffSurfaces", () => {
   it("reports the putByUniqueKey member as a changed interface, not an addition", () => {
     const changes = diff({ "dist/T.d.ts": TABULAR_BEFORE }, { "dist/T.d.ts": TABULAR_AFTER });
     expect(summary(changes)).toEqual([
-      "added export UniqueKeyPutResult",
+      "added export dist/T.d.ts:UniqueKeyPutResult",
       "changed interface ITabularStorage",
       "added interface UniqueKeyPutResult",
     ]);
@@ -251,9 +307,41 @@ describe("diffSurfaces", () => {
       { "dist/a.d.ts": "export type A = 1;" }
     );
     expect(changes).toEqual([
-      { kind: "removed", key: "export B", files: ["dist/a.d.ts"], before: "type B" },
+      { kind: "removed", key: "export dist/a.d.ts:B", files: ["dist/a.d.ts"], before: "type B" },
       { kind: "removed", key: "type B", files: ["dist/a.d.ts"], before: "export type B=2;" },
     ]);
+  });
+
+  it("refuses two overloads swapped, since TypeScript tries them in order", () => {
+    const one = "export declare function f(x: string): string;";
+    const two = "export declare function f(x: number): number;";
+    const changes = diff({ "dist/f.d.ts": `${one}\n${two}` }, { "dist/f.d.ts": `${two}\n${one}` });
+    expect(summary(changes)).toEqual(["changed function f"]);
+    expect(verdictFor(changes).ok).toBe(false);
+  });
+
+  it("does not count one of two same-named declarations moving to another file", () => {
+    const options = (field: string): string => `export interface Options {\n  ${field}: 1;\n}`;
+    const barrel = (b: string): string =>
+      `export { Options as AOptions } from "./a";\nexport { Options as BOptions } from "./${b}";`;
+    expect(
+      diff(
+        { "dist/i.d.ts": barrel("b"), "dist/a.d.ts": options("x"), "dist/b.d.ts": options("y") },
+        { "dist/i.d.ts": barrel("c"), "dist/a.d.ts": options("x"), "dist/c.d.ts": options("y") },
+        ["dist/i.d.ts"]
+      )
+    ).toEqual([]);
+  });
+
+  it("changes a class that gains its first private member, not one that gains another", () => {
+    const cls = (body: string): Record<string, string> => ({
+      "dist/c.d.ts": `export declare class C {\n${body}\n  m(): void;\n}`,
+    });
+    const first = diff(cls(""), cls("  private a;"));
+    expect(summary(first)).toEqual(["changed class C"]);
+    expect(verdictFor(first).ok).toBe(false);
+    expect(diff(cls("  private a;"), cls("  private a;\n  private b;\n  #private;"))).toEqual([]);
+    expect(summary(diff(cls("  #private;"), cls("")))).toEqual(["changed class C"]);
   });
 });
 
@@ -316,29 +404,161 @@ describe("public surface", () => {
     };
     const after = { ...before, "dist/i.d.ts": `export { a as c } from "./m";` };
     expect(summary(diff(before, after, ["dist/i.d.ts"]))).toEqual([
-      "removed export b",
-      "added export c",
+      "removed export dist/i.d.ts:b",
+      "added export dist/i.d.ts:c",
     ]);
   });
 
+  it("reaches an `export default` declaration re-exported as default or by name", () => {
+    for (const reexport of [
+      `export { default } from "./m";`,
+      `export { default as Foo } from "./m";`,
+    ]) {
+      const before = {
+        "dist/i.d.ts": reexport,
+        "dist/m.d.ts": "export default class Foo {\n  run(): void;\n}",
+      };
+      const after = { ...before, "dist/m.d.ts": "export default class Foo {\n  run(): string;\n}" };
+      const changes = diff(before, after, ["dist/i.d.ts"]);
+      expect(summary(changes)).toEqual(["changed class Foo"]);
+      expect(verdictFor(changes).ok).toBe(false);
+    }
+    const aliased = {
+      "dist/i.d.ts": `export { default } from "./m";`,
+      "dist/m.d.ts": "declare function foo(): void;\nexport default foo;",
+    };
+    const retyped = {
+      ...aliased,
+      "dist/m.d.ts": "declare function foo(): string;\nexport default foo;",
+    };
+    expect(summary(diff(aliased, retyped, ["dist/i.d.ts"]))).toEqual(["changed function foo"]);
+  });
+
+  it("reaches what a default or namespace import is re-exported as", () => {
+    const viaDefault = {
+      "dist/i.d.ts": `import Foo from "./m";\nexport { Foo };`,
+      "dist/m.d.ts": "export default interface IFoo {\n  x: 1;\n}",
+    };
+    expect(
+      summary(
+        diff(
+          viaDefault,
+          { ...viaDefault, "dist/m.d.ts": "export default interface IFoo {\n  x: 2;\n}" },
+          ["dist/i.d.ts"]
+        )
+      )
+    ).toEqual(["changed interface IFoo"]);
+
+    const viaNamespace = {
+      "dist/i.d.ts": `import type * as Ns from "./m";\nexport { Ns };`,
+      "dist/m.d.ts": "export interface IM {\n  x: 1;\n}",
+    };
+    const changes = diff(
+      viaNamespace,
+      { ...viaNamespace, "dist/m.d.ts": "export interface IM {\n  x: 2;\n}" },
+      ["dist/i.d.ts"]
+    );
+    expect(summary(changes)).toEqual(["changed interface IM"]);
+    expect(verdictFor(changes).ok).toBe(false);
+  });
+
+  it("follows side-effect imports for ambient declarations only", () => {
+    const before = {
+      "dist/i.d.ts": `import "./augment";\nexport type A = 1;`,
+      "dist/augment.d.ts": `import "./deeper";\ndeclare global {\n  interface Window {\n    x: 1;\n  }\n}\nexport type Hidden = 1;`,
+      "dist/deeper.d.ts": `declare module "y" {\n  interface Y {\n    y: 1;\n  }\n}`,
+    };
+    const entries = ["dist/i.d.ts"];
+    expect(
+      diff(
+        before,
+        {
+          ...before,
+          "dist/augment.d.ts": before["dist/augment.d.ts"].replace("Hidden = 1", "Hidden = 2"),
+        },
+        entries
+      )
+    ).toEqual([]);
+    const global = diff(
+      before,
+      { ...before, "dist/augment.d.ts": before["dist/augment.d.ts"].replace("x: 1", "x: 2") },
+      entries
+    );
+    expect(summary(global)).toEqual(["changed global"]);
+    const deeper = diff(
+      before,
+      { ...before, "dist/deeper.d.ts": before["dist/deeper.d.ts"].replace("y: 1", "y: 2") },
+      entries
+    );
+    expect(summary(deeper)).toEqual([`changed module "y"`]);
+  });
+
+  it("refuses a name dropped from one entry while another still exports it", () => {
+    const entries: EntryPoint[] = [
+      { label: ".[browser.types]", subpath: ".", file: "dist/browser.d.ts" },
+      { label: ".[types]", subpath: ".", file: "dist/node.d.ts" },
+    ];
+    const before = {
+      "dist/browser.d.ts": `export * from "./common";`,
+      "dist/node.d.ts": `export * from "./common";`,
+      "dist/common.d.ts": "export type Foo = 1;\nexport type Bar = 2;",
+    };
+    const after = { ...before, "dist/browser.d.ts": `export { Bar } from "./common";` };
+    const changes = diff(before, after, entries);
+    expect(summary(changes)).toEqual(["removed export .[browser.types]:Foo"]);
+    expect(verdictFor(changes).ok).toBe(false);
+  });
+});
+
+describe("moves to another package", () => {
   // The HFT_ToolMarkup case: the function moved to `@workglow/ai/provider-utils`
-  // and the module re-exports it under the same name.
+  // and the module re-exports it under the same name, from both entries.
+  const HFT_ENTRIES: EntryPoint[] = [
+    { label: "./ai-runtime[types]", subpath: "./ai-runtime", file: "dist/ai-runtime.d.ts" },
+    { label: "./ai[types]", subpath: "./ai", file: "dist/ai.d.ts" },
+  ];
+  const FILTER =
+    "export declare function createToolCallMarkupFilter(emit: (text: string) => void): {\n    feed: (token: string) => void;\n    flush: () => void;\n};";
   const MARKUP_BEFORE = {
     "dist/ai.d.ts": `export * from "./ai/runtime";`,
+    "dist/ai-runtime.d.ts": `export * from "./ai/runtime";`,
     "dist/ai/runtime.d.ts": `export * from "./common/HFT_ToolMarkup";`,
-    "dist/ai/common/HFT_ToolMarkup.d.ts":
-      "export declare function createToolCallMarkupFilter(emit: (text: string) => void): {\n    feed: (token: string) => void;\n    flush: () => void;\n};",
+    "dist/ai/common/HFT_ToolMarkup.d.ts": FILTER,
   };
   const MARKUP_AFTER = {
     ...MARKUP_BEFORE,
     "dist/ai/common/HFT_ToolMarkup.d.ts": `export { createToolCallMarkupFilter } from "@workglow/ai/provider-utils";\nexport type { IToolCallMarkupFilter } from "@workglow/ai/provider-utils";`,
   };
+  /** `@workglow/ai` as this run built it, with the filter declared as `filter`. */
+  const aiRun = (filter: string): ExternalResolver =>
+    runResolver(
+      new Map([
+        [
+          "@workglow/ai",
+          surfaceOf(
+            {
+              "dist/provider-utils.d.ts": `export * from "./markup";`,
+              "dist/markup.d.ts": `${filter}\nexport interface IToolCallMarkupFilter {\n  feed(token: string): void;\n}`,
+            },
+            [
+              {
+                label: "./provider-utils[types]",
+                subpath: "./provider-utils",
+                file: "dist/provider-utils.d.ts",
+              },
+            ]
+          ),
+        ],
+      ])
+    );
 
-  it("passes a declaration replaced by a re-export from a package in the same run", () => {
-    const changes = diff(MARKUP_BEFORE, MARKUP_AFTER, ["dist/ai.d.ts"], new Set(["@workglow/ai"]));
+  it("passes a declaration re-exported, unchanged, from a package in the same run", () => {
+    const changes = diff(MARKUP_BEFORE, MARKUP_AFTER, HFT_ENTRIES, aiRun(FILTER));
     expect(summary(changes)).toEqual([
-      "added export IToolCallMarkupFilter",
-      "moved export createToolCallMarkupFilter",
+      "added export ./ai-runtime[types]:IToolCallMarkupFilter",
+      "moved export ./ai-runtime[types]:createToolCallMarkupFilter",
+      "added export ./ai[types]:IToolCallMarkupFilter",
+      "moved export ./ai[types]:createToolCallMarkupFilter",
       "moved function createToolCallMarkupFilter",
     ]);
     expect(changes.find((c) => c.kind === "moved")).toMatchObject({
@@ -348,21 +568,34 @@ describe("public surface", () => {
     expect(verdictFor(changes)).toEqual({ ok: true, why: "additive" });
   });
 
-  it("does not treat a re-export from a package outside the run as a move", () => {
-    const changes = diff(
-      MARKUP_BEFORE,
-      MARKUP_AFTER,
-      ["dist/ai.d.ts"],
-      new Set(["@workglow/util"])
-    );
+  it("refuses a move whose new declaration reads differently, showing old and new", () => {
+    const narrowed = FILTER.replace("(text: string) => void", "(text: string) => boolean");
+    const changes = diff(MARKUP_BEFORE, MARKUP_AFTER, HFT_ENTRIES, aiRun(narrowed));
+    expect(summary(changes).filter((c) => !c.startsWith("added"))).toEqual([
+      "changed export ./ai-runtime[types]:createToolCallMarkupFilter",
+      "changed export ./ai[types]:createToolCallMarkupFilter",
+      "changed function createToolCallMarkupFilter",
+    ]);
+    const change = changes.find((c) => c.key === "function createToolCallMarkupFilter");
+    expect(change).toMatchObject({
+      before: expect.stringContaining("emit:(text:string)=>void"),
+      after: expect.stringContaining("emit:(text:string)=>boolean"),
+    });
+    expect(verdictFor(changes).ok).toBe(false);
+  });
+
+  it("refuses a re-export from a package that is not in the run", () => {
+    const changes = diff(MARKUP_BEFORE, MARKUP_AFTER, HFT_ENTRIES, runResolver(new Map()));
+    expect(summary(changes)).toContain("removed function createToolCallMarkupFilter");
     expect(verdictFor(changes).ok).toBe(false);
   });
 
   it("refuses a name that disappears entirely", () => {
     const gone = { ...MARKUP_BEFORE, "dist/ai/common/HFT_ToolMarkup.d.ts": "export {};" };
-    const changes = diff(MARKUP_BEFORE, gone, ["dist/ai.d.ts"], new Set(["@workglow/ai"]));
+    const changes = diff(MARKUP_BEFORE, gone, HFT_ENTRIES, aiRun(FILTER));
     expect(summary(changes)).toEqual([
-      "removed export createToolCallMarkupFilter",
+      "removed export ./ai-runtime[types]:createToolCallMarkupFilter",
+      "removed export ./ai[types]:createToolCallMarkupFilter",
       "removed function createToolCallMarkupFilter",
     ]);
     expect(verdictFor(changes).ok).toBe(false);
@@ -400,7 +633,7 @@ describe("typeEntryPoints", () => {
     ["dist/internal.d.ts", ""],
   ]);
 
-  it("collects every types target, nested conditions included, and .d.ts beside a runtime target", () => {
+  it("labels each entry by subpath and condition path, `types` first at each level", () => {
     const manifest = {
       exports: {
         "./ai": {
@@ -414,17 +647,27 @@ describe("typeEntryPoints", () => {
       },
     };
     expect(typeEntryPoints(manifest, files)).toEqual([
-      "dist/ai-runtime.d.ts",
-      "dist/ai.browser.d.ts",
-      "dist/ai.d.ts",
-      "dist/tools/a.d.ts",
-      "dist/tools/b.d.ts",
+      { label: "./ai-runtime[import]", subpath: "./ai-runtime", file: "dist/ai-runtime.d.ts" },
+      { label: "./ai[browser.types]", subpath: "./ai", file: "dist/ai.browser.d.ts" },
+      { label: "./ai[types]", subpath: "./ai", file: "dist/ai.d.ts" },
+      { label: "./tools/a[types]", subpath: "./tools/a", file: "dist/tools/a.d.ts" },
+      { label: "./tools/b[types]", subpath: "./tools/b", file: "dist/tools/b.d.ts" },
     ]);
   });
 
+  it("treats a conditions-only exports map as the `.` subpath", () => {
+    expect(
+      typeEntryPoints({ exports: { types: "./dist/ai.d.ts", import: "./dist/ai.js" } }, files)
+    ).toEqual([{ label: ".[types]", subpath: ".", file: "dist/ai.d.ts" }]);
+  });
+
   it("falls back to types, then main, without an exports map", () => {
-    expect(typeEntryPoints({ types: "./dist/ai.d.ts" }, files)).toEqual(["dist/ai.d.ts"]);
-    expect(typeEntryPoints({ main: "./dist/internal.js" }, files)).toEqual(["dist/internal.d.ts"]);
+    expect(typeEntryPoints({ types: "./dist/ai.d.ts" }, files)).toEqual([
+      { label: ".", subpath: ".", file: "dist/ai.d.ts" },
+    ]);
+    expect(typeEntryPoints({ main: "./dist/internal.js" }, files)).toEqual([
+      { label: ".", subpath: ".", file: "dist/internal.d.ts" },
+    ]);
   });
 });
 

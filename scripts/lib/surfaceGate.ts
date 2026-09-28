@@ -194,16 +194,45 @@ export interface DeclarationBlock {
 const DECLARATION_HEAD =
   /^(?:(?:export|declare|abstract|async) )*(const enum|enum|interface|class|namespace|module|type|function|const|let|var|global)\b ?([\w$.]+|"[^"]*"|'[^']*')?/;
 
+/** `export default class Foo {…}`, `export default function foo(…)`, and friends. */
+const DEFAULT_DECLARATION =
+  /^export default (?:(?:declare|abstract|async) )*(class|function|interface|enum|namespace)\b ?([\w$]+)?/;
+
+const UNTYPED_PRIVATE_MEMBER =
+  /(?<=[{;])(?:private(?: (?:static|readonly|override|abstract|declare))* [\w$]+\??|#private);/g;
+
+/** Index of the `{` opening a class body: the first one outside `<…>` and `(…)`. */
+function bodyOpen(text: string): number {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '"' || c === "'" || c === "`") {
+      i = skipQuoted(text, i) - 1;
+      continue;
+    }
+    if (c === "{" && depth === 0) return i;
+    if (c === "{" || c === "(" || c === "[" || c === "<") depth++;
+    else if (c === "}" || c === ")" || c === "]" || (c === ">" && text[i - 1] !== "=")) depth--;
+  }
+  return -1;
+}
+
 /**
- * Private members say nothing a consumer can reach, and declaration emit writes
- * them untyped (`private cache;`), so an internal field added in a patch would
- * otherwise read as a changed class. A private constructor has parentheses and
- * is kept: it decides whether `new` compiles.
+ * Declaration emit writes private members untyped (`private cache;`), so what
+ * they are says nothing a consumer can reach — but whether there are any does:
+ * a class with a private member is nominal, and stops accepting a structurally
+ * identical object. So every untyped private collapses into one `private;`
+ * marker. Adding a tenth private field is not a change; adding the first is.
+ * A private constructor has parentheses and is kept as written: it decides
+ * whether `new` compiles.
  */
-function stripPrivateMembers(classText: string): string {
-  return classText
-    .replace(/(?<=[{;])private(?: (?:static|readonly|override|abstract|declare))* [\w$]+\??;/g, "")
-    .replace(/(?<=[{;])#private;/g, "");
+function collapsePrivateMembers(classText: string): string {
+  const stripped = classText.replace(UNTYPED_PRIVATE_MEMBER, "");
+  if (stripped === classText) return classText;
+  const open = bodyOpen(stripped);
+  return open === -1
+    ? stripped
+    : `${stripped.slice(0, open + 1)}private;${stripped.slice(open + 1)}`;
 }
 
 /** `export { original as exported } from "from"`; `from` is absent for a local list. */
@@ -220,16 +249,30 @@ export interface StarExport {
   readonly as: string | undefined;
 }
 
+/**
+ * Where an imported local name comes from. `original` is the imported name,
+ * `"default"` for a default import, or `"*"` for `import * as ns`.
+ */
+export interface ImportedName {
+  readonly from: string;
+  readonly original: string;
+}
+
 /** What one `.d.ts` file declares, exports and re-exports. */
 export interface ModuleInfo {
-  /** Top-level declarations by local name; merged declarations and overloads share one. */
+  /**
+   * Top-level declarations by local name, in source order; merged declarations
+   * and overloads share one. An `export default` declaration is filed under
+   * `default` (and under its own name, when it has one).
+   */
   readonly declarations: ReadonlyMap<string, readonly DeclarationBlock[]>;
   /** Local names declared with `export` (and `default`). */
   readonly exported: ReadonlySet<string>;
   readonly named: readonly NamedExport[];
   readonly stars: readonly StarExport[];
-  /** Local name → where a named import came from. */
-  readonly imports: ReadonlyMap<string, { readonly from: string; readonly original: string }>;
+  readonly imports: ReadonlyMap<string, ImportedName>;
+  /** `import "./x";` — loaded for its ambient declarations, not its exports. */
+  readonly sideEffects: readonly string[];
   /**
    * `declare module "x"`, `declare global` and nameless export forms: public
    * whenever the file is reachable at all, since they act on import.
@@ -254,23 +297,60 @@ function listItems(list: string): ListItem[] {
   return items;
 }
 
+/**
+ * The local names an import clause binds: `Foo` (default), `*as ns`,
+ * `{a,b as c}`, or a default followed by either of the other two.
+ */
+function importClause(clause: string, from: string): [string, ImportedName][] {
+  const bound: [string, ImportedName][] = [];
+  for (const part of splitTopLevel(clause, ",")) {
+    const braces = /^\{(.*)\}$/.exec(part);
+    if (braces !== null) {
+      for (const item of listItems(braces[1]!)) {
+        bound.push([item.alias ?? item.name, { from, original: item.name }]);
+      }
+      continue;
+    }
+    const namespace = /^\*as ([\w$]+)$/.exec(part);
+    if (namespace !== null) {
+      bound.push([namespace[1]!, { from, original: "*" }]);
+      continue;
+    }
+    if (/^[\w$]+$/.test(part)) bound.push([part, { from, original: "default" }]);
+  }
+  return bound;
+}
+
 /** Parses one `.d.ts` file into {@link ModuleInfo}. */
 export function parseModule(text: string): ModuleInfo {
   const declarations = new Map<string, DeclarationBlock[]>();
   const exported = new Set<string>();
   const named: NamedExport[] = [];
   const stars: StarExport[] = [];
-  const imports = new Map<string, { readonly from: string; readonly original: string }>();
+  const imports = new Map<string, ImportedName>();
+  const sideEffects: string[] = [];
   const ambient: DeclarationBlock[] = [];
   const declare = (name: string, block: DeclarationBlock): void => {
     declarations.set(name, [...(declarations.get(name) ?? []), block]);
   };
+  const blockFor = (kind: string, key: string, statement: string): DeclarationBlock => ({
+    key,
+    text: kind === "class" ? collapsePrivateMembers(statement) : statement,
+  });
 
   for (const statement of splitStatements(normalizeDeclarations(text))) {
-    const imported = /^import(?: type)?\{(.*)\}from(.+);$/.exec(statement);
+    const sideEffect = /^import(["'][^"']*["'])(?:with\{.*\})?;$/.exec(statement);
+    if (sideEffect !== null) {
+      sideEffects.push(unquote(sideEffect[1]!));
+      continue;
+    }
+    // `import type` is a modifier unless `type` is itself the default import's name.
+    const imported = /^import(?: type(?=[ {*]))?(.*?)from(["'][^"']*["'])(?:with\{.*\})?;$/.exec(
+      statement
+    );
     if (imported !== null) {
-      for (const item of listItems(imported[1]!)) {
-        imports.set(item.alias ?? item.name, { from: unquote(imported[2]!), original: item.name });
+      for (const [local, source] of importClause(imported[1]!.trim(), unquote(imported[2]!))) {
+        imports.set(local, source);
       }
       continue;
     }
@@ -305,6 +385,16 @@ export function parseModule(text: string): ModuleInfo {
       });
       continue;
     }
+    const defaultDeclaration = DEFAULT_DECLARATION.exec(statement);
+    if (defaultDeclaration !== null) {
+      const kind = defaultDeclaration[1]!;
+      const own = defaultDeclaration[2];
+      const block = blockFor(kind, `${kind} ${own ?? "default"}`, statement);
+      declare("default", block);
+      if (own !== undefined) declare(own, block);
+      exported.add("default");
+      continue;
+    }
     if (/^export default\b|^export=/.test(statement)) {
       declare("default", { key: "export default", text: statement });
       exported.add("default");
@@ -318,7 +408,7 @@ export function parseModule(text: string): ModuleInfo {
     }
     const kind = head[1] === "const enum" ? "enum" : head[1]!;
     const key = head[2] === undefined ? kind : `${kind} ${head[2]}`;
-    const block = { key, text: kind === "class" ? stripPrivateMembers(statement) : statement };
+    const block = blockFor(kind, key, statement);
     if (kind === "global" || (kind === "module" && /^["']/.test(head[2] ?? ""))) {
       ambient.push(block);
       continue;
@@ -340,7 +430,7 @@ export function parseModule(text: string): ModuleInfo {
     declare(name, block);
     if (isExported) exported.add(name);
   }
-  return { declarations, exported, named, stars, imports, ambient };
+  return { declarations, exported, named, stars, imports, sideEffects, ambient };
 }
 
 /**
@@ -373,10 +463,27 @@ function toDeclarationPath(target: string): string | undefined {
 }
 
 /**
- * The `.d.ts` files a consumer can import: every `types` target in the
- * `exports` map, or the `.d.ts` beside a runtime target that names none.
- * Without `exports`, `types` / `typings` / `main`. A `*` subpath pattern is
- * expanded against the files that exist.
+ * One way a consumer imports the package's types: the `exports` subpath, the
+ * condition path that selects the file (`./ai[browser.types]`), and the file.
+ */
+export interface EntryPoint {
+  /** `<subpath>[<conditions>]` — stable across versions, unlike the file name. */
+  readonly label: string;
+  /** `.` or `./ai`: what a bare specifier's tail names. */
+  readonly subpath: string;
+  readonly file: string;
+}
+
+/** Runtime conditions whose target's `.d.ts` sibling stands in for a missing `types`. */
+const RUNTIME_CONDITIONS = ["import", "default", "require", "node"] as const;
+
+/**
+ * The `.d.ts` files a consumer can import, one per `exports` subpath and
+ * condition path. At each condition object `types` wins, as it does for
+ * TypeScript; with none, the `.d.ts` beside the first runtime target stands
+ * in. Nested condition objects (`browser: { types, import }`) are entries of
+ * their own. Without `exports`, `types` / `typings` / `main` is the `.` entry.
+ * A `*` subpath pattern is expanded against the files that exist.
  */
 export function typeEntryPoints(
   manifest: {
@@ -386,29 +493,70 @@ export function typeEntryPoints(
     readonly main?: unknown;
   },
   files: ReadonlyMap<string, unknown>
-): string[] {
-  const targets: string[] = [];
-  const collect = (node: unknown): void => {
-    if (typeof node === "string") targets.push(node);
-    else if (Array.isArray(node)) node.forEach(collect);
-    else if (node !== null && typeof node === "object") Object.values(node).forEach(collect);
-  };
-  if (manifest.exports !== undefined) collect(manifest.exports);
-  else collect(manifest.types ?? manifest.typings ?? manifest.main ?? "./index.d.ts");
-
-  const entries = new Set<string>();
-  for (const target of targets) {
+): EntryPoint[] {
+  const entries = new Map<string, EntryPoint>();
+  const emit = (subpath: string, conditions: string, target: string): void => {
     const path = toDeclarationPath(target);
-    if (path === undefined) continue;
+    if (path === undefined) return;
+    const label = (sub: string): string => (conditions === "" ? sub : `${sub}[${conditions}]`);
     if (!path.includes("*")) {
-      if (files.has(path)) entries.add(path);
-      continue;
+      if (files.has(path))
+        entries.set(label(subpath), { label: label(subpath), subpath, file: path });
+      return;
     }
-    const escaped = path.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    const escaped = path.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "(.*)");
     const pattern = new RegExp(`^${escaped}$`);
-    for (const file of files.keys()) if (pattern.test(file)) entries.add(file);
+    for (const file of files.keys()) {
+      const m = pattern.exec(file);
+      if (m === null) continue;
+      const concrete = subpath.replace("*", m[1] ?? "");
+      entries.set(label(concrete), { label: label(concrete), subpath: concrete, file });
+    }
+  };
+  const walk = (subpath: string, conditions: string, node: unknown): void => {
+    if (typeof node === "string") {
+      emit(subpath, conditions, node);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) walk(subpath, conditions, item);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    const record = node as Readonly<Record<string, unknown>>;
+    const path = (condition: string): string =>
+      conditions === "" ? condition : `${conditions}.${condition}`;
+    for (const [condition, value] of Object.entries(record)) {
+      if (value !== null && typeof value === "object") walk(subpath, path(condition), value);
+    }
+    if (typeof record.types === "string") {
+      emit(subpath, path("types"), record.types);
+      return;
+    }
+    for (const condition of RUNTIME_CONDITIONS) {
+      const value = record[condition];
+      if (typeof value === "string" && toDeclarationPath(value) !== undefined) {
+        emit(subpath, path(condition), value);
+        return;
+      }
+    }
+  };
+
+  const exportsField = manifest.exports;
+  if (exportsField === undefined) {
+    const target = manifest.types ?? manifest.typings ?? manifest.main ?? "./index.d.ts";
+    if (typeof target === "string") emit(".", "", target);
+  } else if (
+    exportsField !== null &&
+    typeof exportsField === "object" &&
+    !Array.isArray(exportsField) &&
+    Object.keys(exportsField).some((k) => k.startsWith("."))
+  ) {
+    for (const [subpath, value] of Object.entries(exportsField)) walk(subpath, "", value);
+  } else {
+    walk(".", "", exportsField);
   }
-  return [...entries].sort();
+  return [...entries.values()].sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
 }
 
 type Binding =
@@ -427,9 +575,16 @@ type Binding =
     }
   | { readonly kind: "unresolved"; readonly from: string; readonly original: string };
 
-interface SurfaceEntry {
+/** A public name, as a later version (or another package) can be compared against. */
+export type PublicBinding =
+  | { readonly kind: "declaration"; readonly text: string }
+  | { readonly kind: "external"; readonly from: string; readonly original: string }
+  | { readonly kind: "other" };
+
+export interface SurfaceEntry {
   readonly files: string[];
-  readonly texts: string[];
+  /** Texts per file, each in source order. */
+  readonly byFile: Map<string, string[]>;
 }
 
 /**
@@ -438,20 +593,24 @@ interface SurfaceEntry {
  * `declarations` holds two kinds of key. `kind name` (`interface ILimiter`) is
  * a declaration reachable from an entry point, keyed per package rather than
  * per file so one moved between files word for word is not a change; overloads
- * and merged declarations share a key and compare as a set. `export name` is a
- * public name and what it is bound to, which is what catches a rename in a
- * re-export list or a name dropped from a barrel while its declaration lives on.
+ * and merged declarations share a key. `export <entry>:<name>` is a public name
+ * on one entry point and what it is bound to, which is what catches a rename in
+ * a re-export list, or a name dropped from one entry while another keeps it.
  */
 export interface PackageSurface {
   readonly declarations: ReadonlyMap<string, SurfaceEntry>;
-  /** Public names that every entry exporting them re-exports from another package. */
-  readonly reexported: ReadonlyMap<string, readonly string[]>;
+  /** `export <entry>:<name>` → what that name resolves to. */
+  readonly bindings: ReadonlyMap<string, PublicBinding>;
+  /** Subpath → name → binding, taken from the subpath's `types` entry when it has one. */
+  readonly subpaths: ReadonlyMap<string, ReadonlyMap<string, PublicBinding>>;
 }
 
 /**
  * The public surface: declarations reachable from `entries` through their
  * exports and relative re-exports, followed transitively. A named re-export
- * list makes only the names it lists reachable.
+ * list makes only the names it lists reachable; a namespace import re-exported
+ * by name makes the whole imported module reachable; a side-effect import
+ * contributes only the ambient declarations of the module it loads.
  *
  * Known limit: a declaration the file does not export but a public one refers
  * to (a local helper type) is not compared; a change to it shows only where it
@@ -462,7 +621,7 @@ export interface PackageSurface {
  */
 export function buildPublicSurface(
   files: ReadonlyMap<string, string>,
-  entries: readonly string[]
+  entries: readonly EntryPoint[]
 ): PackageSurface {
   const modules = new Map<string, ModuleInfo>();
   const moduleOf = (file: string): ModuleInfo => {
@@ -491,6 +650,7 @@ export function buildPublicSurface(
           ? { kind: "unresolved", from, original }
           : { kind: "external", from, original, typeOnly };
       }
+      if (original === "*") return { kind: "namespace", file: target };
       const bound = exportsOf(target).get(original);
       if (bound === undefined) return { kind: "unresolved", from, original };
       return typeOnly && (bound.kind === "local" || bound.kind === "external")
@@ -541,33 +701,42 @@ export function buildPublicSurface(
   };
 
   const declarations = new Map<string, SurfaceEntry>();
-  const add = (key: string, file: string, text: string, unique: boolean): void => {
-    const entry = declarations.get(key) ?? { files: [], texts: [] };
+  const add = (key: string, file: string, text: string): void => {
+    const entry = declarations.get(key) ?? { files: [], byFile: new Map<string, string[]>() };
     if (!entry.files.includes(file)) entry.files.push(file);
-    if (!unique || !entry.texts.includes(text)) entry.texts.push(text);
+    entry.byFile.set(file, [...(entry.byFile.get(file) ?? []), text]);
     declarations.set(key, entry);
   };
 
+  // A file's ambient declarations, and those of every module it loads for
+  // effect, apply as soon as it is reached — but a side-effect import makes
+  // none of the loaded module's exports reachable.
   const touchedFiles = new Set<string>();
   const touch = (file: string): void => {
     if (touchedFiles.has(file)) return;
     touchedFiles.add(file);
-    for (const block of moduleOf(file).ambient) add(block.key, file, block.text, false);
+    const mod = moduleOf(file);
+    for (const block of mod.ambient) add(block.key, file, block.text);
+    for (const specifier of mod.sideEffects) {
+      const target = resolveModule(files, file, specifier);
+      if (target !== undefined) touch(target);
+    }
   };
-  const reached = new Set<string>();
+  // By block rather than by name: an `export default class Foo` is filed under
+  // both `default` and `Foo`, and must count once.
+  const reachedBlocks = new Set<DeclarationBlock>();
+  const reachedNamespaces = new Set<string>();
   const reach = (bound: Binding): void => {
     if (bound.kind === "local") {
-      const id = `${bound.file}\0${bound.name}`;
-      if (reached.has(id)) return;
-      reached.add(id);
       touch(bound.file);
       for (const block of moduleOf(bound.file).declarations.get(bound.name) ?? []) {
-        add(block.key, bound.file, block.text, false);
+        if (reachedBlocks.has(block)) continue;
+        reachedBlocks.add(block);
+        add(block.key, bound.file, block.text);
       }
     } else if (bound.kind === "namespace") {
-      const id = `${bound.file}\0*`;
-      if (reached.has(id)) return;
-      reached.add(id);
+      if (reachedNamespaces.has(bound.file)) return;
+      reachedNamespaces.add(bound.file);
       touch(bound.file);
       for (const inner of exportsOf(bound.file).values()) reach(inner);
     }
@@ -586,26 +755,56 @@ export function buildPublicSurface(
         return `unresolved ${bound.original} from "${bound.from}"`;
     }
   };
+  const publicBinding = (bound: Binding): PublicBinding => {
+    if (bound.kind === "local") {
+      const blocks = moduleOf(bound.file).declarations.get(bound.name) ?? [];
+      return { kind: "declaration", text: blocks.map((b) => b.text).join("\n") };
+    }
+    if (bound.kind === "external") {
+      return { kind: "external", from: bound.from, original: bound.original };
+    }
+    return { kind: "other" };
+  };
 
-  const bindingsByName = new Map<string, Binding[]>();
+  const bindings = new Map<string, PublicBinding>();
+  const subpaths = new Map<string, Map<string, PublicBinding>>();
+  const subpathSource = new Map<string, string>();
   for (const entry of entries) {
-    touch(entry);
-    for (const [name, bound] of exportsOf(entry)) {
-      add(`export ${name}`, entry, describe(bound), true);
-      bindingsByName.set(name, [...(bindingsByName.get(name) ?? []), bound]);
+    touch(entry.file);
+    const names = new Map<string, PublicBinding>();
+    for (const [name, bound] of exportsOf(entry.file)) {
+      const key = `export ${entry.label}:${name}`;
+      add(key, entry.file, describe(bound));
+      const pub = publicBinding(bound);
+      bindings.set(key, pub);
+      names.set(name, pub);
       reach(bound);
     }
+    // Another package's bare specifier names a subpath, not a condition; the
+    // `types` entry is what TypeScript would pick for it.
+    const current = subpathSource.get(entry.subpath);
+    if (
+      current === undefined ||
+      (!current.endsWith("[types]") && entry.label.endsWith("[types]"))
+    ) {
+      subpathSource.set(entry.subpath, entry.label);
+      subpaths.set(entry.subpath, names);
+    }
   }
-
-  const reexported = new Map<string, string[]>();
-  for (const [name, bindings] of bindingsByName) {
-    const froms = bindings.flatMap((b) => (b.kind === "external" ? [b.from] : []));
-    if (froms.length === bindings.length) reexported.set(name, [...new Set(froms)]);
-  }
-  return { declarations, reexported };
+  return { declarations, bindings, subpaths };
 }
 
-const surfaceText = (entry: SurfaceEntry): string => [...entry.texts].sort().join("\n");
+/**
+ * One comparable string per key. Within a file the texts keep source order —
+ * TypeScript tries overloads in order, so swapping two is a change. Across
+ * files the per-file groups are sorted by content, so moving one between files
+ * is not.
+ */
+const surfaceText = (entry: SurfaceEntry): string =>
+  [...entry.byFile.values()]
+    .map((texts) => texts.join("\n"))
+    .sort()
+    .join("\n");
 
 export type SurfaceChange =
   | {
@@ -644,7 +843,30 @@ export function packageOfSpecifier(specifier: string): string {
   return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
 }
 
-/** The name a surface key is about: `function f` → `f`, `export f` → `f`. */
+/**
+ * Looks up a name re-exported from another package in that package's NEW
+ * surface, and returns its declaration text — or `undefined` when the package
+ * is not in this run or the name does not resolve to a declaration there.
+ */
+export type ExternalResolver = (from: string, original: string) => string | undefined;
+
+/** An {@link ExternalResolver} over the new surfaces of every package in one run. */
+export function runResolver(surfaces: ReadonlyMap<string, PackageSurface>): ExternalResolver {
+  const resolve = (from: string, original: string, hops: number): string | undefined => {
+    if (hops > 8) return undefined;
+    const pkg = packageOfSpecifier(from);
+    const bound = surfaces
+      .get(pkg)
+      ?.subpaths.get(`.${from.slice(pkg.length)}`)
+      ?.get(original);
+    if (bound?.kind === "declaration") return bound.text;
+    if (bound?.kind === "external") return resolve(bound.from, bound.original, hops + 1);
+    return undefined;
+  };
+  return (from, original) => resolve(from, original, 0);
+}
+
+/** The name a declaration key is about: `function f` → `f`. */
 function nameOfKey(key: string): string {
   return (key.split(" ")[1] ?? "").split(".")[0]!;
 }
@@ -656,19 +878,31 @@ function nameOfKey(key: string): string {
  * existing interface is a `changed` interface — it is exactly the edit that
  * stops every downstream `implements` compiling.
  *
- * A declaration that is gone, or a public name whose binding changed, is
- * `moved` rather than removed or changed when that name is now re-exported
- * from one of `guardedPackages` — a package whose own surface the same gate
- * run compares, so its signature is checked there. A name that is no longer
- * exported at all is always `removed`.
+ * A declaration that is gone, or a public name that stopped pointing at a
+ * local declaration, is `moved` when the name is now re-exported from another
+ * package in this run AND that package's new declaration of it reads exactly
+ * as the old one did. If it reads differently it is `changed`, old against
+ * new; if `resolveExternal` cannot find it, the declaration is `removed`. A
+ * name that is no longer exported at all is always `removed`.
  */
 export function diffSurfaces(
   previous: PackageSurface,
   next: PackageSurface,
-  guardedPackages: ReadonlySet<string> = new Set()
+  resolveExternal: ExternalResolver = () => undefined
 ): SurfaceChange[] {
-  const movedTo = (name: string): string | undefined =>
-    next.reexported.get(name)?.find((from) => guardedPackages.has(packageOfSpecifier(from)));
+  /** The first public binding under `keys` that now resolves in another package. */
+  const reexportedAs = (
+    keys: readonly string[]
+  ): { readonly from: string; readonly text: string } | undefined => {
+    for (const key of keys) {
+      const bound = next.bindings.get(key);
+      if (bound?.kind !== "external") continue;
+      const text = resolveExternal(bound.from, bound.original);
+      if (text !== undefined) return { from: bound.from, text };
+    }
+    return undefined;
+  };
+
   const changes: SurfaceChange[] = [];
   const keys = new Set([...previous.declarations.keys(), ...next.declarations.keys()]);
   for (const key of [...keys].sort()) {
@@ -681,15 +915,24 @@ export function diffSurfaces(
     if (before === undefined) continue;
     const b = surfaceText(before);
     if (after !== undefined && surfaceText(after) === b) continue;
-    const name = nameOfKey(key);
-    const isBinding = key.startsWith("export ");
-    // A binding that vanished is a name that is no longer exported: never a move.
-    const to = isBinding && after === undefined ? undefined : movedTo(name);
-    if (to !== undefined) {
-      changes.push({ kind: "moved", key, name, files: before.files, before: b, to });
-    } else if (after === undefined) {
-      changes.push({ kind: "removed", key, files: before.files, before: b });
-    } else {
+
+    if (key.startsWith("export ")) {
+      // A binding that vanished is a name that is no longer exported: never a move.
+      if (after === undefined) {
+        changes.push({ kind: "removed", key, files: before.files, before: b });
+        continue;
+      }
+      const old = previous.bindings.get(key);
+      const target = old?.kind === "declaration" ? reexportedAs([key]) : undefined;
+      if (old?.kind === "declaration" && target !== undefined) {
+        const name = key.slice(key.lastIndexOf(":") + 1);
+        changes.push(
+          target.text === old.text
+            ? { kind: "moved", key, name, files: before.files, before: old.text, to: target.from }
+            : { kind: "changed", key, files: after.files, before: old.text, after: target.text }
+        );
+        continue;
+      }
       changes.push({
         kind: "changed",
         key,
@@ -697,6 +940,34 @@ export function diffSurfaces(
         before: b,
         after: surfaceText(after),
       });
+      continue;
+    }
+
+    if (after !== undefined) {
+      changes.push({
+        kind: "changed",
+        key,
+        files: after.files,
+        before: b,
+        after: surfaceText(after),
+      });
+      continue;
+    }
+    // Which public names exposed this declaration, and whether any of them now
+    // re-exports it from another package.
+    const name = nameOfKey(key);
+    const exposedBy = [...previous.bindings]
+      .filter(
+        ([k, bound]) => (bound.kind === "declaration" && bound.text === b) || k.endsWith(`:${name}`)
+      )
+      .map(([k]) => k);
+    const target = reexportedAs(exposedBy);
+    if (target === undefined) {
+      changes.push({ kind: "removed", key, files: before.files, before: b });
+    } else if (target.text === b) {
+      changes.push({ kind: "moved", key, name, files: before.files, before: b, to: target.from });
+    } else {
+      changes.push({ kind: "changed", key, files: before.files, before: b, after: target.text });
     }
   }
   return changes;
@@ -928,7 +1199,8 @@ export function excerptChange(
   before: string,
   after: string
 ): { readonly removed: readonly string[]; readonly added: readonly string[] } {
-  const pieces = (text: string): string[] => text.split(/(?<=[;{}])/).filter((p) => p !== "");
+  const pieces = (text: string): string[] =>
+    text.split(/(?<=[;{}])(?![;}])/).filter((p) => p !== "");
   const only = (from: string[], other: string[]): string[] => {
     const remaining = new Map<string, number>();
     for (const p of other) remaining.set(p, (remaining.get(p) ?? 0) + 1);

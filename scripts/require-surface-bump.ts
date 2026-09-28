@@ -41,7 +41,9 @@ import {
   parseBunsetDryRun,
   previousPublishedVersion,
   readChangelogEntry,
+  runResolver,
   typeEntryPoints,
+  type ExternalResolver,
   type PackageSurface,
   type PlannedRelease,
   type SurfaceBumpVerdict,
@@ -204,16 +206,21 @@ async function publishedSurface(
 interface Checked {
   readonly name: string;
   readonly line: string;
-  /** Names now re-exported from another package in this run, for the reviewer. */
+  /** Names now re-exported, unchanged, from another package in this run — for the reviewer. */
   readonly moved: readonly string[];
   readonly verdict: SurfaceBumpVerdict;
 }
 
+interface LocalSurface {
+  readonly surface: PackageSurface;
+  readonly declarationFiles: number;
+}
+
 async function checkPackage(
   release: PlannedRelease,
-  workspace: Workspace,
+  local: LocalSurface,
   scratch: string,
-  guarded: ReadonlySet<string>
+  resolveExternal: ExternalResolver
 ): Promise<Checked> {
   const versions = await publishedVersions(release.name);
   if (versions?.includes(release.nextVersion)) {
@@ -235,12 +242,11 @@ async function checkPackage(
     };
   }
 
-  const local = await readSurface(workspace.dir);
   if (local.declarationFiles === 0) {
     throw new Error(`${release.name} has no dist/**/*.d.ts — run \`bun run rebuild\` first.`);
   }
   const previous = await publishedSurface(release.name, previousVersion, scratch);
-  const changes = diffSurfaces(previous, local.surface, guarded);
+  const changes = diffSurfaces(previous, local.surface, resolveExternal);
   const verdict = evaluateSurfaceBump({
     name: release.name,
     previousVersion,
@@ -302,13 +308,19 @@ async function main(): Promise<void> {
     : planFromBunset();
   // Private packages are versioned in lockstep but never published.
   const releases = plan.filter((r) => workspaces.has(r.name));
-  const guarded = new Set(releases.map((r) => r.name));
+  // Every new surface first: a name one package now re-exports from another is
+  // compared against that other package's new declaration of it.
+  const locals = new Map<string, LocalSurface>();
+  for (const r of releases) locals.set(r.name, await readSurface(workspaces.get(r.name)!.dir));
+  const resolveExternal = runResolver(
+    new Map([...locals].map(([name, local]) => [name, local.surface]))
+  );
 
   const scratch = await mkdtemp(join(tmpdir(), "workglow-surface-"));
   let checked: Checked[] | Error;
   try {
     checked = await mapConcurrently(releases, CONCURRENCY, (r) =>
-      checkPackage(r, workspaces.get(r.name)!, scratch, guarded)
+      checkPackage(r, locals.get(r.name)!, scratch, resolveExternal)
     );
   } catch (error) {
     checked = error instanceof Error ? error : new Error(String(error));
