@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.9
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `hyparquet`: ^1.31.2
+
 ## 0.6.8
 
 _No changes in this package._

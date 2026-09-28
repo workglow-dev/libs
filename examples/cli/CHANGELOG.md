@@ -1,5 +1,15 @@
 # @workglow/cli
 
+## 0.6.9
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `chalk`: ^6.0.1
+
 ## 0.6.8
 
 ### Bug Fixes

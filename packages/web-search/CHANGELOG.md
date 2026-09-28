@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.9
+
+### Bug Fixes
+
+#### web-search
+
+- stop a prototype key turning a bad date into a thrown search
+
 ## 0.6.8
 
 _No changes in this package._

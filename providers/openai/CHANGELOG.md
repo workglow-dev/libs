@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.9
+
+### Bug Fixes
+
+#### openai
+
+- never send effort none to a model that cannot turn reasoning off
+- default reasoning models to their class effort
+- stop sending reasoning.effort "none" to gpt-6 and gpt-4o
+
 ## 0.6.8
 
 _No changes in this package._

@@ -1,5 +1,25 @@
 # @workglow/job-queue
 
+## 0.6.9
+
+### Bug Fixes
+
+#### job-queue
+
+- measure what a stream row actually retains, not a flat 64 bytes
+
+### Performance
+
+#### storage,job-queue
+
+- memoize per-column decode facts; back off idle queue polling
+
+### Documentation
+
+#### job-queue
+
+- document maxIdlePollIntervalMs and the idle backoff
+
 ## 0.6.8
 
 ### Features

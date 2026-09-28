@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.9
+
+### Bug Fixes
+
+#### huggingface-transformers
+
+- honour temperature in chat, tool-calling and text generation
+- restore schema-in-prompt, honour temperature, defer the SDK import
+
 ## 0.6.8
 
 ### Bug Fixes

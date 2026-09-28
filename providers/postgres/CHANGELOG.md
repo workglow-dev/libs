@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.9
+
+### Features
+
+#### postgres
+
+- opt-in UNLOGGED rate-limiter tables
+
+### Performance
+
+#### postgres
+
+- skip no-op stores when hydrating rows
+- hydrate rows through a per-column decode plan
+
+#### storage,job-queue
+
+- memoize per-column decode facts; back off idle queue polling
+
 ## 0.6.8
 
 ### Features

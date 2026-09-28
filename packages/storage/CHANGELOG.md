@@ -1,5 +1,17 @@
 # @workglow/storage
 
+## 0.6.9
+
+### Performance
+
+#### postgres
+
+- hydrate rows through a per-column decode plan
+
+#### storage,job-queue
+
+- memoize per-column decode facts; back off idle queue polling
+
 ## 0.6.8
 
 ### Features

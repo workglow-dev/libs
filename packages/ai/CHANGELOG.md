@@ -1,5 +1,13 @@
 # @workglow/ai
 
+## 0.6.9
+
+### Features
+
+#### schema
+
+- let a model port state capabilities in its format
+
 ## 0.6.8
 
 _No changes in this package._

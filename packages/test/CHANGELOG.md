@@ -1,5 +1,48 @@
 # @workglow/test
 
+## 0.6.9
+
+### Features
+
+#### postgres
+
+- opt-in UNLOGGED rate-limiter tables
+
+#### task-graph
+
+- grant code-execution:javascript in the browser profile
+
+### Bug Fixes
+
+#### huggingface-transformers
+
+- honour temperature in chat, tool-calling and text generation
+- restore schema-in-prompt, honour temperature, defer the SDK import
+
+#### openai
+
+- never send effort none to a model that cannot turn reasoning off
+- default reasoning models to their class effort
+- stop sending reasoning.effort "none" to gpt-6 and gpt-4o
+
+### Performance
+
+#### postgres
+
+- hydrate rows through a per-column decode plan
+
+#### storage,job-queue
+
+- memoize per-column decode facts; back off idle queue polling
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `miniflare`: ^5.20260926.0-alpha
+
 ## 0.6.8
 
 ### Features

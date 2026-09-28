@@ -1,5 +1,23 @@
 # @workglow/util
 
+## 0.6.9
+
+### Features
+
+#### schema
+
+- let a model port state capabilities in its format
+
+### Performance
+
+#### storage,job-queue
+
+- memoize per-column decode facts; back off idle queue polling
+
+### Chores
+
+- update deps
+
 ## 0.6.8
 
 ### Bug Fixes

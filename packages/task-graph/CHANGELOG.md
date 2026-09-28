@@ -1,5 +1,13 @@
 # @workglow/task-graph
 
+## 0.6.9
+
+### Features
+
+#### task-graph
+
+- grant code-execution:javascript in the browser profile
+
 ## 0.6.8
 
 ### Features

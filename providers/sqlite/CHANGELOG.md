@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.9
+
+### Performance
+
+#### storage,job-queue
+
+- memoize per-column decode facts; back off idle queue polling
+
 ## 0.6.8
 
 ### Bug Fixes
