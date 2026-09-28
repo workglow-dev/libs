@@ -27,6 +27,14 @@ const CLAUDE_PREFIX = "claude-";
 /** Families that never accepted sampling parameters, whatever their version. */
 const REJECTED_FAMILY = /^claude-(?:fable|mythos)(?:$|[-.])/;
 
+/**
+ * Gateways prefix the vendor onto the id (`us.anthropic.claude-…`,
+ * `anthropic.claude-…`) and suffix a revision (`…-v1:0`). Stripping the prefix
+ * grades those spellings on the same generation rule as a native id, instead of
+ * having them fall out of the parser as "not a Claude id at all".
+ */
+export const ANTHROPIC_GATEWAY_PREFIX = /^(?:[a-z0-9-]+\.)*anthropic\./i;
+
 interface ParsedAnthropicModelId {
   /** Empty for the bare `claude-2.1` shape, which carries no family name. */
   readonly family: string;
@@ -197,4 +205,56 @@ export function applyAnthropicSamplingParams(
     model: model?.provider_config?.model_name ?? "",
     dropped: permitted.map(([wireName]) => wireName),
   });
+}
+
+function parsedModelName(model: AnthropicModelConfig | undefined) {
+  const id = (model?.provider_config as { model_name?: string } | undefined)?.model_name ?? "";
+  return parseAnthropicModelId(id.trim().replace(ANTHROPIC_GATEWAY_PREFIX, ""));
+}
+
+/**
+ * Whether the configured model accepts a forced `tool_choice` (`any` or
+ * `tool`). Claude Fable 5.1, Mythos 5.1, Opus 5.5 and Sonnet 5.5 reject both
+ * with a 400, and later generations are assumed to follow them: a wrong `false`
+ * only relaxes the choice to `auto`, a wrong `true` is an unrecoverable 400.
+ * An id the parser cannot read keeps the forced choice, as before.
+ */
+export function anthropicAcceptsForcedToolChoice(model: AnthropicModelConfig | undefined): boolean {
+  const parsed = parsedModelName(model);
+  if (parsed === undefined) return true;
+  if (parsed.major < 5) return true;
+  if (parsed.major > 5) return false;
+  const minor = parsed.minor ?? 0;
+  switch (parsed.family) {
+    case "fable":
+    case "mythos":
+      return minor < 1;
+    case "opus":
+    case "sonnet":
+      return minor < 5;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Request fields that come closest to "no thinking" on a Claude 5+ model, where
+ * omitting `thinking` still runs adaptive thinking at the model's default
+ * effort. Sonnet 5.5 has a real off switch (`between_tools`); every other
+ * generation-5 model is held to `low` effort, which Anthropic recommends over
+ * `{type: "disabled"}` even where that is still accepted. Returns `undefined`
+ * for models where omitting thinking already means none.
+ */
+export function anthropicMinimalThinkingParams(
+  model: AnthropicModelConfig | undefined
+):
+  | { readonly thinking: { readonly type: "between_tools" } }
+  | { readonly output_config: { readonly effort: "low" } }
+  | undefined {
+  const parsed = parsedModelName(model);
+  if (parsed === undefined || parsed.major < 5) return undefined;
+  if (parsed.family === "sonnet" && parsed.major === 5 && (parsed.minor ?? 0) >= 5) {
+    return { thinking: { type: "between_tools" } };
+  }
+  return { output_config: { effort: "low" } };
 }

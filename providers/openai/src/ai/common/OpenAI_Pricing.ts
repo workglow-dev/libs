@@ -53,7 +53,7 @@ const perMillion = (rate: number): number => Math.round(rate * 1e6) / 1e6;
  * stays on the short-context card: tiers resolve in declared order.
  *
  * Derived rather than transcribed because the published long row is exactly
- * those multiples on all six flagships. The products are rounded: 1.2 * 1.5 is
+ * those multiples on every flagship. The products are rounded: 1.2 * 1.5 is
  * 1.7999999999999998, and gpt-5.6-luna's published long output rate is $1.80.
  */
 function longContextTiers(short: ResolvedOpenAiRates): ModelUsageTier[] {
@@ -94,12 +94,14 @@ function gptImageCard(): ModelPricing {
 /**
  * Public list pricing for OpenAI models (USD per 1M tokens).
  *
- * 1.05M-context flagships (Astra, GPT-5.6, GPT-5.5, GPT-5.4) carry a 272K
+ * 1.05M-context flagships (GPT-6, GPT-5.6, GPT-5.5, GPT-5.4) carry a 272K
  * surcharge. Mini/nano and older GPT-5/4.1 cards are a single row even when
  * the window is large enough to pass that threshold.
  */
 export const OPENAI_PRICING: Record<string, ModelPricing> = {
   "gpt-6-astra": flagshipCard({ input: 10, output: 50, cached: 1, cacheWrite: 12.5 }),
+  "gpt-6-sol": flagshipCard({ input: 2, output: 10, cached: 0.2, cacheWrite: 2.5 }),
+  "gpt-6-luna": flagshipCard({ input: 0.1, output: 0.5, cached: 0.01, cacheWrite: 0.125 }),
   "gpt-5.6-sol": flagshipCard({ input: 4, output: 20, cached: 0.4, cacheWrite: 5 }),
   "gpt-5.6-terra": flagshipCard({ input: 2, output: 12, cached: 0.2, cacheWrite: 2.5 }),
   "gpt-5.6-luna": flagshipCard({ input: 0.2, output: 1.2, cached: 0.02, cacheWrite: 0.25 }),

@@ -50,13 +50,24 @@ describe("anthropicSupportsAdaptiveThinking", () => {
 });
 
 describe("buildAnthropicThinkingParams", () => {
-  it("omits thinking when effort is unset or none", () => {
+  it("omits thinking when effort is unset, or none before Claude 5", () => {
     expect(buildAnthropicThinkingParams(model({ model_name: "claude-sonnet-5" }), 4096)).toEqual({
       max_tokens: 4096,
     });
     expect(
-      buildAnthropicThinkingParams(model({ model_name: "claude-sonnet-5", effort: "none" }), 4096)
+      buildAnthropicThinkingParams(model({ model_name: "claude-sonnet-4-6", effort: "none" }), 4096)
     ).toEqual({ max_tokens: 4096 });
+  });
+
+  // Claude 5+ runs adaptive thinking when `thinking` is omitted, so "none"
+  // sends the lowest setting the model accepts instead of nothing.
+  it("sends the minimal thinking setting for an explicit none on Claude 5+", () => {
+    expect(
+      buildAnthropicThinkingParams(model({ model_name: "claude-sonnet-5", effort: "none" }), 4096)
+    ).toEqual({ output_config: { effort: "low" }, max_tokens: 4096 });
+    expect(
+      buildAnthropicThinkingParams(model({ model_name: "claude-sonnet-5-5", effort: "none" }), 4096)
+    ).toEqual({ thinking: { type: "between_tools" }, max_tokens: 4096 });
   });
 
   // The documented fallback for an id nothing parses is the legacy budget, and

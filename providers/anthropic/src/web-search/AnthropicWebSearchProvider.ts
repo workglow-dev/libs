@@ -17,12 +17,13 @@ import type {
 import { limitResults, toIsoPublishedDate } from "@workglow/web-search";
 
 /**
- * Dynamic-filtering web search, available on Opus 5/4.8/4.7/4.6 and Sonnet 5/4.6.
+ * Dynamic-filtering web search, available on Opus 5.5/5/4.8/4.7/4.6 and
+ * Sonnet 5.5/5/4.6.
  * Older models take the basic `web_search_20250305` variant instead, which is
  * also the only one on Vertex AI.
  */
 const WEB_SEARCH_TOOL_TYPE = "web_search_20260209";
-const DEFAULT_MODEL = "claude-opus-5";
+const DEFAULT_MODEL = "claude-opus-5-5";
 const MAX_PAUSE_RESUMES = 4;
 
 export interface AnthropicWebSearchOptions {

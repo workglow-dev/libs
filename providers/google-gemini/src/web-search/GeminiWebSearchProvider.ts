@@ -18,7 +18,7 @@ import type {
 } from "@workglow/web-search";
 import { limitResults } from "@workglow/web-search";
 
-const DEFAULT_MODEL = "gemini-3.6-flash";
+const DEFAULT_MODEL = "gemini-3.8-flash";
 /** No lower bound: `timeRangeFilter` rejects an interval with only one side set. */
 const OPEN_INTERVAL_START = "1970-01-01T00:00:00Z";
 

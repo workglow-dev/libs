@@ -20,6 +20,7 @@ import { _testOnly as clientTestOnly } from "./common/Anthropic_Client";
 import { ANTHROPIC_RUN_FNS } from "./common/Anthropic_JobRunFns";
 import { maybeEmitAnthropicRefusal } from "./common/Anthropic_Refusal";
 import {
+  anthropicAcceptsForcedToolChoice,
   anthropicAcceptsSamplingParams,
   applyAnthropicSamplingParams,
 } from "./common/Anthropic_RequestParams";
@@ -38,6 +39,7 @@ export const _testOnly = {
   ANTHROPIC_RUN_FN_SPECS,
   ANTHROPIC_RUN_FNS,
   maybeEmitAnthropicRefusal,
+  anthropicAcceptsForcedToolChoice,
   anthropicAcceptsSamplingParams,
   applyAnthropicSamplingParams,
   anthropicSupportsAdaptiveThinking,
