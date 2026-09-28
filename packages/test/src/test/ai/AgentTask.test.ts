@@ -5,8 +5,10 @@
  */
 
 import type { AiProviderRunFn, ModelConfig, ToolDefinition } from "@workglow/ai";
+import type { AgentRoundRunner, ToolCallingTaskInput } from "@workglow/ai";
 import {
   AGENT_APPROVAL_OPT_OUT,
+  AGENT_ROUND_RUNNER,
   AgentTask,
   AiProviderRegistry,
   DirectExecutionStrategy,
@@ -1114,6 +1116,125 @@ describe("AgentTask", () => {
       // itself included: a host draws one card lifecycle, not two.
       expect(trace(seen)).toEqual(["pending:c1", "running:c1", "failed:c1"]);
       expect((seen[2] as FailedToolCall).result).toContain("Unknown tool");
+    });
+  });
+
+  describe("a host round runner", () => {
+    /** A runner answering from a script, recording what each round was handed. */
+    function scriptRunner(rounds: readonly ScriptedRound[]): {
+      readonly runner: AgentRoundRunner;
+      readonly inputs: ToolCallingTaskInput[];
+      readonly signals: AbortSignal[];
+    } {
+      const inputs: ToolCallingTaskInput[] = [];
+      const signals: AbortSignal[] = [];
+      const runner: AgentRoundRunner = async (input, context) => {
+        const round = rounds[Math.min(inputs.length, rounds.length - 1)]!;
+        inputs.push(input);
+        signals.push(context.signal);
+        context.onProgress(40, "Loading model");
+        if (round.text) context.onTextDelta(round.text);
+        return { text: round.text ?? "", toolCalls: [...(round.calls ?? [])] };
+      };
+      return { runner, inputs, signals };
+    }
+
+    it("sends every round through the runner and runs the tools here", async () => {
+      const called = scriptModel([{ text: "the in-process model must not be asked" }]);
+      const { runner, inputs, signals } = scriptRunner([
+        { text: "Looking. ", calls: [{ id: "c1", name: "shout", input: { text: "hi" } }] },
+        { text: "It said HI." },
+      ]);
+      registry.registerInstance(AGENT_ROUND_RUNNER, runner);
+      const shouted: string[] = [];
+      const shout: ToolDefinition = {
+        name: "shout",
+        description: "Upper-cases text",
+        inputSchema: {
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+        },
+        execute: async (input) => {
+          shouted.push(String(input.text));
+          return String(input.text).toUpperCase();
+        },
+      };
+      const task = new AgentTask();
+      const deltas: string[] = [];
+      const progress: Array<string | undefined> = [];
+      task.subscribe("stream_chunk", (event) => {
+        if (event.type === "text-delta") deltas.push(event.textDelta);
+      });
+      task.subscribe("progress", (_progress, message) => progress.push(message));
+
+      const output = await task.run(
+        { model: MODEL, prompt: "shout hi", systemPrompt: "sys", tools: [shout], temperature: 0.2 },
+        { registry }
+      );
+
+      expect(called()).toBe(0);
+      // The closure ran in this process, between the rounds the runner served.
+      expect(shouted).toEqual(["hi"]);
+      expect(deltas).toEqual(["Looking. ", "It said HI."]);
+      expect(progress).toContain("Loading model");
+      expect(output).toMatchObject({
+        text: "Looking. It said HI.",
+        rounds: 2,
+        stopReason: "answered",
+      });
+      // Each round is handed what the owned ToolCallingTask would have been.
+      expect(inputs).toHaveLength(2);
+      expect(inputs[0]).toMatchObject({ systemPrompt: "sys", temperature: 0.2, tools: [shout] });
+      expect(inputs[0]!.messages?.map((message) => message.role)).toEqual(["user"]);
+      expect(inputs[1]!.messages?.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "tool",
+      ]);
+      expect(JSON.stringify(inputs[1]!.messages?.[2])).toContain("HI");
+      expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+    });
+
+    it("still answers every call the model made through the runner", async () => {
+      const { runner } = scriptRunner([
+        { calls: [{ id: "c1", name: "nope", input: {} }] },
+        { text: "ok" },
+      ]);
+      registry.registerInstance(AGENT_ROUND_RUNNER, runner);
+
+      const output = await new AgentTask().run(
+        { model: MODEL, prompt: "go", tools: [ECHO_TOOL], approval: "never" },
+        { registry }
+      );
+
+      const [result] = toolResults(output.messages);
+      expect(result).toMatchObject({ tool_use_id: "c1", is_error: true });
+      expect(JSON.stringify(result)).toContain("Unknown tool");
+    });
+
+    it("gates the model before handing a round over, as the owned round does", async () => {
+      const { runner, inputs } = scriptRunner([{ text: "should not be asked" }]);
+      registry.registerInstance(AGENT_ROUND_RUNNER, runner);
+      const noTools: ModelConfig = { ...MODEL, capabilities: ["text.generation"] };
+
+      await expect(
+        new AgentTask().run(
+          { model: noTools, prompt: "go", tools: [ECHO_TOOL], approval: "never" },
+          { registry }
+        )
+      ).rejects.toThrow(/missing capabilities required by ToolCallingTask: tool-use/);
+      expect(inputs).toHaveLength(0);
+    });
+
+    it("fails the turn when the runner does", async () => {
+      registry.registerInstance(AGENT_ROUND_RUNNER, async () => {
+        throw new Error("backend unreachable");
+      });
+
+      await expect(
+        new AgentTask().run({ model: MODEL, prompt: "go", tools: [ECHO_TOOL] }, { registry })
+      ).rejects.toThrow(/backend unreachable/);
     });
   });
 });

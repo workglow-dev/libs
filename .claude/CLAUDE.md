@@ -228,6 +228,14 @@ approval), so a host draws one lifecycle rather than one per way a call can end.
 `approval: "never"` turns it off for a headless run, and with no connector registered such a
 call is refused rather than run.
 
+**The loop and the model call can live in different places.** A host whose tools are closures
+(they draw on a screen, ask a person, read state only that process holds) but whose model is
+reachable only through a backend binds `AGENT_ROUND_RUNNER` on the run's registry: every round is
+then handed to it as a `ToolCallingTaskInput` and answered as a `ToolCallingTaskOutput`, while the
+loop and every tool stay in-process. A serialized graph cannot carry the closures, so without it a
+host chooses between tools that work and a model it can reach. A registry binding, not an input,
+for the same reason as `AGENT_APPROVAL_OPT_OUT`: where a turn's model calls go is the host's call.
+
 Conversation helpers for a host keeping its own message list, none of which run inside a
 task: `normalizeHistoryForModel` / `trimHistoryForModel` (`ChatHistory.ts`), and
 `collectToolUseIds` / `uniquifyToolCallIds` / `repairDuplicateToolCallIds` (`ToolCallIds.ts`).

@@ -97,6 +97,26 @@ function modelMeetsRequires(model: ModelConfig, requires: readonly Capability[])
   return requires.every((r) => capabilities.includes(r));
 }
 
+/**
+ * Throws TaskConfigurationError when `model` declares capabilities that omit one
+ * of `requires`. The dispatch gate every AI task applies, exported for a caller
+ * that dispatches on a task's behalf without running it — `AgentTask` handing a
+ * round to a host runner still owes the round's `ToolCallingTask` gate.
+ */
+export function assertModelMeetsRequires(
+  model: ModelConfig,
+  requires: readonly Capability[],
+  taskType: string
+): void {
+  if (modelMeetsRequires(model, requires)) return;
+  const modelCaps = (model.capabilities as readonly Capability[] | undefined) ?? [];
+  const missing = requires.filter((r) => !modelCaps.includes(r));
+  throw new TaskConfigurationError(
+    `Model "${model.model_id ?? "(inline config)"}" is missing capabilities required by ` +
+      `${taskType}: ${missing.join(", ")}.`
+  );
+}
+
 const aiTaskConfigSchema = {
   type: "object",
   properties: {
@@ -211,14 +231,7 @@ export class AiTask<
    */
   protected gateOrThrow(model: ModelConfig): void {
     const taskClass = this.constructor as typeof AiTask;
-    const requires = taskClass.requires;
-    if (modelMeetsRequires(model, requires)) return;
-    const modelCaps = (model.capabilities as readonly Capability[] | undefined) ?? [];
-    const missing = requires.filter((r) => !modelCaps.includes(r));
-    throw new TaskConfigurationError(
-      `Model "${model.model_id ?? "(inline config)"}" is missing capabilities required by ` +
-        `${taskClass.type}: ${missing.join(", ")}.`
-    );
+    assertModelMeetsRequires(model, taskClass.requires, taskClass.type);
   }
 
   override async execute(

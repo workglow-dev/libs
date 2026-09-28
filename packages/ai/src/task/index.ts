@@ -8,6 +8,7 @@
 
 export { registerAiTasks } from "./registerAiTasks";
 
+export * from "./AgentRoundRunner";
 export * from "./AgentTask";
 export * from "./AgentToolExecution";
 export * from "./AiChatTask";
