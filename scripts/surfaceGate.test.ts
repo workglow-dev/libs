@@ -655,6 +655,16 @@ describe("typeEntryPoints", () => {
     ]);
   });
 
+  it("reads every `*` in a pattern as the same text", () => {
+    const nested = new Map<string, string>([
+      ["dist/a/a.d.ts", ""],
+      ["dist/a/b.d.ts", ""],
+    ]);
+    expect(typeEntryPoints({ exports: { "./*": { types: "./dist/*/*.d.ts" } } }, nested)).toEqual([
+      { label: "./a[types]", subpath: "./a", file: "dist/a/a.d.ts" },
+    ]);
+  });
+
   it("treats a conditions-only exports map as the `.` subpath", () => {
     expect(
       typeEntryPoints({ exports: { types: "./dist/ai.d.ts", import: "./dist/ai.js" } }, files)

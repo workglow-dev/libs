@@ -504,12 +504,17 @@ export function typeEntryPoints(
         entries.set(label(subpath), { label: label(subpath), subpath, file: path });
       return;
     }
-    const escaped = path.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "(.*)");
+    // Every `*` in a pattern stands for the same text, as Node resolves it:
+    // the first captures it, later ones must repeat it.
+    const escaped = path
+      .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+      .split("*")
+      .reduce((acc, part, index) => acc + (index === 1 ? "(.*)" : "\\1") + part);
     const pattern = new RegExp(`^${escaped}$`);
     for (const file of files.keys()) {
       const m = pattern.exec(file);
       if (m === null) continue;
-      const concrete = subpath.replace("*", m[1] ?? "");
+      const concrete = subpath.replaceAll("*", m[1] ?? "");
       entries.set(label(concrete), { label: label(concrete), subpath: concrete, file });
     }
   };
