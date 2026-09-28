@@ -8,4 +8,3 @@
 // cannot depend on this package share it; `./ai` and `./ai-runtime` keep
 // serving it under the same name through this re-export.
 export { createToolCallMarkupFilter } from "@workglow/ai/provider-utils";
-export type { IToolCallMarkupFilter } from "@workglow/ai/provider-utils";

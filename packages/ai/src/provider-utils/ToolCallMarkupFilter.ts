@@ -5,17 +5,6 @@
  */
 
 /**
- * A streaming `<tool_call>…</tool_call>` suppressor, returned by
- * {@link createToolCallMarkupFilter}.
- */
-export interface IToolCallMarkupFilter {
-  /** Pass one text delta; whatever is certainly outside markup is emitted. */
-  feed(token: string): void;
-  /** End of stream: release a held partial tag, drop an unclosed block. */
-  flush(): void;
-}
-
-/**
  * State machine that filters `<tool_call>…</tool_call>` markup out of a
  * stream of text-delta tokens. Tokens that are clearly outside markup are
  * flushed immediately; tokens that *might* be the start of a tag are held
@@ -29,7 +18,10 @@ export interface IToolCallMarkupFilter {
  * reliably detected token-by-token, so a provider whose model emits them
  * handles those itself.
  */
-export function createToolCallMarkupFilter(emit: (text: string) => void): IToolCallMarkupFilter {
+export function createToolCallMarkupFilter(emit: (text: string) => void): {
+  feed: (token: string) => void;
+  flush: () => void;
+} {
   const OPEN_TAG = "<tool_call>";
   const CLOSE_TAG = "</tool_call>";
 
