@@ -186,8 +186,16 @@ export function createFetchUrlHttpError(
   body?: string
 ): FetchUrlJobErrorInstance {
   const code = httpStatusToFetchUrlErrorCode(status);
-  const httpErrorMessage = jsonMessageFromHttpBody(body);
   const statusPart = `${status} ${statusText}`;
+  const detail = httpErrorDetailFromBody(body);
+  // A body that only restates the status line (`404 Not Found` answering with
+  // `Not Found`) adds nothing to the message.
+  const redundant =
+    detail !== undefined &&
+    [statusText.trim(), statusPart.trim(), String(status)].some(
+      (s) => s !== "" && s.toLowerCase() === detail.toLowerCase()
+    );
+  const httpErrorMessage = redundant ? undefined : detail;
   const message =
     httpErrorMessage !== undefined
       ? `Failed to fetch ${url}: ${statusPart}: ${httpErrorMessage}`
@@ -201,7 +209,74 @@ export function createFetchUrlHttpError(
   });
 }
 
-/** Reads `{message}` from a JSON error body, if that field is a non-empty string. */
+/** Longest detail {@link httpErrorDetailFromBody} will put into an error message. */
+export const HTTP_ERROR_DETAIL_MAX_CHARS = 300;
+
+/**
+ * String fields an error body may carry its explanation in, most specific
+ * first. `message` beats `error` because APIs that send both use `error` for
+ * the status phrase (`{"error":"Bad Request","message":"…"}`), and
+ * `error_description` beats `error` for the same reason in OAuth bodies.
+ */
+const HTTP_ERROR_TEXT_KEYS: readonly string[] = [
+  "message",
+  "description",
+  "error_description",
+  "detail",
+  "error",
+];
+
+/** How deep {@link jsonErrorText} descends through wrapping objects. */
+const HTTP_ERROR_JSON_MAX_DEPTH = 3;
+
+/**
+ * A concise, human-readable explanation from a non-2xx body, or `undefined`
+ * when there is nothing worth quoting.
+ *
+ * JSON bodies yield their error text — a string `message` / `description` /
+ * `error_description` / `detail` / `error`, found at the top level or under a
+ * wrapping object (`{"error":{"description":…}}`,
+ * `{"chart":{"result":null,"error":{"description":…}}}`). Other text yields a
+ * whitespace-collapsed snippet (an HTML page, its `<title>`). Binary, or
+ * markup with nothing to quote, yields `undefined`. The result is capped at
+ * {@link HTTP_ERROR_DETAIL_MAX_CHARS}, because it lands in a log line and in
+ * a persisted `error` column.
+ */
+export function httpErrorDetailFromBody(body: string | undefined): string | undefined {
+  if (body === undefined) return undefined;
+  const trimmed = body.trim();
+  if (trimmed === "") return undefined;
+  let parsed: unknown;
+  let isJson = false;
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      parsed = JSON.parse(trimmed);
+      isJson = true;
+    } catch {
+      // A JSON body cut off at the read cap, or not JSON at all: quote it as text.
+    }
+  }
+  if (isJson) {
+    const text = jsonErrorText(parsed, 0);
+    return text === undefined ? undefined : boundHttpErrorDetail(text);
+  }
+  if (looksBinary(trimmed)) return undefined;
+  if (/^<(?:!doctype|html|\?xml|head|body)/i.test(trimmed)) {
+    // An HTML error page's `<title>`, or an XML error document's `<Message>`
+    // (S3 and its imitators); the rest of the markup is noise.
+    const text =
+      /<title[^>]*>([^<]*)<\/title>/i.exec(trimmed)?.[1] ??
+      /<message[^>]*>([^<]*)<\/message>/i.exec(trimmed)?.[1];
+    return text === undefined ? undefined : boundHttpErrorDetail(text);
+  }
+  return boundHttpErrorDetail(trimmed);
+}
+
+/**
+ * Reads `{message}` from a JSON error body, if that field is a non-empty string.
+ * @deprecated Use {@link httpErrorDetailFromBody}, which also reads the other
+ * common error shapes and plain-text bodies.
+ */
 export function jsonMessageFromHttpBody(body: string | undefined): string | undefined {
   if (body === undefined || body.trim() === "") return undefined;
   try {
@@ -214,6 +289,59 @@ export function jsonMessageFromHttpBody(body: string | undefined): string | unde
   } catch {
     return undefined;
   }
+}
+
+function jsonErrorText(value: unknown, depth: number): string | undefined {
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text === "" ? undefined : text;
+  }
+  if (value === null || typeof value !== "object" || depth > HTTP_ERROR_JSON_MAX_DEPTH) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    // `{"errors":[{"message":…}]}` — the first entry speaks for the rest.
+    return value.length > 0 ? jsonErrorText(value[0], depth + 1) : undefined;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of HTTP_ERROR_TEXT_KEYS) {
+    const field = record[key];
+    if (typeof field === "string" && field.trim() !== "") return field.trim();
+  }
+  // An `error` / `errors` object is the explanation's container by name;
+  // try it before any other wrapper so `{"data":…,"error":{…}}` reads the error.
+  for (const key of ["error", "errors"]) {
+    if (record[key] !== null && typeof record[key] === "object") {
+      const nested = jsonErrorText(record[key], depth + 1);
+      if (nested !== undefined) return nested;
+    }
+  }
+  for (const [key, field] of Object.entries(record)) {
+    if (key === "error" || key === "errors") continue;
+    if (field === null || typeof field !== "object" || Array.isArray(field)) continue;
+    const nested = jsonErrorText(field, depth + 1);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
+/**
+ * Control characters other than whitespace, or U+FFFD from bytes that were not
+ * UTF-8, mark a body that is not text worth quoting.
+ */
+function looksBinary(text: string): boolean {
+  // oxlint-disable-next-line no-control-regex -- detecting control bytes is the point
+  return /[\u0000-\u0008\u000E-\u001F\u007F\uFFFD]/.test(text);
+}
+
+function boundHttpErrorDetail(text: string): string | undefined {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed === "") return undefined;
+  if (collapsed.length <= HTTP_ERROR_DETAIL_MAX_CHARS) return collapsed;
+  let cut = collapsed.slice(0, HTTP_ERROR_DETAIL_MAX_CHARS - 1);
+  // Never end on half of a surrogate pair.
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${cut.trimEnd()}…`;
 }
 
 /**

@@ -261,6 +261,39 @@ describe("FetchUrlTask", () => {
     }
   });
 
+  test("surfaces a nested Yahoo chart.error.description from a 400 body", async () => {
+    mockFetch.mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            chart: {
+              result: null,
+              error: { code: "Bad Request", description: "Date range exceeds maximum of 5 years" },
+            },
+          }),
+          {
+            status: 400,
+            statusText: "Bad Request",
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      )
+    );
+
+    const error = await fetchUrl({
+      url: "https://api.example.com/chart",
+      response_type: "json",
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(JobTaskFailedError);
+    const jobFailed = error as JobTaskFailedError;
+    expect(jobFailed.jobError).toBeInstanceOf(PermanentJobError);
+    expect(jobFailed.jobError.code).toBe(FetchUrlErrorCode.HTTP_CLIENT_ERROR);
+    expect(jobFailed.jobError.message).toBe(
+      "Failed to fetch https://api.example.com/chart: 400 Bad Request: Date range exceeds maximum of 5 years"
+    );
+    expect(mockFetch.mock.calls.length).toBe(1);
+  });
+
   test("reads only a bounded prefix of a huge error body", async () => {
     const CHUNK = new Uint8Array(1024 * 1024).fill(0x61);
     const TOTAL_CHUNKS = 64;
@@ -299,6 +332,8 @@ describe("FetchUrlTask", () => {
     expect(isFetchUrlJobError(jobFailed.jobError)).toBe(true);
     if (isFetchUrlJobError(jobFailed.jobError)) {
       expect(jobFailed.jobError.httpStatus).toBe(500);
+      // A bounded snippet, never the body.
+      expect(jobFailed.jobError.message.length).toBeLessThan(500);
     }
 
     // The body is 64 MiB in 1 MiB chunks; the reader must stop at its ceiling
