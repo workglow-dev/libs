@@ -19,6 +19,7 @@ import { createEmitQueue } from "../capability/emitQueue";
 import type { ModelConfig } from "../model/ModelSchema";
 import type { AgentRoundRunner } from "./AgentRoundRunner";
 import { AGENT_ROUND_RUNNER } from "./AgentRoundRunner";
+import { assertModelMeetsRequires } from "./base/AiTask";
 import type { AgentApprovalMode } from "./AgentToolExecution";
 import { clampToolText, runAgentTool } from "./AgentToolExecution";
 import {
@@ -425,12 +426,23 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     let off = (): void => {};
     let runRound: () => Promise<ToolCallingTaskOutput>;
     if (hostRunner) {
+      // The owned ToolCallingTask gates the model before it dispatches; a round
+      // handed elsewhere owes the same gate here, or a model that cannot use
+      // tools would be sent a round that needs them. An unresolved id is left to
+      // the far side, which resolves and gates it itself.
+      if (typeof input.model === "object") {
+        assertModelMeetsRequires(input.model, ToolCallingTask.requires, ToolCallingTask.type);
+      }
       runRound = () =>
         hostRunner(roundInput, {
           signal: context.signal,
           onTextDelta: (delta) =>
             queue.push({ type: "text-delta", port: "text", textDelta: delta }),
-          onProgress: (progress, message) => void context.updateProgress(progress, message),
+          // Progress is advisory: a failed update must not surface as an
+          // unhandled rejection, nor fail a round that is otherwise fine.
+          onProgress: (progress, message) => {
+            context.updateProgress(progress, message).catch(() => {});
+          },
         });
     } else {
       const turn = new ToolCallingTask({ title: `Round ${round}` });

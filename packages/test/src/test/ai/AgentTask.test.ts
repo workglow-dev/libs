@@ -1213,6 +1213,20 @@ describe("AgentTask", () => {
       expect(JSON.stringify(result)).toContain("Unknown tool");
     });
 
+    it("gates the model before handing a round over, as the owned round does", async () => {
+      const { runner, inputs } = scriptRunner([{ text: "should not be asked" }]);
+      registry.registerInstance(AGENT_ROUND_RUNNER, runner);
+      const noTools: ModelConfig = { ...MODEL, capabilities: ["text.generation"] };
+
+      await expect(
+        new AgentTask().run(
+          { model: noTools, prompt: "go", tools: [ECHO_TOOL], approval: "never" },
+          { registry }
+        )
+      ).rejects.toThrow(/missing capabilities required by ToolCallingTask: tool-use/);
+      expect(inputs).toHaveLength(0);
+    });
+
     it("fails the turn when the runner does", async () => {
       registry.registerInstance(AGENT_ROUND_RUNNER, async () => {
         throw new Error("backend unreachable");
