@@ -1,5 +1,15 @@
 # @workglow/web
 
+## 0.6.10
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `@lezer/highlight`: 1.2.5
+
 ## 0.6.9
 
 ### Chores

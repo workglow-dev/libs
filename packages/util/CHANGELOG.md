@@ -1,5 +1,9 @@
 # @workglow/util
 
+## 0.6.10
+
+_No changes in this package._
+
 ## 0.6.9
 
 ### Features

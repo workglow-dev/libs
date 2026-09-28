@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.10
+
+### Bug Fixes
+
+#### ai
+
+- keep createToolCallMarkupFilter's published signature on the move
+
+#### cactus
+
+- keep tool-call markup and payloads off the text port
+
 ## 0.6.9
 
 ### Bug Fixes

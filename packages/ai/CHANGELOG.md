@@ -1,5 +1,24 @@
 # @workglow/ai
 
+## 0.6.10
+
+### Features
+
+#### ai
+
+- let a host run AgentTask's rounds through AGENT_ROUND_RUNNER
+
+### Bug Fixes
+
+#### ai
+
+- keep createToolCallMarkupFilter's published signature on the move
+- gate the model before handing AgentTask's round to a host runner
+
+#### cactus
+
+- keep tool-call markup and payloads off the text port
+
 ## 0.6.9
 
 ### Features

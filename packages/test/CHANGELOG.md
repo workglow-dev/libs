@@ -1,5 +1,28 @@
 # @workglow/test
 
+## 0.6.10
+
+### Features
+
+#### ai
+
+- let a host run AgentTask's rounds through AGENT_ROUND_RUNNER
+
+### Bug Fixes
+
+#### cactus
+
+- release a JSON answer that names no tool
+- keep tool-call markup and payloads off the text port
+
+#### ai
+
+- gate the model before handing AgentTask's round to a host runner
+
+### Tests
+
+- pin the finish-accumulator fix for HFT and node-llama-cpp tool calling
+
 ## 0.6.9
 
 ### Features

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.10
+
+### Bug Fixes
+
+#### cactus
+
+- release a JSON answer that names no tool
+- keep tool-call markup and payloads off the text port
+
 ## 0.6.9
 
 _No changes in this package._
