@@ -16,7 +16,7 @@ import { filterValidToolCalls } from "@workglow/ai/worker";
 import type { NeedleEngine } from "./Cactus_LoadEngine";
 import type { CactusModelConfig } from "./Cactus_ModelSchema";
 import {
-  createNeedleReasoningFilter,
+  createNeedleVisibleTextFilter,
   needleStreamPiece,
   parseNeedleToolCalls,
 } from "./Cactus_ParseToolCalls";
@@ -76,7 +76,7 @@ export function createCactusToolCalling(
 
     // One definition of "what the caller sees as text", so the streamed and
     // one-shot paths cannot disagree about it.
-    const reasoning = createNeedleReasoningFilter();
+    const visible = createNeedleVisibleTextFilter();
     const emitVisible = (chunk: string): void => {
       if (chunk.length > 0) emit({ type: "text-delta", port: "text", textDelta: chunk });
     };
@@ -84,16 +84,16 @@ export function createCactusToolCalling(
     let raw: string;
     if (typeof engine.run_stream === "function") {
       raw = await engine.run_stream(query, toolsJson, (tokenIdOrChunk, piece) => {
-        emitVisible(reasoning.push(needleStreamPiece(tokenIdOrChunk, piece)));
+        emitVisible(visible.push(needleStreamPiece(tokenIdOrChunk, piece)));
       });
     } else {
       const out = await engine.run(query, toolsJson);
       raw = typeof out === "string" ? out : String(out);
       // No stream to ride: the whole generation is one delta, so the
       // accumulator ends up with the same text either way.
-      emitVisible(reasoning.push(raw));
+      emitVisible(visible.push(raw));
     }
-    emitVisible(reasoning.flush());
+    emitVisible(visible.flush());
 
     const parsed: ToolCalls = parseNeedleToolCalls(raw);
     const validToolCalls = filterValidToolCalls(parsed, input.tools);

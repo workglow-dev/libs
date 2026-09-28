@@ -16,6 +16,7 @@ import type {
 } from "@workglow/ai";
 import {
   adaptParserResult,
+  createToolCallMarkupFilter,
   forcedToolSelection,
   getAvailableParsers,
   getGenerationPrefix,
@@ -40,7 +41,6 @@ import {
 } from "./HFT_Pipeline";
 import { hftSamplingOptions } from "./HFT_Sampling";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
-import { createToolCallMarkupFilter } from "./HFT_ToolMarkup";
 
 // ============================================================================
 // Model detection

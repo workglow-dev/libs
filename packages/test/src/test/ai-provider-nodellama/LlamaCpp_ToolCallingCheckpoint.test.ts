@@ -9,6 +9,7 @@ import type {
   AiSessionContext,
   CheckpointPrefix,
   ToolCallingTaskInput,
+  ToolCallingTaskOutput,
 } from "@workglow/ai";
 import {
   accumulatingEmit,
@@ -25,7 +26,8 @@ import {
   registerLlamaCppInline,
   releaseLlamaCppTransientSessions,
 } from "@workglow/node-llama-cpp/ai-runtime";
-import type { TaskOutput } from "@workglow/task-graph";
+import type { StreamEvent, TaskOutput } from "@workglow/task-graph";
+import { expectNoFinishAccumulation } from "@workglow/test-contract/ai-provider";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sdkState = {
@@ -230,6 +232,23 @@ async function callToolWithPrompt(
   );
 }
 
+/**
+ * Runs one tool call through the run-fn and returns every event it emitted plus
+ * what the terminal accumulator made of them — the same fold `TaskRunner` does.
+ */
+async function recordToolCall(sessionContext: AiSessionContext | undefined): Promise<{
+  readonly events: StreamEvent<never>[];
+  readonly output: ToolCallingTaskOutput;
+}> {
+  const events: StreamEvent<never>[] = [];
+  const accumulator = accumulatingEmit<ToolCallingTaskOutput>();
+  await callToolWithPrompt("Find the weather.", sessionContext, (event) => {
+    events.push(event as StreamEvent<never>);
+    accumulator.emit(event as StreamEvent<ToolCallingTaskOutput>);
+  });
+  return { events, output: accumulator.result() };
+}
+
 interface FakeSequence {
   readonly id: number;
   nextTokenIndex: number;
@@ -277,6 +296,33 @@ describe("LlamaCpp tool-calling checkpoint lifecycle", () => {
   afterEach(async () => {
     await releaseLlamaCppTransientSessions();
     llamaCppTextContexts.clear();
+  });
+
+  // Both `finish` emits are covered: the session-less path and the session path
+  // (a fingerprint session and a consumed checkpoint both finish from the latter).
+  it.each<readonly [string, AiSessionContext | undefined]>([
+    ["without a session", undefined],
+    ["with a progressive session", { sessionId: "tool-progressive" }],
+    [
+      "consuming a checkpoint",
+      {
+        sessionId: "checkpoint-parent",
+        emitCheckpointId: "checkpoint-child",
+        supersedeParent: true,
+        prefix,
+      },
+    ],
+  ])("streams text and a tool call %s, and finish carries neither", async (_, sessionContext) => {
+    if (sessionContext?.prefix) await warmCheckpoint(sessionContext.sessionId!);
+
+    const { events, output } = await recordToolCall(sessionContext);
+
+    expectNoFinishAccumulation(events);
+    expect(events.filter((e) => e.type === "finish")).toHaveLength(1);
+    expect(output.text).toBe("calling");
+    expect(output.toolCalls).toEqual([
+      { id: "call_0", name: "lookup", input: { query: "weather" } },
+    ]);
   });
 
   it("consumes a warmed checkpoint session and retains it under the emitted id", async () => {
