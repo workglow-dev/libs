@@ -150,9 +150,9 @@ describe("Cactus_ToolCalling output parsing", () => {
       run_json: () => `<tool_call>[]</tool_call>`,
     });
     expect(names).toEqual(["lookup_weather"]);
-    // The generation reaches the consumer as a delta even with no stream to
-    // ride, so the one-shot and streamed paths accumulate to the same text.
-    expect(text).toContain("lookup_weather");
+    // The one-shot generation goes through the same text filter as a stream
+    // would, so the payload reaches `toolCalls` and not `text`.
+    expect(text).toBe("");
     expect(finishText).toBe("");
   });
 
@@ -203,9 +203,7 @@ describe("Cactus_ToolCalling output parsing", () => {
       },
     });
     expect(names).toEqual(["lookup_weather"]);
-    expect(textDeltas.join("")).toBe(
-      `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`
-    );
+    expect(textDeltas.join("")).toBe("");
   });
 
   it("accepts v2 run_stream(tokenId, piece) callback shape", async () => {
@@ -219,7 +217,7 @@ describe("Cactus_ToolCalling output parsing", () => {
       },
     });
     expect(names).toEqual(["lookup_weather"]);
-    expect(textDeltas.join("")).toContain("lookup_weather");
+    expect(textDeltas.join("")).toBe("");
   });
 
   it("emits nothing for a token the callback reports without a text piece", async () => {
@@ -227,11 +225,11 @@ describe("Cactus_ToolCalling output parsing", () => {
       run: () => "unused",
       run_stream: async (_q, _t, cb) => {
         cb(42);
-        cb(43, "<tool_call>[]</tool_call>");
-        return `<tool_call>[]</tool_call>`;
+        cb(43, "Paris is sunny.");
+        return "Paris is sunny.";
       },
     });
-    expect(textDeltas.join("")).toBe("<tool_call>[]</tool_call>");
+    expect(textDeltas.join("")).toBe("Paris is sunny.");
   });
 });
 
@@ -298,5 +296,259 @@ describe("Cactus_ToolCalling v3 reasoning on the text port", () => {
       },
     });
     expect(text).toBe("a < b and c <than d");
+  });
+});
+
+/**
+ * The payload belongs on `toolCalls`. Forwarded to `text` as well, a host
+ * rendering that port live shows the call's JSON typing itself out before the
+ * tool card appears, and a host persisting `text` stores it twice.
+ */
+describe("Cactus_ToolCalling tool-call markup on the text port", () => {
+  const PARIS = `[{"name":"lookup_weather","arguments":{"city":"Paris"}}]`;
+
+  /** Fails on any fragment of the markup or payload, not only a whole tag. */
+  function expectNoMarkup(textDeltas: readonly string[]): void {
+    for (const delta of textDeltas) {
+      expect(delta).not.toMatch(/<\/?tool|_call>|lookup_weather|book_flight|arguments|\[\{|\}\]/);
+    }
+    expect(textDeltas.join("")).not.toMatch(/tool_call|lookup_weather|book_flight|\[\{/);
+  }
+
+  it("v1: drops the unterminated <tool_call> run_stream shows while it decodes", async () => {
+    // Captured from needle-rs: v1 streams the raw generation — a
+    // `<tool_call>` token, then the payload, never a closing tag — and
+    // returns the post-processed bare JSON.
+    const pieces = [
+      "<tool_call>",
+      ' [{"',
+      "name",
+      '":"',
+      "look",
+      "up",
+      "_",
+      "weather",
+      '","',
+      "arguments",
+      '":{"',
+      "city",
+      '":"',
+      "P",
+      "aris",
+      '"}}]',
+    ];
+    const { names, textDeltas, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        pieces.forEach((piece, i) => cb(i, piece));
+        return ` ${PARIS}`;
+      },
+    });
+    expect(names).toEqual(["lookup_weather"]);
+    expectNoMarkup(textDeltas);
+    expect(text).toBe("");
+  });
+
+  it("v1: drops the bare JSON payload a one-shot run() returns", async () => {
+    const { names, textDeltas, text } = await runToolCalling({ run: () => ` ${PARIS}` });
+    expect(names).toEqual(["lookup_weather"]);
+    expectNoMarkup(textDeltas);
+    expect(text).toBe("");
+  });
+
+  it("drops a bare JSON payload streamed with no fence at all", async () => {
+    const { names, textDeltas, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb("[{");
+        cb('"name":"lookup_');
+        cb('weather","arguments":{"city":"Paris"}');
+        cb("}]");
+        return PARIS;
+      },
+    });
+    expect(names).toEqual(["lookup_weather"]);
+    expectNoMarkup(textDeltas);
+    expect(text).toBe("");
+  });
+
+  it("releases held text that starts like JSON but is not a payload", async () => {
+    const { names, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb("[note] ");
+        cb("no tool fits");
+        return "[note] no tool fits";
+      },
+    });
+    expect(names).toEqual([]);
+    expect(text).toBe("[note] no tool fits");
+  });
+
+  it("v2: drops a fenced payload streamed one token per piece", async () => {
+    // Token boundaries as needle-rs v2 reports them.
+    const pieces = [
+      "<tool_call>",
+      '[{"',
+      "name",
+      '":"',
+      "l",
+      "ook",
+      "up",
+      "_",
+      "we",
+      "ather",
+      '","',
+      "arguments",
+      '":{"',
+      "c",
+      "ity",
+      '":"',
+      "P",
+      "ar",
+      "is",
+      '"}}]',
+      "</tool_call>",
+    ];
+    const { names, textDeltas, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        pieces.forEach((piece, i) => cb(i, piece));
+        return `<tool_call>${PARIS}</tool_call>`;
+      },
+    });
+    expect(names).toEqual(["lookup_weather"]);
+    expectNoMarkup(textDeltas);
+    expect(text).toBe("");
+  });
+
+  it("v2: drops an abstention payload of []", async () => {
+    const { names, textDeltas, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        for (const piece of ["<think>", "\n", "No tool fits.", "\n", "</think>", "\n"]) {
+          cb(0, piece);
+        }
+        for (const piece of ["<tool_call>", "[", "]", "</tool_call>"]) cb(0, piece);
+        return `<think>\nNo tool fits.\n</think>\n<tool_call>[]</tool_call>`;
+      },
+    });
+    expect(names).toEqual([]);
+    expect(textDeltas.join("")).not.toContain("[]");
+    expect(text).toBe("");
+  });
+
+  it("v3: leaves nothing of the reasoning or the payload on the text port", async () => {
+    // needle-rs v3's shape: reasoning, a newline, then the fenced payload.
+    const pieces = [
+      "<think>",
+      "\n",
+      "Query asks for weather in Paris.",
+      "\n",
+      "</think>",
+      "\n",
+      "<tool_call>",
+      '[{"',
+      "name",
+      '":"',
+      "look",
+      "up",
+      "_",
+      "weather",
+      '","',
+      "arguments",
+      '":{"',
+      "c",
+      "ity",
+      '":"',
+      "Par",
+      "is",
+      '"}}]',
+      "</tool_call>",
+    ];
+    const { names, textDeltas, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        for (const piece of pieces) cb(piece);
+        return pieces.join("");
+      },
+    });
+    expect(names).toEqual(["lookup_weather"]);
+    expectNoMarkup(textDeltas);
+    expect(text).not.toContain("Query asks");
+    expect(text).toBe("");
+  });
+
+  it("drops markup whose tags straddle chunk boundaries, keeping the prose around it", async () => {
+    const { names, textDeltas, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb("Checking the weather. <to");
+        cb("ol_ca");
+        cb('ll>[{"name":"lookup_wea');
+        cb('ther","arguments":{"city":"Paris"}}]</tool');
+        cb("_call> Done.");
+        return `Checking the weather. <tool_call>${PARIS}</tool_call> Done.`;
+      },
+    });
+    expect(names).toEqual(["lookup_weather"]);
+    expectNoMarkup(textDeltas);
+    expect(text).toBe("Checking the weather.  Done.");
+  });
+
+  it("drops every fenced block, not just the first", async () => {
+    const { names, textDeltas, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb(`<tool_call>${PARIS}</tool_call>`);
+        cb(" and ");
+        cb(`<tool_call>[{"name":"book_flight","arguments":{"origin":"LHR"}}]</tool_call>`);
+        return (
+          `<tool_call>${PARIS}</tool_call> and ` +
+          `<tool_call>[{"name":"book_flight","arguments":{"origin":"LHR"}}]</tool_call>`
+        );
+      },
+    });
+    expect(names).toEqual(["lookup_weather", "book_flight"]);
+    expectNoMarkup(textDeltas);
+    expect(text).toBe(" and ");
+  });
+
+  it("drops a fenced payload cut off at the token limit, and still parses it", async () => {
+    const { names, textDeltas, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb("<tool_call>");
+        cb(PARIS);
+        return `<tool_call>${PARIS}`;
+      },
+    });
+    expect(names).toEqual(["lookup_weather"]);
+    expectNoMarkup(textDeltas);
+    expect(text).toBe("");
+  });
+
+  it("holds back a partial opening tag and releases it once it is not one", async () => {
+    const { textDeltas, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb("Open the <tool");
+        cb("box, please.");
+        return "Open the <toolbox, please.";
+      },
+    });
+    expect(textDeltas[0]).toBe("Open the ");
+    expect(text).toBe("Open the <toolbox, please.");
+  });
+
+  it("releases a partial opening tag the stream ends on", async () => {
+    const { text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb("ends mid-tag <tool_ca");
+        return "ends mid-tag <tool_ca";
+      },
+    });
+    expect(text).toBe("ends mid-tag <tool_ca");
   });
 });

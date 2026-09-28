@@ -5,6 +5,7 @@
  */
 
 import type { ToolCall, ToolCalls } from "@workglow/ai";
+import { createToolCallMarkupFilter } from "@workglow/ai/provider-utils";
 import { sanitizeToolArgs } from "@workglow/ai/worker";
 
 const TOOL_CALL_OPEN = "<tool_call>";
@@ -28,6 +29,23 @@ export function stripNeedleReasoning(raw: string): string {
   return raw.replace(THINK_FENCE, "").trim();
 }
 
+/** A delta-stream filter: each delta in, the part a caller may see out. */
+export interface NeedleTextFilter {
+  /** The visible part of this delta; `""` when none of it is. */
+  push(delta: string): string;
+  /** The visible part of whatever is still held when the stream ends. */
+  flush(): string;
+}
+
+/** Longest suffix of `text` that is a proper prefix of `tag`. */
+function danglingPrefixLength(text: string, tag: string): number {
+  const max = Math.min(text.length, tag.length - 1);
+  for (let n = max; n > 0; n--) {
+    if (text.endsWith(tag.slice(0, n))) return n;
+  }
+  return 0;
+}
+
 /**
  * The incremental form of {@link stripNeedleReasoning}, for the delta stream.
  *
@@ -41,28 +59,12 @@ export function stripNeedleReasoning(raw: string): string {
  * boundary, so the filter holds back any trailing run that could still turn
  * into `<think>` and releases it once it cannot.
  *
- * {@link NeedleReasoningFilter.flush} exists for the case the fence never
- * closes. A generation cut short at the token limit has no `</think>`, and
- * `stripNeedleReasoning` deliberately leaves such a block alone — so the filter
- * releases what it held rather than swallowing the whole generation.
+ * `flush` exists for the case the fence never closes. A generation cut short
+ * at the token limit has no `</think>`, and `stripNeedleReasoning` deliberately
+ * leaves such a block alone — so the filter releases what it held rather than
+ * swallowing the whole generation.
  */
-export interface NeedleReasoningFilter {
-  /** The visible part of this delta; `""` when it is entirely reasoning. */
-  push(delta: string): string;
-  /** Whatever is still held when the stream ends. */
-  flush(): string;
-}
-
-/** Longest suffix of `text` that is a proper prefix of `tag`. */
-function danglingPrefixLength(text: string, tag: string): number {
-  const max = Math.min(text.length, tag.length - 1);
-  for (let n = max; n > 0; n--) {
-    if (text.endsWith(tag.slice(0, n))) return n;
-  }
-  return 0;
-}
-
-export function createNeedleReasoningFilter(): NeedleReasoningFilter {
+export function createNeedleReasoningFilter(): NeedleTextFilter {
   const OPEN = "<think>";
   const CLOSE = "</think>";
   /** Text not yet classifiable: a partial tag, or a fence still open. */
@@ -100,6 +102,103 @@ export function createNeedleReasoningFilter(): NeedleReasoningFilter {
       held = "";
       inside = false;
       return rest;
+    },
+  };
+}
+
+function isJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The text a caller sees: the generation minus everything
+ * {@link parseNeedleToolCalls} reads as something other than an answer —
+ * reasoning, fenced payloads, and a bare payload.
+ *
+ * The payload is on `toolCalls` already. Left on `text` too, a host rendering
+ * that port live shows the call's JSON typing itself out before the tool card
+ * appears, which is what every generation would do: v2 and v3 stream the
+ * fenced block token by token, and v1 streams its raw `<tool_call>` marker and
+ * payload — with no closing tag — even though `run` returns the bare JSON.
+ *
+ * Three stages, in the order the parser reads the generation:
+ *
+ * 1. {@link createNeedleReasoningFilter} drops `<think>` blocks, so a fence the
+ *    model only talked about counts for nothing below.
+ * 2. {@link createToolCallMarkupFilter} drops each `<tool_call>` block, holding
+ *    back a partial opening tag until it is disambiguated and suppressing an
+ *    unclosed block to the end — the parser recovers that tail as a payload.
+ * 3. The bare-payload gate. With no fence anywhere the parser takes the whole
+ *    remaining generation as the payload, so visible text whose first
+ *    non-blank character opens a JSON array or object is held: dropped at the
+ *    end if it parses, released if it does not or a fence turns up after all.
+ *
+ * Output that is nothing but whitespace is dropped at the end too: it is the
+ * newline between `</think>` and `<tool_call>`, not an answer.
+ */
+export function createNeedleVisibleTextFilter(): NeedleTextFilter {
+  const reasoning = createNeedleReasoningFilter();
+  /** A `<tool_call>` opened outside reasoning, so no bare payload is read. */
+  let sawFence = false;
+  /** The end of the last routed delta, for an opening tag split across two. */
+  let fenceTail = "";
+  /** `lead`: only whitespace so far; `held`: a possible bare payload; `pass`: prose. */
+  let mode: "lead" | "held" | "pass" = "lead";
+  let held = "";
+  let out = "";
+
+  const release = (): void => {
+    out += held;
+    held = "";
+    mode = "pass";
+  };
+
+  const markup = createToolCallMarkupFilter((text) => {
+    if (mode === "pass") {
+      out += text;
+      return;
+    }
+    held += text;
+    if (mode === "held") return;
+    const start = text.search(/\S/);
+    if (start === -1) return;
+    const first = text[start];
+    if (!sawFence && (first === "[" || first === "{")) mode = "held";
+    else release();
+  });
+
+  const route = (text: string): void => {
+    if (text.length === 0) return;
+    const scan = fenceTail + text;
+    if (scan.includes(TOOL_CALL_OPEN)) sawFence = true;
+    fenceTail = scan.slice(-(TOOL_CALL_OPEN.length - 1));
+    markup.feed(text);
+    if (mode === "held" && sawFence) release();
+  };
+
+  const take = (): string => {
+    const visible = out;
+    out = "";
+    return visible;
+  };
+
+  return {
+    push(delta: string): string {
+      route(reasoning.push(delta));
+      return take();
+    },
+    flush(): string {
+      route(reasoning.flush());
+      markup.flush();
+      if (mode === "held" && isJson(held)) held = "";
+      if (mode === "lead") held = "";
+      release();
+      return take();
     },
   };
 }

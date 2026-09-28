@@ -90,7 +90,7 @@ describe.skipIf(!RUN)("Cactus_ToolCalling (integration)", () => {
 
   it("returns a tool call from Needle 3, whose completion leads with reasoning", async () => {
     const toolCalls: Array<{ name: string; input: Record<string, unknown> }> = [];
-    let finishText = "";
+    let streamedText = "";
     const controller = new AbortController();
     await Cactus_ToolCalling(
       {
@@ -117,13 +117,14 @@ describe.skipIf(!RUN)("Cactus_ToolCalling (integration)", () => {
             toolCalls.push(c);
           }
         }
-        if (ev.type === "finish") finishText = ev.data.text;
+        if (ev.type === "text-delta") streamedText += ev.textDelta;
       }
     );
     expect(toolCalls.length).toBeGreaterThan(0);
     expect(toolCalls[0].name).toBe("lookup_weather");
-    // The point of the case: v3 emits a <think> block ahead of the payload,
-    // and the parse has to see past it.
-    expect(finishText).toContain("<tool_call>");
+    // v3 emits a <think> block ahead of the fenced payload: the parse above has
+    // to see past it, and neither the reasoning nor the payload reaches `text`.
+    expect(streamedText).not.toContain("<tool_call>");
+    expect(streamedText).not.toContain("<think>");
   }, 300_000);
 });
