@@ -15,7 +15,7 @@ import type {
 import { createUsageSnapshotEmitter } from "@workglow/ai/provider-utils";
 import { filterValidToolCalls, sanitizeToolArgs } from "@workglow/ai/worker";
 import type { PartialJsonStream } from "@workglow/util/worker";
-import { createPartialJsonStream } from "@workglow/util/worker";
+import { createPartialJsonStream, getLogger } from "@workglow/util/worker";
 import {
   annotateLastBlock,
   annotateLastTool,
@@ -26,7 +26,10 @@ import {
 import { getClient, getMaxTokens, getModelName } from "./Anthropic_Client";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
 import { maybeEmitAnthropicRefusal } from "./Anthropic_Refusal";
-import { applyAnthropicSamplingParams } from "./Anthropic_RequestParams";
+import {
+  anthropicAcceptsForcedToolChoice,
+  applyAnthropicSamplingParams,
+} from "./Anthropic_RequestParams";
 import { applyAnthropicThinkingParams } from "./Anthropic_Thinking";
 import { createAnthropicUsageCollector } from "./Anthropic_Usage";
 
@@ -150,7 +153,17 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
     input.tools.length > 0 ? input.tools : (sessionContext?.prefix?.tools ?? input.tools);
   const tools = toAnthropicTools(toolDefinitions);
 
-  const toolChoice = mapAnthropicToolChoice(input.toolChoice);
+  let toolChoice = mapAnthropicToolChoice(input.toolChoice);
+  if (
+    (toolChoice?.type === "any" || toolChoice?.type === "tool") &&
+    !anthropicAcceptsForcedToolChoice(model)
+  ) {
+    getLogger().warn("Anthropic model rejects a forced tool choice; sending auto instead.", {
+      model: modelName,
+      tool_choice: input.toolChoice,
+    });
+    toolChoice = { type: "auto" };
+  }
 
   const messages = buildAnthropicMessages(input.messages, input.prompt);
 

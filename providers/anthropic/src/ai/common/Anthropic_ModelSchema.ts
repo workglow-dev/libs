@@ -23,7 +23,7 @@ export const AnthropicModelSchema = {
         model_name: {
           type: "string",
           description:
-            "The Anthropic model identifier (e.g., 'claude-opus-5', 'claude-haiku-4-5').",
+            "The Anthropic model identifier (e.g., 'claude-opus-5-5', 'claude-haiku-4-5').",
         },
         credential_key: {
           type: "string",

@@ -11,21 +11,13 @@ import {
   type ModelEffortPolicy,
   type ModelEffortPolicyFn,
 } from "@workglow/ai/worker";
-import { parseAnthropicModelId } from "./Anthropic_RequestParams";
+import { ANTHROPIC_GATEWAY_PREFIX, parseAnthropicModelId } from "./Anthropic_RequestParams";
 
 const CLAUDE = { supported: MODEL_EFFORTS, default: "none" } as const satisfies ModelEffortPolicy;
 
-/**
- * Gateways prefix the vendor onto the id (`us.anthropic.claude-…`,
- * `anthropic.claude-…`) and suffix a revision (`…-v1:0`). Stripping the prefix
- * grades those spellings on the same generation rule as a native id, instead of
- * having them fall out of the parser as "not a Claude id at all".
- */
-const GATEWAY_PREFIX = /^(?:[a-z0-9-]+\.)*anthropic\./i;
-
 /** Extended thinking arrived in Claude 3.7; older generations 400 on any thinking field. */
 function isPreThinkingClaude(id: string): boolean {
-  const parsed = parseAnthropicModelId(id.replace(GATEWAY_PREFIX, ""));
+  const parsed = parseAnthropicModelId(id.replace(ANTHROPIC_GATEWAY_PREFIX, ""));
   if (parsed === undefined) return false;
   if (parsed.major !== 3) return parsed.major < 3;
   return (parsed.minor ?? 0) < 7;

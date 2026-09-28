@@ -161,4 +161,46 @@ describe("Anthropic legacy thinking request shape", () => {
     expect(params.thinking).toEqual({ type: "adaptive" });
     expect(params.temperature).toBe(0.5);
   });
+  it("offers the structured-output tool on auto where forced tool choice is a 400", async () => {
+    const runFn = findRunFn(["text.generation", "json-mode"]);
+    const model = modelConfig("high", "claude-opus-5-5");
+    await runFn(
+      { model, prompt: "hi" } as never,
+      model,
+      undefined as never,
+      (() => {}) as never,
+      { type: "object", properties: { a: { type: "string" } } } as never
+    );
+
+    const params = captured[0]!;
+    expect(params.tool_choice).toEqual({ type: "auto", disable_parallel_tool_use: true });
+    expect(typeof params.system).toBe("string");
+    expect(params.thinking).toEqual({ type: "adaptive" });
+  });
+
+  it("relaxes a required tool choice to auto where forced tool choice is a 400", async () => {
+    const runFn = findRunFn(["text.generation", "tool-use"]);
+    const model = modelConfig("high", "claude-sonnet-5-5");
+    const tools = [{ name: "lookup", description: "Look up", inputSchema: { type: "object" } }];
+    await runFn(
+      { model, prompt: "hi", tools, toolChoice: "required" } as never,
+      model,
+      undefined as never,
+      (() => {}) as never
+    );
+
+    expect(captured[0]!.tool_choice).toEqual({ type: "auto" });
+  });
+
+  it.each([
+    ["claude-opus-5-5", { output_config: { effort: "low" } }],
+    ["claude-fable-5-1", { output_config: { effort: "low" } }],
+    ["claude-sonnet-5-5", { thinking: { type: "between_tools" } }],
+  ])("sends the minimal thinking setting for effort none on %s", async (name, expected) => {
+    const runFn = findRunFn(["text.generation"]);
+    const model = modelConfig("none", name);
+    await runFn({ model, prompt: "hi" } as never, model, undefined as never, (() => {}) as never);
+
+    expect(captured[0]).toMatchObject(expected);
+  });
 });

@@ -8,7 +8,11 @@ import { resolveEnabledEffort, type ModelEffort } from "@workglow/ai/worker";
 import { getLogger } from "@workglow/util/worker";
 import { anthropicEffortPolicy } from "./Anthropic_EffortPolicy";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
-import { parseAnthropicModelId } from "./Anthropic_RequestParams";
+import {
+  anthropicDefaultThinkingParams,
+  anthropicMinimalThinkingParams,
+  parseAnthropicModelId,
+} from "./Anthropic_RequestParams";
 
 /** Token budgets for legacy `thinking.type = "enabled"` (and adaptive headroom). */
 const EFFORT_TO_BUDGET: Record<ModelEffort, number> = {
@@ -72,7 +76,9 @@ function padMaxTokens(maxTokens: number, budget: number): number {
 /**
  * Builds Anthropic request thinking fields from native `provider_config` or
  * `model.effort`. Native `thinking` / `output_config.effort` always win.
- * `effort: "none"` (or unset with no native knobs) omits thinking fields.
+ * Before Claude 5, an unset or `"none"` effort omits thinking fields. On Claude
+ * 5+, an unset effort sends adaptive thinking with no effort (the model's
+ * default), and an explicit `"none"` sends the minimal setting it accepts.
  */
 export function buildAnthropicThinkingParams(
   model: AnthropicModelConfig | undefined,
@@ -98,7 +104,14 @@ export function buildAnthropicThinkingParams(
 
   const effort = resolveEnabledEffort(model, anthropicEffortPolicy(model));
   if (effort === undefined || effort === "none") {
-    return { max_tokens: maxTokens };
+    // Claude 5+ thinks when `thinking` is omitted, so an explicit "none" has to
+    // be asked for, and an unset effort is sent as adaptive at the model's own
+    // default effort.
+    const fields =
+      effort === "none" && model?.effort === "none"
+        ? anthropicMinimalThinkingParams(model)
+        : anthropicDefaultThinkingParams(model);
+    return fields === undefined ? { max_tokens: maxTokens } : { ...fields, max_tokens: maxTokens };
   }
 
   const budget = EFFORT_TO_BUDGET[effort];

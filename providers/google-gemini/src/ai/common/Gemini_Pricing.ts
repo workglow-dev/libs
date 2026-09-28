@@ -19,26 +19,29 @@ import { GEMINI_IMAGE_MODELS } from "./Gemini_EffortPolicy";
  * and `output` only, so the card's own cache rates keep applying.
  */
 export const GEMINI_PRICING: Record<string, ModelPricing> = {
-  "gemini-3.8-flash-lite": {
-    currency: "USD",
-    input: 0.3,
-    output: 2.5,
-    cached: 0.075,
-    cacheStoragePerHour: 1.0,
-  },
+  // Gemini 3.6-3.8 Flash share one introductory price through 2026-12-31. From
+  // 2027-01-01 Google lists input $1.50, output $7.50, cached $0.15 and storage
+  // $1.00 per 1M tokens per hour; these cards need updating then.
   "gemini-3.8-flash": {
     currency: "USD",
-    input: 1.5,
-    output: 9,
-    cached: 0.375,
-    cacheStoragePerHour: 1.0,
+    input: 0.75,
+    output: 3.75,
+    cached: 0.075,
+    cacheStoragePerHour: 0.5,
+  },
+  "gemini-3.7-flash": {
+    currency: "USD",
+    input: 0.75,
+    output: 3.75,
+    cached: 0.075,
+    cacheStoragePerHour: 0.5,
   },
   "gemini-3.6-flash": {
     currency: "USD",
-    input: 1.5,
-    output: 7.5,
-    cached: 0.375,
-    cacheStoragePerHour: 1.0,
+    input: 0.75,
+    output: 3.75,
+    cached: 0.075,
+    cacheStoragePerHour: 0.5,
   },
   "gemini-3.5-flash-lite": {
     currency: "USD",
@@ -51,7 +54,7 @@ export const GEMINI_PRICING: Record<string, ModelPricing> = {
     currency: "USD",
     input: 1.5,
     output: 9,
-    cached: 0.375,
+    cached: 0.15,
     cacheStoragePerHour: 1.0,
   },
   "gemini-3.1-flash-lite": {

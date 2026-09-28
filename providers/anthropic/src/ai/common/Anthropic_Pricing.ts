@@ -11,8 +11,9 @@ import { resolveModelPricingFromTable } from "@workglow/ai";
  * Public list pricing for Anthropic Claude models (USD per 1M tokens).
  *
  * No card carries a long-context tier, and that is not an omission: the
- * 1M-context models bill a long prompt at these same rates, and every other
- * model here has a 200K window, so no prompt size could select one.
+ * 1M-context models (Opus 4.6 and later, Sonnet 4.6 and later, Fable) bill a
+ * long prompt at these same rates, and every other model here has a 200K
+ * window, so no prompt size could select one.
  */
 export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
   "claude-fable-5-1": {
@@ -50,6 +51,44 @@ export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
       cacheWrite: {
         cacheWrite5m: 6.25,
         cacheWrite1h: 10,
+      },
+    },
+  },
+  "claude-opus-5-5": {
+    currency: "USD",
+    input: 4,
+    output: 20,
+    cached: 0.2,
+    cacheWrite: {
+      cacheWrite5m: 5,
+      cacheWrite1h: 8,
+    },
+    batch: {
+      input: 2,
+      output: 10,
+      cached: 0.1,
+      cacheWrite: {
+        cacheWrite5m: 2.5,
+        cacheWrite1h: 4,
+      },
+    },
+  },
+  "claude-sonnet-5-5": {
+    currency: "USD",
+    input: 2,
+    output: 10,
+    cached: 0.2,
+    cacheWrite: {
+      cacheWrite5m: 2.5,
+      cacheWrite1h: 4,
+    },
+    batch: {
+      input: 1,
+      output: 5,
+      cached: 0.1,
+      cacheWrite: {
+        cacheWrite5m: 1.25,
+        cacheWrite1h: 2,
       },
     },
   },
@@ -93,39 +132,39 @@ export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
   },
   "claude-opus-4-8": {
     currency: "USD",
-    input: 15,
-    output: 75,
-    cached: 1.5,
+    input: 5,
+    output: 25,
+    cached: 0.5,
     cacheWrite: {
-      cacheWrite5m: 18.75,
-      cacheWrite1h: 30,
+      cacheWrite5m: 6.25,
+      cacheWrite1h: 10,
     },
     batch: {
-      input: 7.5,
-      output: 37.5,
-      cached: 0.75,
+      input: 2.5,
+      output: 12.5,
+      cached: 0.25,
       cacheWrite: {
-        cacheWrite5m: 9.375,
-        cacheWrite1h: 15,
+        cacheWrite5m: 3.125,
+        cacheWrite1h: 5,
       },
     },
   },
   "claude-opus-4-7": {
     currency: "USD",
-    input: 15,
-    output: 75,
-    cached: 1.5,
+    input: 5,
+    output: 25,
+    cached: 0.5,
     cacheWrite: {
-      cacheWrite5m: 18.75,
-      cacheWrite1h: 30,
+      cacheWrite5m: 6.25,
+      cacheWrite1h: 10,
     },
     batch: {
-      input: 7.5,
-      output: 37.5,
-      cached: 0.75,
+      input: 2.5,
+      output: 12.5,
+      cached: 0.25,
       cacheWrite: {
-        cacheWrite5m: 9.375,
-        cacheWrite1h: 15,
+        cacheWrite5m: 3.125,
+        cacheWrite1h: 5,
       },
     },
   },
@@ -169,20 +208,20 @@ export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
   },
   "claude-opus-4-6": {
     currency: "USD",
-    input: 15,
-    output: 75,
-    cached: 1.5,
+    input: 5,
+    output: 25,
+    cached: 0.5,
     cacheWrite: {
-      cacheWrite5m: 18.75,
-      cacheWrite1h: 30,
+      cacheWrite5m: 6.25,
+      cacheWrite1h: 10,
     },
     batch: {
-      input: 7.5,
-      output: 37.5,
-      cached: 0.75,
+      input: 2.5,
+      output: 12.5,
+      cached: 0.25,
       cacheWrite: {
-        cacheWrite5m: 9.375,
-        cacheWrite1h: 15,
+        cacheWrite5m: 3.125,
+        cacheWrite1h: 5,
       },
     },
   },

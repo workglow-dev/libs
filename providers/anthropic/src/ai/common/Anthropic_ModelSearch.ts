@@ -29,7 +29,10 @@ interface AnthropicModelListItem {
  */
 export const ANTHROPIC_FALLBACK: ReadonlyArray<{ readonly label: string; readonly value: string }> =
   [
+    { label: "claude-fable-5-1", value: "claude-fable-5-1" },
     { label: "claude-fable-5", value: "claude-fable-5" },
+    { label: "claude-opus-5-5", value: "claude-opus-5-5" },
+    { label: "claude-sonnet-5-5", value: "claude-sonnet-5-5" },
     { label: "claude-opus-5", value: "claude-opus-5" },
     { label: "claude-sonnet-5", value: "claude-sonnet-5" },
     { label: "claude-opus-4-8", value: "claude-opus-4-8" },
