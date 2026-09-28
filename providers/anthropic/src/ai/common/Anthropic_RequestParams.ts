@@ -258,3 +258,18 @@ export function anthropicMinimalThinkingParams(
   }
   return { output_config: { effort: "low" } };
 }
+
+/**
+ * Request fields for a Claude 5+ model when no effort or thinking is
+ * configured: adaptive thinking at the model's own default effort. The API
+ * already runs adaptive when `thinking` is omitted on these models; sending it
+ * says so on the wire instead of depending on that default. Returns
+ * `undefined` for earlier generations, where omitting thinking means none.
+ */
+export function anthropicDefaultThinkingParams(
+  model: AnthropicModelConfig | undefined
+): { readonly thinking: { readonly type: "adaptive" } } | undefined {
+  const parsed = parsedModelName(model);
+  if (parsed === undefined || parsed.major < 5) return undefined;
+  return { thinking: { type: "adaptive" } };
+}
