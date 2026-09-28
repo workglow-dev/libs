@@ -106,13 +106,21 @@ export function createNeedleReasoningFilter(): NeedleTextFilter {
   };
 }
 
-function isJson(text: string): boolean {
+/**
+ * Whether held bare text is what {@link parseNeedleToolCalls} reads as tool
+ * calls — or the `[]` abstention — rather than an answer that happens to be
+ * JSON. Only the former is on `toolCalls` already; the latter is the reply.
+ */
+function isBareToolCallPayload(text: string): boolean {
+  let parsed: unknown;
   try {
-    JSON.parse(text);
-    return true;
+    parsed = JSON.parse(text);
   } catch {
     return false;
   }
+  if (Array.isArray(parsed) && parsed.length === 0) return true;
+  const candidates: readonly unknown[] = Array.isArray(parsed) ? parsed : [parsed];
+  return candidates.some((candidate, index) => toToolCall(candidate, index) !== undefined);
 }
 
 /**
@@ -136,7 +144,9 @@ function isJson(text: string): boolean {
  * 3. The bare-payload gate. With no fence anywhere the parser takes the whole
  *    remaining generation as the payload, so visible text whose first
  *    non-blank character opens a JSON array or object is held: dropped at the
- *    end if it parses, released if it does not or a fence turns up after all.
+ *    end if it parses as tool calls (or the `[]` abstention), released if it
+ *    is anything else — prose, or an answer that is itself JSON — or a fence
+ *    turns up after all.
  *
  * Output that is nothing but whitespace is dropped at the end too: it is the
  * newline between `</think>` and `<tool_call>`, not an answer.
@@ -195,7 +205,7 @@ export function createNeedleVisibleTextFilter(): NeedleTextFilter {
     flush(): string {
       route(reasoning.flush());
       markup.flush();
-      if (mode === "held" && isJson(held)) held = "";
+      if (mode === "held" && isBareToolCallPayload(held)) held = "";
       if (mode === "lead") held = "";
       release();
       return take();

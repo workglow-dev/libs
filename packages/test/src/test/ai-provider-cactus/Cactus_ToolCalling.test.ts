@@ -385,6 +385,34 @@ describe("Cactus_ToolCalling tool-call markup on the text port", () => {
     expect(text).toBe("[note] no tool fits");
   });
 
+  it("releases an answer that is valid JSON but names no tool", async () => {
+    const answer = `{"answer":"Paris is sunny"}`;
+    const { names, textDeltas, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb('{"answer":');
+        cb('"Paris is sunny"}');
+        return answer;
+      },
+    });
+    expect(names).toEqual([]);
+    expect(textDeltas.join("")).toBe(answer);
+    expect(text).toBe(answer);
+  });
+
+  it("releases a JSON array whose entries are not tool calls", async () => {
+    const { names, text } = await runToolCalling({ run: () => "[1, 2, 3]" });
+    expect(names).toEqual([]);
+    expect(text).toBe("[1, 2, 3]");
+  });
+
+  it("drops the bare [] abstention", async () => {
+    const { names, textDeltas, text } = await runToolCalling({ run: () => "[]" });
+    expect(names).toEqual([]);
+    expect(textDeltas).toEqual([]);
+    expect(text).toBe("");
+  });
+
   it("v2: drops a fenced payload streamed one token per piece", async () => {
     // Token boundaries as needle-rs v2 reports them.
     const pieces = [
