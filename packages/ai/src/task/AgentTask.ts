@@ -17,6 +17,8 @@ import type { DataPortSchema } from "@workglow/util/schema";
 import type { Capability } from "../capability/Capabilities";
 import { createEmitQueue } from "../capability/emitQueue";
 import type { ModelConfig } from "../model/ModelSchema";
+import type { AgentRoundRunner } from "./AgentRoundRunner";
+import { AGENT_ROUND_RUNNER } from "./AgentRoundRunner";
 import type { AgentApprovalMode } from "./AgentToolExecution";
 import { clampToolText, runAgentTool } from "./AgentToolExecution";
 import {
@@ -164,6 +166,13 @@ export type AgentTaskOutput = {
 
 export type AgentTaskConfig = TaskConfig<AgentTaskInput>;
 
+/** The host's round runner, when it bound one on this run's registry. */
+function roundRunnerOf(context: IExecuteContext): AgentRoundRunner | undefined {
+  return context.registry.has(AGENT_ROUND_RUNNER)
+    ? context.registry.get(AGENT_ROUND_RUNNER)
+    : undefined;
+}
+
 /** A call the model made that cannot be answered, so must not be committed. */
 function isAnswerable(call: ToolCall): boolean {
   return typeof call.id === "string" && call.id.length > 0 && typeof call.name === "string";
@@ -306,10 +315,9 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       rounds = round + 1;
       await context.updateProgress(undefined, "Thinking");
 
-      const turn = new ToolCallingTask({ title: `Round ${rounds}` });
       const captured: { output: ToolCallingTaskOutput | undefined } = { output: undefined };
       for await (const event of this.streamRound(
-        turn,
+        rounds,
         captured,
         input,
         messages,
@@ -391,33 +399,52 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
    * the abort signal and the run's usage accounting. The child's `toolCalls`
    * deltas are deliberately NOT forwarded: this task has no such port, and a
    * delta naming one would accumulate onto an output that does not exist.
+   *
+   * A host that bound {@link AGENT_ROUND_RUNNER} runs the round itself instead,
+   * and nothing is owned: the round happens wherever the host sent it.
    */
   private async *streamRound(
-    turn: ToolCallingTask,
+    round: number,
     captured: { output: ToolCallingTaskOutput | undefined },
     input: AgentTaskInput,
     messages: readonly ChatMessage[],
     maxHistoryChars: number,
     context: IExecuteContext
   ): AsyncIterable<StreamEvent<AgentTaskOutput>> {
-    context.own(turn);
+    const roundInput: ToolCallingTaskInput = {
+      model: input.model,
+      prompt: input.prompt,
+      systemPrompt: input.systemPrompt,
+      messages: normalizeHistoryForModel(trimHistoryForModel(messages, maxHistoryChars)),
+      tools: input.tools,
+      temperature: input.temperature,
+      maxTokens: input.maxTokens,
+    };
+    const hostRunner = roundRunnerOf(context);
     const queue = createEmitQueue<StreamEvent<AgentTaskOutput>>();
-    const off = turn.subscribe("stream_chunk", (event: StreamEvent) => {
-      if (event.type !== "text-delta") return;
-      if ((event.port ?? "text") !== "text") return;
-      queue.push({ type: "text-delta", port: "text", textDelta: event.textDelta });
-    });
+    let off = (): void => {};
+    let runRound: () => Promise<ToolCallingTaskOutput>;
+    if (hostRunner) {
+      runRound = () =>
+        hostRunner(roundInput, {
+          signal: context.signal,
+          onTextDelta: (delta) =>
+            queue.push({ type: "text-delta", port: "text", textDelta: delta }),
+          onProgress: (progress, message) => void context.updateProgress(progress, message),
+        });
+    } else {
+      const turn = new ToolCallingTask({ title: `Round ${round}` });
+      context.own(turn);
+      off = turn.subscribe("stream_chunk", (event: StreamEvent) => {
+        if (event.type !== "text-delta") return;
+        if ((event.port ?? "text") !== "text") return;
+        queue.push({ type: "text-delta", port: "text", textDelta: event.textDelta });
+      });
+      runRound = () => turn.run(roundInput);
+    }
     const run = (async () => {
       try {
-        captured.output = await turn.run({
-          model: input.model,
-          prompt: input.prompt,
-          systemPrompt: input.systemPrompt,
-          messages: normalizeHistoryForModel(trimHistoryForModel(messages, maxHistoryChars)),
-          tools: input.tools,
-          temperature: input.temperature,
-          maxTokens: input.maxTokens,
-        });
+        captured.output = await runRound();
       } finally {
         off();
         queue.close();
