@@ -1,0 +1,135 @@
+/**
+ * @license
+ * Copyright 2026 Steven Roussey <sroussey@gmail.com>
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import type { AiSessionContext, ToolCallingTaskInput, ToolCallingTaskOutput } from "@workglow/ai";
+import { accumulatingEmit } from "@workglow/ai";
+import type { StreamEvent } from "@workglow/task-graph";
+import { expectNoFinishAccumulation } from "@workglow/test-contract/ai-provider";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearPipelineCache,
+  getPipelineCacheKey,
+  loadTransformersSDK,
+  pipelines,
+} from "../../../../../providers/huggingface-transformers/src/ai/common/HFT_Pipeline";
+import { HFT_ToolCalling } from "../../../../../providers/huggingface-transformers/src/ai/common/HFT_ToolCalling";
+
+// "qwen" in the path selects the Hermes-style `<tool_call>` parser family.
+const model = {
+  model_id: "hft-test-qwen",
+  provider: "HF_TRANSFORMERS_ONNX",
+  provider_config: { model_path: "test-org/qwen-fake", pipeline: "text-generation" },
+} as never;
+const cacheKey = getPipelineCacheKey(model);
+
+const PREAMBLE = "Let me check the weather.";
+/**
+ * What the fake model decodes, in the pieces the streamer hands them over.
+ * The open tag is split across pieces so the markup filter has to hold a
+ * partial tag back rather than leak it onto the text port.
+ */
+const PIECES: readonly string[] = [
+  "Let me check ",
+  "the weather.<tool",
+  '_call>{"name": "get_weather", ',
+  '"arguments": {"city": "Paris"}}</tool_call>',
+];
+
+function makeFakePipeline(): any {
+  const tokenizer = Object.assign((text: string) => ({ input_ids: { dims: [1, text.length] } }), {
+    all_special_ids: [] as number[],
+    apply_chat_template: () => "<user>What is the weather?</user>\n<assistant>",
+    decode: () => "",
+  });
+  const hfModel = {
+    generate: async (args: Record<string, any>) => {
+      for (const piece of PIECES) args.streamer?.callback_function?.(piece);
+      return { dims: [1, args.input_ids.dims[1]] };
+    },
+  };
+  const pipeline: any = async (prompt: string, opts: Record<string, unknown>) => {
+    await hfModel.generate({ ...tokenizer(prompt), ...opts });
+    return [{ generated_text: "" }];
+  };
+  pipeline.tokenizer = tokenizer;
+  pipeline.model = hfModel;
+  return pipeline;
+}
+
+const input = {
+  model,
+  prompt: "What is the weather in Paris?",
+  tools: [
+    {
+      name: "get_weather",
+      description: "Look up the weather",
+      inputSchema: {
+        type: "object",
+        properties: { city: { type: "string" } },
+        required: ["city"],
+      },
+    },
+  ],
+  toolChoice: "auto",
+} as unknown as ToolCallingTaskInput;
+
+async function run(sessionContext: AiSessionContext | undefined): Promise<{
+  readonly events: StreamEvent<never>[];
+  readonly output: ToolCallingTaskOutput;
+}> {
+  const events: StreamEvent<never>[] = [];
+  const accumulator = accumulatingEmit<ToolCallingTaskOutput>();
+  await HFT_ToolCalling(
+    input,
+    model,
+    new AbortController().signal,
+    (event) => {
+      events.push(event as StreamEvent<never>);
+      accumulator.emit(event);
+    },
+    undefined,
+    sessionContext
+  );
+  return { events, output: accumulator.result() };
+}
+
+beforeAll(async () => {
+  await loadTransformersSDK();
+});
+
+beforeEach(async () => {
+  await clearPipelineCache();
+  pipelines.set(cacheKey, makeFakePipeline());
+});
+
+afterEach(async () => {
+  await clearPipelineCache();
+});
+
+describe("HFT_ToolCalling stream output", () => {
+  it.each([
+    ["without a session", undefined],
+    ["with a fingerprint session", { sessionId: "hft-tool-fp" }],
+  ] as const)("streams text and a tool call %s, and finish carries neither", async (_, ctx) => {
+    const { events, output } = await run(ctx);
+
+    expectNoFinishAccumulation(events);
+
+    // The stream alone carries the answer: the markup is filtered off the text
+    // port and the parsed call arrives as an object-delta.
+    const text = events
+      .filter((e) => e.type === "text-delta" && e.port === "text")
+      .map((e) => (e as { textDelta: string }).textDelta)
+      .join("");
+    expect(text).toBe(PREAMBLE);
+    expect(events.some((e) => e.type === "object-delta" && e.port === "toolCalls")).toBe(true);
+
+    expect(output.text).toBe(PREAMBLE);
+    expect(output.toolCalls).toEqual([
+      { id: expect.any(String), name: "get_weather", input: { city: "Paris" } },
+    ]);
+  });
+});
