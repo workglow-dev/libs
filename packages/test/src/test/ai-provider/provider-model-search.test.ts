@@ -98,12 +98,16 @@ describe("provider model search samples", () => {
     expect(embedding?.record?.effort_options).toEqual([]);
   });
 
-  test("DeepSeek fallback stamps effort_options for v4", async () => {
+  test("DeepSeek fallback stamps effort_options on its reasoning models", async () => {
     const { results } = (await collectStream(
-      await runFnToIterable(DeepSeek_ModelSearch, { query: "deepseek-v4-flash" })
+      await runFnToIterable(DeepSeek_ModelSearch, { query: "deepseek" })
     )) as { results: Array<{ id: string; record?: { effort_options?: string[] } }> };
-    const flash = results.find((r) => r.id === "deepseek-v4-flash");
-    expect(flash?.record?.effort_options).toEqual([...MODEL_EFFORTS]);
+    expect(results.find((r) => r.id === "deepseek-flash")?.record?.effort_options).toEqual([
+      ...MODEL_EFFORTS,
+    ]);
+    expect(results.find((r) => r.id === "deepseek-v4-pro")?.record?.effort_options).toEqual([
+      ...MODEL_EFFORTS,
+    ]);
   });
 
   test("OpenRouter mapper stamps all six effort_options", () => {
@@ -139,10 +143,11 @@ describe("provider model search samples", () => {
     );
   });
 
-  test("DeepSeek fallback includes the V4 Pro 0813 GA snapshot", async () => {
-    await expect(modelIdsForSearch(DeepSeek_ModelSearch, "0813")).resolves.toContain(
-      "deepseek-v4-pro-0813"
-    );
+  test("DeepSeek fallback offers only ids the API still serves", async () => {
+    const ids = await modelIdsForSearch(DeepSeek_ModelSearch, "deepseek");
+    expect(ids).toContain("deepseek-v4-pro");
+    expect(ids).not.toContain("deepseek-v4-flash");
+    expect(ids).not.toContain("deepseek-v4-pro-0813");
   });
 
   test("Gemini static list includes current text, image, and embedding samples", async () => {

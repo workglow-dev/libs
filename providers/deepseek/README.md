@@ -38,19 +38,19 @@ await registerDeepSeekInline();
 
 // 2. Register a DeepSeek model
 await getGlobalModelRepository().addModel({
-  model_id: "deepseek:deepseek-v4-flash",
-  title: "DeepSeek V4 Flash",
-  description: "DeepSeek V4 Flash",
+  model_id: "deepseek:deepseek-flash",
+  title: "DeepSeek Flash",
+  description: "DeepSeek Flash",
   capabilities: ["text.generation", "tool-use", "json-mode"],
   provider: DEEPSEEK,
-  provider_config: { model_name: "deepseek-v4-flash" },
+  provider_config: { model_name: "deepseek-flash" },
   metadata: {},
 });
 
 // 3. Use it in a workflow
 const workflow = new Workflow();
 workflow.addTask(TextGenerationTask, {
-  model: "deepseek:deepseek-v4-flash",
+  model: "deepseek:deepseek-flash",
   prompt: "Hello world!",
 });
 

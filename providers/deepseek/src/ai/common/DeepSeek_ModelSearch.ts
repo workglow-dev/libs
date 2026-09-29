@@ -22,10 +22,14 @@ interface DeepSeekModelListItem {
   readonly description?: string;
 }
 
+/**
+ * Offered when the live list cannot be fetched (no key yet), so every entry must
+ * be an id the API serves: picking one is otherwise a guaranteed "model not
+ * found". `deepseek-v4-flash` and the `deepseek-v4-pro-0813` snapshot were
+ * retired from the API's model list.
+ */
 const DEEPSEEK_FALLBACK: Array<{ label: string; value: string }> = [
   { label: "deepseek-flash", value: "deepseek-flash" },
-  { label: "deepseek-v4-pro-0813", value: "deepseek-v4-pro-0813" },
-  { label: "deepseek-v4-flash", value: "deepseek-v4-flash" },
   { label: "deepseek-v4-pro", value: "deepseek-v4-pro" },
 ];
 

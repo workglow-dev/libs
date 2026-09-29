@@ -22,8 +22,7 @@ export const DeepSeekModelSchema = {
       properties: {
         model_name: {
           type: "string",
-          description:
-            "The DeepSeek model identifier (e.g., 'deepseek-v4-flash', 'deepseek-v4-pro').",
+          description: "The DeepSeek model identifier (e.g., 'deepseek-flash', 'deepseek-v4-pro').",
         },
         credential_key: {
           type: "string",
