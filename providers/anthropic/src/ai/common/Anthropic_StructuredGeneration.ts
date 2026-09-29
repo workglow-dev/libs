@@ -13,6 +13,11 @@ import { createUsageSnapshotEmitter } from "@workglow/ai/provider-utils";
 import { createPartialJsonStream } from "@workglow/util/worker";
 import { getClient, getMaxTokens, getModelName } from "./Anthropic_Client";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
+import {
+  anthropicJsonSchemaFormat,
+  anthropicSupportsOutputFormat,
+  toAnthropicOutputSchema,
+} from "./Anthropic_OutputFormat";
 import { maybeEmitAnthropicRefusal } from "./Anthropic_Refusal";
 import { anthropicAcceptsForcedToolChoice } from "./Anthropic_RequestParams";
 import { applyAnthropicThinkingParams } from "./Anthropic_Thinking";
@@ -21,14 +26,17 @@ import { createAnthropicUsageCollector } from "./Anthropic_Usage";
 /**
  * Streaming run-fn for the `["text.generation", "json-mode"]` capability.
  *
- * Anthropic implements structured generation via tool-use under the hood:
- * a synthetic `structured_output` tool forces the model to emit JSON conforming
- * to the output schema. The `input_json_delta` stream events are fed to an
- * incremental parser and yielded as `object-delta` for consumers that want
- * progressive updates. The final `finish` event carries the parsed object in
- * `finish.data.object` per the streaming-convention exception for structured
- * generation: it is the definitive object `StructuredGenerationTask` validates
- * against the schema and retries on.
+ * Two routes to the same output. Where the model accepts it, native structured
+ * outputs: `output_config.format` constrains the reply to the schema as it is
+ * generated, and the JSON arrives as ordinary text. Elsewhere — an older model,
+ * or a schema the decoder cannot express — a synthetic `structured_output`
+ * tool, whose arguments are the object.
+ *
+ * Either way the deltas feed an incremental parser, yielded as `object-delta`
+ * for consumers that want progressive updates, and the `finish` event carries
+ * the parsed object in `finish.data.object` per the streaming-convention
+ * exception for structured generation: it is the definitive object
+ * `StructuredGenerationTask` validates against the full schema and retries on.
  */
 export const Anthropic_StructuredGeneration_Stream: AiProviderRunFn<
   StructuredGenerationTaskInput,
@@ -39,6 +47,44 @@ export const Anthropic_StructuredGeneration_Stream: AiProviderRunFn<
   const modelName = getModelName(model);
 
   const schema = input.outputSchema ?? outputSchema;
+
+  const native = anthropicSupportsOutputFormat(model) ? toAnthropicOutputSchema(schema) : undefined;
+  if (native !== undefined) {
+    const params: Record<string, unknown> = {
+      model: modelName,
+      messages: [{ role: "user", content: input.prompt as string }],
+      output_config: { format: anthropicJsonSchemaFormat(native) },
+      max_tokens: getMaxTokens(input, model),
+    };
+    // Merges effort into `output_config` beside the format rather than over it.
+    applyAnthropicThinkingParams(params, model);
+
+    const stream = (client.messages.stream as (p: unknown, o: unknown) => AsyncIterable<unknown>)(
+      params,
+      { signal }
+    );
+    const json = createPartialJsonStream();
+    const usageCollector = createAnthropicUsageCollector();
+    const snapshotUsage = createUsageSnapshotEmitter(emit);
+    for await (const event of stream) {
+      usageCollector.observe(event);
+      snapshotUsage(usageCollector.result());
+      maybeEmitAnthropicRefusal(event, emit);
+      const e = event as { type: string; delta?: { type?: string; text?: string } };
+      if (e.type === "content_block_delta" && e.delta?.type === "text_delta") {
+        const partial = json.push(e.delta.text ?? "");
+        if (partial !== undefined) {
+          emit({ type: "object-delta", port: "object", objectDelta: partial });
+        }
+      }
+    }
+    emit({
+      type: "finish",
+      data: { object: json.finishObject() } as StructuredGenerationTaskOutput,
+      usage: usageCollector.result(),
+    });
+    return;
+  }
 
   // Newer models reject a forced tool choice with a 400. There the tool is
   // offered on `auto` with an instruction to call it, and a reply that answers

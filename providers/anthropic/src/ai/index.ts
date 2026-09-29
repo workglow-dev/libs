@@ -18,6 +18,10 @@ import { AnthropicQueuedProvider } from "./AnthropicQueuedProvider";
 import { ANTHROPIC_RUN_FN_SPECS } from "./common/Anthropic_Capabilities";
 import { _testOnly as clientTestOnly } from "./common/Anthropic_Client";
 import { ANTHROPIC_RUN_FNS } from "./common/Anthropic_JobRunFns";
+import {
+  anthropicSupportsOutputFormat,
+  toAnthropicOutputSchema,
+} from "./common/Anthropic_OutputFormat";
 import { maybeEmitAnthropicRefusal } from "./common/Anthropic_Refusal";
 import {
   anthropicAcceptsForcedToolChoice,
@@ -40,6 +44,8 @@ export const _testOnly = {
   ANTHROPIC_RUN_FNS,
   maybeEmitAnthropicRefusal,
   anthropicAcceptsForcedToolChoice,
+  anthropicSupportsOutputFormat,
+  toAnthropicOutputSchema,
   anthropicAcceptsSamplingParams,
   applyAnthropicSamplingParams,
   anthropicSupportsAdaptiveThinking,

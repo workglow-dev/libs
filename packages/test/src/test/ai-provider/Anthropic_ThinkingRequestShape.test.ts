@@ -89,9 +89,10 @@ describe("Anthropic legacy thinking request shape", () => {
     expect("top_p" in params).toBe(false);
   });
 
-  it("omits thinking entirely on the structured-generation path", async () => {
+  it("omits thinking entirely on the structured-generation tool path", async () => {
     const runFn = findRunFn(["text.generation", "json-mode"]);
-    const model = modelConfig("high");
+    // Sonnet 4.5 has no native structured outputs, so it takes the forced tool.
+    const model = modelConfig("high", "claude-sonnet-4-5");
     await runFn(
       { model, prompt: "hi" } as never,
       model,
@@ -102,8 +103,8 @@ describe("Anthropic legacy thinking request shape", () => {
 
     expect(captured).toHaveLength(1);
     const params = captured[0]!;
-    // Structured generation always forces `tool_choice: {type: "tool"}`, which
-    // cannot carry legacy extended thinking.
+    // The tool route forces `tool_choice: {type: "tool"}`, which cannot carry
+    // legacy extended thinking.
     expect(params.tool_choice).toEqual({ type: "tool", name: "structured_output" });
     expect("thinking" in params).toBe(false);
   });
@@ -164,12 +165,14 @@ describe("Anthropic legacy thinking request shape", () => {
   it("offers the structured-output tool on auto where forced tool choice is a 400", async () => {
     const runFn = findRunFn(["text.generation", "json-mode"]);
     const model = modelConfig("high", "claude-opus-5-5");
+    // A map-shaped object has no native structured-output form, so even a model
+    // that supports it takes the tool route, and this one cannot force it.
     await runFn(
       { model, prompt: "hi" } as never,
       model,
       undefined as never,
       (() => {}) as never,
-      { type: "object", properties: { a: { type: "string" } } } as never
+      { type: "object", additionalProperties: { type: "string" } } as never
     );
 
     const params = captured[0]!;
@@ -202,5 +205,107 @@ describe("Anthropic legacy thinking request shape", () => {
     await runFn({ model, prompt: "hi" } as never, model, undefined as never, (() => {}) as never);
 
     expect(captured[0]).toMatchObject(expected);
+  });
+});
+
+describe("Anthropic native structured outputs", () => {
+  let captured: Record<string, unknown>[];
+  let replyText: string;
+
+  beforeEach(() => {
+    captured = [];
+    replyText = "";
+    vi.spyOn(getLogger(), "warn").mockImplementation(() => {});
+    const fakeClient = {
+      messages: {
+        stream: (params: Record<string, unknown>) => {
+          captured.push(params);
+          const chunks = [replyText.slice(0, 5), replyText.slice(5)].filter((c) => c !== "");
+          return {
+            async *[Symbol.asyncIterator]() {
+              for (const text of chunks) {
+                yield { type: "content_block_delta", delta: { type: "text_delta", text } };
+              }
+            },
+          };
+        },
+      },
+    };
+    setAnthropicClientForTests(fakeClient);
+    runtimeTestOnly.setAnthropicClientForTests?.(fakeClient);
+  });
+
+  afterEach(() => {
+    setAnthropicClientForTests(undefined);
+    runtimeTestOnly.setAnthropicClientForTests?.(undefined);
+    vi.restoreAllMocks();
+  });
+
+  const SCHEMA = {
+    type: "object",
+    properties: { name: { type: "string", maxLength: 200 }, age: { type: "integer", minimum: 0 } },
+    required: ["name"],
+  };
+
+  it("constrains the reply with output_config.format and offers no tool", async () => {
+    const runFn = findRunFn(["text.generation", "json-mode"]);
+    const model = modelConfig("high", "claude-opus-5-5");
+    await runFn(
+      { model, prompt: "hi" } as never,
+      model,
+      undefined as never,
+      (() => {}) as never,
+      SCHEMA as never
+    );
+
+    const params = captured[0]!;
+    expect("tools" in params).toBe(false);
+    expect("tool_choice" in params).toBe(false);
+    const outputConfig = params.output_config as Record<string, unknown>;
+    // Effort sits beside the format rather than replacing it.
+    expect(outputConfig.effort).toBeDefined();
+    expect(outputConfig.format).toEqual({
+      type: "json_schema",
+      schema: {
+        type: "object",
+        properties: { name: { type: "string" }, age: { type: "integer" } },
+        required: ["name"],
+        additionalProperties: false,
+      },
+    });
+  });
+
+  it("keeps thinking, which a forced tool could not carry", async () => {
+    const runFn = findRunFn(["text.generation", "json-mode"]);
+    const model = modelConfig("high");
+    await runFn(
+      { model, prompt: "hi" } as never,
+      model,
+      undefined as never,
+      (() => {}) as never,
+      SCHEMA as never
+    );
+    const params = captured[0]!;
+    expect((params.output_config as Record<string, unknown>).format).toBeDefined();
+    expect(params.thinking).toEqual({ type: "enabled", budget_tokens: expect.any(Number) });
+  });
+
+  it("reads the object from the streamed text", async () => {
+    replyText = '{"name":"Jane Doe","age":41}';
+    const runFn = findRunFn(["text.generation", "json-mode"]);
+    const model = modelConfig("high", "claude-sonnet-5-5");
+    const events: { type: string; data?: { object?: unknown } }[] = [];
+    await runFn(
+      { model, prompt: "hi" } as never,
+      model,
+      undefined as never,
+      ((event: { type: string }) => events.push(event)) as never,
+      SCHEMA as never
+    );
+    expect(events.some((e) => e.type === "object-delta")).toBe(true);
+    expect(events.find((e) => e.type === "finish")?.data?.object).toEqual({
+      name: "Jane Doe",
+      age: 41,
+    });
   });
 });

@@ -159,5 +159,12 @@ export function applyAnthropicThinkingParams(
 
   params.max_tokens = built.max_tokens;
   if (built.thinking !== undefined) params.thinking = built.thinking;
-  if (built.output_config !== undefined) params.output_config = built.output_config;
+  // Merged, not assigned: `output_config` also carries a structured-output
+  // `format` set before this runs, which effort must not overwrite.
+  if (built.output_config !== undefined) {
+    params.output_config = {
+      ...((params.output_config as Record<string, unknown> | undefined) ?? {}),
+      ...built.output_config,
+    };
+  }
 }

@@ -207,7 +207,8 @@ export function applyAnthropicSamplingParams(
   });
 }
 
-function parsedModelName(model: AnthropicModelConfig | undefined) {
+/** The configured model's id, parsed, with any cloud-gateway prefix removed. */
+export function parsedModelName(model: AnthropicModelConfig | undefined) {
   const id = (model?.provider_config as { model_name?: string } | undefined)?.model_name ?? "";
   return parseAnthropicModelId(id.trim().replace(ANTHROPIC_GATEWAY_PREFIX, ""));
 }
