@@ -749,6 +749,97 @@ describe("evaluateSurfaceBump", () => {
       })
     ).toEqual({ ok: true, why: "unpublished" });
   });
+
+  // A schema const carries its documentation in the type, because the value is
+  // `as const`. Rewording an example in `description` changes that literal and
+  // nothing a caller has to implement or pass.
+  const schemaBefore = `export declare const ModelSchema: {
+    readonly type: "object";
+    readonly properties: {
+        readonly model_name: {
+            readonly type: "string";
+            readonly description: "The model identifier (e.g., 'claude-opus-5', 'claude-haiku-4-5').";
+        };
+    };
+};`;
+  const schemaAfter = schemaBefore.replace("'claude-opus-5'", "'claude-opus-5-5'");
+
+  it("passes a const schema whose only change is a description literal", () => {
+    const changes = diff({ "dist/S.d.ts": schemaBefore }, { "dist/S.d.ts": schemaAfter });
+    expect(summary(changes)).toEqual(["changed const ModelSchema"]);
+    expect(verdictFor(changes)).toEqual({ ok: true, why: "non-breaking" });
+  });
+
+  it("still refuses a description literal change on an interface", () => {
+    const before = `export interface Card {
+    readonly description: "old example";
+    readonly title: string;
+}`;
+    const after = before.replace('"old example"', '"new example"');
+    const verdict = verdictFor(diff({ "dist/C.d.ts": before }, { "dist/C.d.ts": after }));
+    expect(verdict.ok).toBe(false);
+    expect(verdict.ok === false && verdict.changes.map((c) => c.key)).toEqual(["interface Card"]);
+  });
+
+  it("still refuses a string-literal union change", () => {
+    const before = `export type ModelId = "claude-opus-5" | "claude-haiku-4-5";`;
+    const after = before.replace('"claude-opus-5"', '"claude-opus-5-5"');
+    expect(verdictFor(diff({ "dist/M.d.ts": before }, { "dist/M.d.ts": after })).ok).toBe(false);
+  });
+
+  it("still refuses a description whose type is a string union", () => {
+    const before = `export declare const ModelSchema: {
+    readonly description: "a" | "b";
+};`;
+    const after = before.replace('"a"', '"c"');
+    expect(verdictFor(diff({ "dist/S.d.ts": before }, { "dist/S.d.ts": after })).ok).toBe(false);
+  });
+
+  it("still refuses a const schema that changes a description and a real field", () => {
+    const after = schemaAfter.replace('readonly type: "string";', 'readonly type: "number";');
+    const verdict = verdictFor(diff({ "dist/S.d.ts": schemaBefore }, { "dist/S.d.ts": after }));
+    expect(verdict.ok).toBe(false);
+    expect(verdict.ok === false && verdict.changes.map((c) => c.key)).toEqual([
+      "const ModelSchema",
+    ]);
+  });
+
+  const testOnlyBefore = `export declare const _testOnly: {
+    readonly ANTHROPIC_RUN_FN_SPECS: {
+        serves: ["text.generation"] | ["text.generation", "tool-use"];
+    }[];
+    readonly setClient: (client: unknown) => void;
+};`;
+
+  it("passes a _testOnly const that only gains members", () => {
+    const inserted = testOnlyBefore.replace(
+      "readonly setClient:",
+      "readonly acceptsForced: typeof acceptsForced;\n    readonly setClient:"
+    );
+    const appended = testOnlyBefore.replace(
+      "readonly setClient: (client: unknown) => void;",
+      "readonly setClient: (client: unknown) => void;\n    readonly toSchema: typeof toSchema;"
+    );
+    for (const after of [inserted, appended]) {
+      const changes = diff({ "dist/I.d.ts": testOnlyBefore }, { "dist/I.d.ts": after });
+      expect(summary(changes)).toEqual(["changed const _testOnly"]);
+      expect(verdictFor(changes)).toEqual({ ok: true, why: "non-breaking" });
+    }
+  });
+
+  it("still refuses a _testOnly const that drops or retypes a member", () => {
+    const dropped = testOnlyBefore.replace(
+      "    readonly setClient: (client: unknown) => void;\n",
+      ""
+    );
+    const retyped = testOnlyBefore.replace("(client: unknown) => void", "(client: string) => void");
+    expect(verdictFor(diff({ "dist/I.d.ts": testOnlyBefore }, { "dist/I.d.ts": dropped })).ok).toBe(
+      false
+    );
+    expect(verdictFor(diff({ "dist/I.d.ts": testOnlyBefore }, { "dist/I.d.ts": retyped })).ok).toBe(
+      false
+    );
+  });
 });
 
 describe("isBelowBreakSlot", () => {

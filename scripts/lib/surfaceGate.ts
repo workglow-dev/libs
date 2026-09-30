@@ -1132,6 +1132,7 @@ export type SurfaceBumpVerdict =
         | "already-published"
         | "unchanged"
         | "additive"
+        | "non-breaking"
         | "break-slot"
         | "declared-breaking";
     }
@@ -1143,6 +1144,179 @@ export type SurfaceBumpVerdict =
       readonly changes: readonly SurfaceChange[];
     };
 
+function isWord(c: string | undefined): boolean {
+  return c !== undefined && WORD_CHAR.test(c);
+}
+
+/**
+ * A `description` property typed as one string literal, replaced with `""`.
+ *
+ * The property name has to be the whole identifier, and the literal has to be
+ * the entire type (`description:"…";`, not `description:"a"|"b"`). Anything
+ * else is a signature and stays visible to the comparison.
+ */
+function eraseDescriptionLiterals(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === '"' || c === "'" || c === "`") {
+      const end = skipQuoted(text, i);
+      out += text.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (c === "d" && text.startsWith("description", i) && !isWord(text[i - 1])) {
+      let j = i + "description".length;
+      if (text[j] === "?") j++;
+      if (text[j] === ":") {
+        const quote = text[j + 1];
+        if (quote === '"' || quote === "'" || quote === "`") {
+          const end = skipQuoted(text, j + 1);
+          const next = text[end];
+          if (next === ";" || next === "," || next === "}") {
+            out += `${text.slice(i, j + 1)}${quote}${quote}`;
+            i = end;
+            continue;
+          }
+        }
+      }
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/**
+ * Depth-1 members of the object type opening at `open` (`{`), and the index
+ * just past its closing brace. `undefined` when that brace does not close or a
+ * member is not `name: type`.
+ */
+function parseObjectMembers(
+  text: string,
+  open: number
+): { readonly members: readonly string[]; readonly end: number } | undefined {
+  if (text[open] !== "{") return undefined;
+  const members: string[] = [];
+  let i = open + 1;
+  while (i < text.length) {
+    while (i < text.length && /\s/.test(text[i]!)) i++;
+    if (text[i] === "}") return { members, end: i + 1 };
+    let sig = "";
+    if (text.startsWith("readonly ", i)) {
+      sig = "readonly ";
+      i += "readonly ".length;
+    }
+    const name = /^[\w$]+/.exec(text.slice(i));
+    if (name === null) return undefined;
+    sig += name[0];
+    i += name[0].length;
+    if (text[i] === "?") {
+      sig += "?";
+      i++;
+    }
+    if (text[i] !== ":") return undefined;
+    sig += ":";
+    i++;
+    const typeStart = i;
+    let depth = 1;
+    while (i < text.length) {
+      const c = text[i]!;
+      if (c === '"' || c === "'" || c === "`") {
+        i = skipQuoted(text, i);
+        continue;
+      }
+      if (c === "{" || c === "(" || c === "[" || c === "<") {
+        depth++;
+        i++;
+        continue;
+      }
+      if (c === "}" || c === ")" || c === "]" || (c === ">" && text[i - 1] !== "=")) {
+        if (c === "}" && depth === 1) break;
+        depth--;
+        i++;
+        continue;
+      }
+      if ((c === ";" || c === ",") && depth === 1) break;
+      i++;
+    }
+    sig += text.slice(typeStart, i);
+    members.push(sig);
+    if (text[i] === ";" || text[i] === ",") i++;
+  }
+  return undefined;
+}
+
+/** Every `const _testOnly` object, bodies removed, plus the members those bodies held. */
+function testOnlyShape(
+  text: string
+): { readonly skeleton: string; readonly members: readonly string[] } | undefined {
+  const needle = "const _testOnly:{";
+  const members: string[] = [];
+  let skeleton = "";
+  let i = 0;
+  let found = 0;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === '"' || c === "'" || c === "`") {
+      const end = skipQuoted(text, i);
+      skeleton += text.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (text.startsWith(needle, i) && !isWord(text[i - 1])) {
+      const open = i + needle.length - 1;
+      const parsed = parseObjectMembers(text, open);
+      if (parsed === undefined) return undefined;
+      found++;
+      skeleton += "const _testOnly:{}";
+      members.push(...parsed.members);
+      i = parsed.end;
+      continue;
+    }
+    skeleton += c;
+    i++;
+  }
+  return found === 0 ? undefined : { skeleton, members };
+}
+
+function memberCounts(members: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const member of members) counts.set(member, (counts.get(member) ?? 0) + 1);
+  return counts;
+}
+
+/**
+ * `before`'s `_testOnly` members are still there, unchanged, and `after` has
+ * more. A retype, a removal, or a change outside the object body is not.
+ */
+function isAdditiveTestOnly(before: string, after: string): boolean {
+  const oldShape = testOnlyShape(before);
+  const newShape = testOnlyShape(after);
+  if (oldShape === undefined || newShape === undefined) return false;
+  if (oldShape.skeleton !== newShape.skeleton) return false;
+  if (newShape.members.length <= oldShape.members.length) return false;
+  const counts = memberCounts(newShape.members);
+  for (const member of oldShape.members) {
+    const n = counts.get(member) ?? 0;
+    if (n === 0) return false;
+    counts.set(member, n - 1);
+  }
+  return true;
+}
+
+function isNonBreakingSurfaceChange(change: SurfaceChange): boolean {
+  if (change.kind !== "changed") return false;
+  if (
+    change.key.startsWith("const ") &&
+    eraseDescriptionLiterals(change.before) === eraseDescriptionLiterals(change.after)
+  ) {
+    return true;
+  }
+  return change.key === "const _testOnly" && isAdditiveTestOnly(change.before, change.after);
+}
+
 /**
  * Refuses a release that changes or removes a published declaration while its
  * number stays inside the previous version's caret range, unless the package's
@@ -1152,12 +1326,23 @@ export type SurfaceBumpVerdict =
  * depended on its absence, and so does a `moved` one, whose signature the
  * package it moved to answers for. A new member of an existing interface does
  * not — see {@link diffSurfaces}.
+ *
+ * Two edits that show up as a changed declaration are not breaks. A `const`
+ * schema's `description` is one string literal of documentation, present in
+ * the type only because the value is `as const`; rewording it changes no
+ * signature a caller implements or passes. And `const _testOnly` is an internal
+ * bag of test helpers: a new member does not make an existing call fail.
+ * Dropping or retyping one still refuses, as does a `description` whose type
+ * is anything other than a single string literal.
  */
 export function evaluateSurfaceBump(input: SurfaceBumpInput): SurfaceBumpVerdict {
   if (input.previousVersion === undefined) return { ok: true, why: "unpublished" };
   if (input.changes.length === 0) return { ok: true, why: "unchanged" };
-  const breaking = input.changes.filter((c) => c.kind === "removed" || c.kind === "changed");
-  if (breaking.length === 0) return { ok: true, why: "additive" };
+  const structural = input.changes.filter((c) => c.kind === "removed" || c.kind === "changed");
+  const breaking = structural.filter((c) => !isNonBreakingSurfaceChange(c));
+  if (breaking.length === 0) {
+    return { ok: true, why: structural.length === 0 ? "additive" : "non-breaking" };
+  }
   if (!isBelowBreakSlot(input.previousVersion, input.nextVersion)) {
     return { ok: true, why: "break-slot" };
   }
