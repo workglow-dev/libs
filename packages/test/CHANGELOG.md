@@ -1,5 +1,36 @@
 # @workglow/test
 
+## 0.6.11
+
+### Features
+
+#### deepseek
+
+- update model identifiers and improve fallback logic
+
+#### anthropic
+
+- introduce output format support and structured output schema handling (the right way)
+- default an unset effort to adaptive thinking on Claude 5+
+
+#### providers
+
+- refresh Claude, GPT-6 and Gemini Flash models and prices
+
+### Bug Fixes
+
+#### tasks
+
+- keep the response body's error text in HTTP fetch errors
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `miniflare`: ^5.20260926.1-alpha
+
 ## 0.6.10
 
 ### Features

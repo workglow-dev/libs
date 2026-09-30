@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.11
+
+### Features
+
+#### providers
+
+- refresh Claude, GPT-6 and Gemini Flash models and prices
+
 ## 0.6.10
 
 _No changes in this package._

@@ -1,5 +1,13 @@
 # @workglow/tasks
 
+## 0.6.11
+
+### Bug Fixes
+
+#### tasks
+
+- keep the response body's error text in HTTP fetch errors
+
 ## 0.6.10
 
 _No changes in this package._

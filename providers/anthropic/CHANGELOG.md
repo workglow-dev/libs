@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.11
+
+### Features
+
+#### anthropic
+
+- introduce output format support and structured output schema handling (the right way)
+- default an unset effort to adaptive thinking on Claude 5+
+
+#### providers
+
+- refresh Claude, GPT-6 and Gemini Flash models and prices
+
 ## 0.6.10
 
 _No changes in this package._

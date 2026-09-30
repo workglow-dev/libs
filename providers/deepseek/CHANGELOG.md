@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.11
+
+### Features
+
+#### deepseek
+
+- update model identifiers and improve fallback logic
+
 ## 0.6.10
 
 _No changes in this package._
