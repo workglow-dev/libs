@@ -100,6 +100,7 @@ function gptImageCard(): ModelPricing {
  */
 export const OPENAI_PRICING: Record<string, ModelPricing> = {
   "gpt-6-astra": flagshipCard({ input: 10, output: 50, cached: 1, cacheWrite: 12.5 }),
+  "gpt-6.1-sol": flagshipCard({ input: 2, output: 10, cached: 0.1, cacheWrite: 2.5 }),
   "gpt-6-sol": flagshipCard({ input: 2, output: 10, cached: 0.2, cacheWrite: 2.5 }),
   "gpt-6-luna": flagshipCard({ input: 0.1, output: 0.5, cached: 0.01, cacheWrite: 0.125 }),
   "gpt-5.6-sol": flagshipCard({ input: 4, output: 20, cached: 0.4, cacheWrite: 5 }),

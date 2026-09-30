@@ -50,8 +50,22 @@ export function warnStrictDowngradedOnce(model: string, reason: string): void {
   );
 }
 
-/** @internal test helper — clear both dedupe sets. */
+const warnedTemperatureDrops = new Set<string>();
+
+export function warnTemperatureDroppedOnce(model: string, effort: string | undefined): void {
+  const key = `${model}::${effort ?? ""}`;
+  if (warnedTemperatureDrops.has(key)) return;
+  warnedTemperatureDrops.add(key);
+  getLogger().warn(
+    `OpenAI model "${model}" rejects temperature alongside reasoning` +
+      (effort ? ` effort "${effort}"` : "") +
+      `; the pinned temperature has been dropped.`
+  );
+}
+
+/** @internal test helper — clear all dedupe sets. */
 export function _resetOpenAIResponsesWarnings(): void {
+  warnedTemperatureDrops.clear();
   warnedPenaltyDrops.clear();
   warnedStrictDownshifts.clear();
 }

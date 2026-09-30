@@ -5,8 +5,30 @@
  */
 
 import { _testOnly } from "@workglow/openai/ai";
-import { describe, expect, it } from "vitest";
-const { finalizeResponsesRequest } = _testOnly;
+import { setLogger } from "@workglow/util";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const { finalizeResponsesRequest, _resetOpenAIResponsesWarnings } = _testOnly;
+
+const warn = vi.fn();
+const logger = {
+  debug: () => {},
+  info: () => {},
+  warn,
+  error: () => {},
+  fatal: () => {},
+  child: () => logger,
+  time: () => {},
+  timeEnd: () => {},
+  group: () => {},
+  groupEnd: () => {},
+};
+
+beforeEach(() => {
+  warn.mockClear();
+  _resetOpenAIResponsesWarnings();
+  setLogger(logger as never);
+});
+afterEach(() => setLogger(undefined as never));
 
 /**
  * `temperature` and `reasoning` are not independently selectable on the OpenAI
@@ -30,10 +52,20 @@ describe("finalizeResponsesRequest on a reasoning model", () => {
     expect(params.reasoning).toEqual({ effort: "medium" });
   });
 
-  it("sends the default and drops a pinned temperature rather than turning reasoning off", () => {
-    const params = finalizeResponsesRequest(luna(), { model: "gpt-5.6-luna", temperature: 0.7 });
+  it("turns reasoning off to honour a pinned temperature when no effort is configured", () => {
+    const params = finalizeResponsesRequest(luna(), { model: "gpt-5.6-luna", temperature: 0 });
+    expect(params).toMatchObject({ reasoning: { effort: "none" }, temperature: 0 });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps the default effort when effort_options leave none out, and warns on the drop", () => {
+    const params = finalizeResponsesRequest(luna({ effort_options: ["medium", "high"] }), {
+      model: "gpt-5.6-luna",
+      temperature: 0.7,
+    });
     expect(params.reasoning).toEqual({ effort: "medium" });
     expect(params.temperature).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("maps model.effort over the class default", () => {
@@ -48,6 +80,8 @@ describe("finalizeResponsesRequest on a reasoning model", () => {
     });
     expect(params.reasoning).toEqual({ effort: "high" });
     expect(params.temperature).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain("temperature");
   });
 
   it("keeps the temperature alongside an effort of none", () => {
@@ -80,6 +114,7 @@ describe("finalizeResponsesRequest on a model that cannot turn reasoning off", (
     const params = finalizeResponsesRequest(astra(), { model: "gpt-6-astra", temperature: 0.4 });
     expect(params.reasoning).toEqual({ effort: "medium" });
     expect(params.temperature).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("does not map model.effort none onto the request", () => {
@@ -127,5 +162,36 @@ describe("finalizeResponsesRequest on a model that takes no reasoning", () => {
     );
     expect("reasoning" in params).toBe(false);
     expect(params.temperature).toBe(0.4);
+  });
+});
+
+describe("finalizeResponsesRequest across model classes with a pinned temperature", () => {
+  it("drops it and warns on gpt-6.1-sol, which cannot turn reasoning off", () => {
+    const params = finalizeResponsesRequest(
+      { provider_config: { model_name: "gpt-6.1-sol" } } as never,
+      { model: "gpt-6.1-sol", temperature: 0 }
+    );
+    expect(params.reasoning).toEqual({ effort: "medium" });
+    expect(params.temperature).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops it and warns on an o-series model rather than sending effort none", () => {
+    const params = finalizeResponsesRequest({ provider_config: { model_name: "o3" } } as never, {
+      model: "o3",
+      temperature: 0,
+    });
+    expect(params.reasoning).toEqual({ effort: "medium" });
+    expect(params.temperature).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops it and warns on gpt-5.5 rather than sending effort none", () => {
+    const params = finalizeResponsesRequest(
+      { provider_config: { model_name: "gpt-5.5" } } as never,
+      { model: "gpt-5.5", temperature: 0 }
+    );
+    expect(params.reasoning).toEqual({ effort: "medium" });
+    expect(params.temperature).toBeUndefined();
   });
 });
