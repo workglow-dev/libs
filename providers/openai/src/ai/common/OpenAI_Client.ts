@@ -8,6 +8,7 @@ import { isBrowserLike, resolveApiKey, validateProviderBaseUrl } from "@workglow
 import { resolveEnabledEffort, type ModelEffort } from "@workglow/ai/worker";
 import { openaiEffortPolicy } from "./OpenAI_EffortPolicy";
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
+import { warnTemperatureDroppedOnce } from "./OpenAI_ResponsesWarnings";
 
 /** Maps coarse {@link ModelEffort} to OpenAI Responses `reasoning.effort`. */
 const EFFORT_TO_OPENAI: Record<ModelEffort, string> = {
@@ -193,8 +194,9 @@ export function resolvePromptCacheKey(
  *
  * `temperature` is rejected alongside any reasoning effort but `"none"` —
  * verified live against `gpt-5.6-luna` and `gpt-6-astra` — so it is dropped
- * whenever reasoning is on rather than failing the request. To sample at a
- * pinned temperature, set the effort to `none` on a model that allows it.
+ * whenever reasoning is on rather than failing the request, with a warning.
+ * A pinned temperature on a model that allows effort `none` and has no effort
+ * configured keeps reasoning off so the temperature is honoured.
  */
 export function finalizeResponsesRequest(
   model: OpenAiModelConfig | undefined,
@@ -202,12 +204,26 @@ export function finalizeResponsesRequest(
 ): Record<string, unknown> {
   const policy = openaiEffortPolicy(model);
   const fallback = resolveEnabledEffort({ ...model, effort: policy.default }, policy);
+  const configured = getReasoningConfig(model);
+  const canDisable =
+    policy.supported.includes("none") &&
+    resolveEnabledEffort({ ...model, effort: "none" }, policy) === "none";
   const reasoning =
-    getReasoningConfig(model) ??
-    (fallback !== undefined ? { effort: EFFORT_TO_OPENAI[fallback] } : undefined);
+    configured ??
+    (params.temperature !== undefined && canDisable
+      ? { effort: EFFORT_TO_OPENAI.none }
+      : fallback !== undefined
+        ? { effort: EFFORT_TO_OPENAI[fallback] }
+        : undefined);
   if (reasoning !== undefined) {
     params.reasoning = reasoning;
-    if (reasoning.effort !== "none") delete params.temperature;
+    if (reasoning.effort !== "none" && params.temperature !== undefined) {
+      warnTemperatureDroppedOnce(
+        String(params.model ?? model?.provider_config?.model_name ?? ""),
+        reasoning.effort
+      );
+      delete params.temperature;
+    }
   }
   params.prompt_cache_key = resolvePromptCacheKey(model, params);
   return params;

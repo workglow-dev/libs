@@ -27,6 +27,7 @@ import {
   _resetOpenAIResponsesWarnings,
   warnPenaltyDroppedOnce,
   warnStrictDowngradedOnce,
+  warnTemperatureDroppedOnce,
 } from "./common/OpenAI_ResponsesWarnings";
 import { isStrictCompatibleSchema } from "./common/OpenAI_StructuredGeneration";
 import { OpenAiQueuedProvider } from "./OpenAiQueuedProvider";
@@ -44,6 +45,7 @@ export const _testOnly = {
   isStrictCompatibleSchema,
   warnPenaltyDroppedOnce,
   warnStrictDowngradedOnce,
+  warnTemperatureDroppedOnce,
   _resetOpenAIResponsesWarnings,
   setOpenAIClientForTests: clientTestOnly.setOpenAIClientForTests,
 } as const;
