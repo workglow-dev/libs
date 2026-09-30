@@ -178,6 +178,10 @@ export function resolvePromptCacheKey(
   return `wg-${fnv1aHex(material)}`;
 }
 
+function getModelId(model: OpenAiModelConfig | undefined): string {
+  return model?.provider_config?.model_name ?? "";
+}
+
 /**
  * Applies the per-request Responses fields common to every OpenAI text run-fn:
  * the model's `reasoning` config and a stable `prompt_cache_key`. Mutates and
@@ -195,8 +199,9 @@ export function resolvePromptCacheKey(
  * `temperature` is rejected alongside any reasoning effort but `"none"` —
  * verified live against `gpt-5.6-luna` and `gpt-6-astra` — so it is dropped
  * whenever reasoning is on rather than failing the request, with a warning.
- * A pinned temperature on a model that allows effort `none` and has no effort
- * configured keeps reasoning off so the temperature is honoured.
+ * A pinned temperature with no effort configured keeps reasoning off only on
+ * the GPT-5.6 family, where `none` plus a temperature is accepted; any other
+ * model is not guessed at, so its temperature is dropped.
  */
 export function finalizeResponsesRequest(
   model: OpenAiModelConfig | undefined,
@@ -206,6 +211,7 @@ export function finalizeResponsesRequest(
   const fallback = resolveEnabledEffort({ ...model, effort: policy.default }, policy);
   const configured = getReasoningConfig(model);
   const canDisable =
+    /^gpt-5\.6/i.test(getModelId(model)) &&
     policy.supported.includes("none") &&
     resolveEnabledEffort({ ...model, effort: "none" }, policy) === "none";
   const reasoning =

@@ -247,6 +247,7 @@ describe("a rate card must match the model's billing unit", () => {
    */
   it.each([
     ["gpt-6-astra", 10, 12.5],
+    ["gpt-6.1-sol", 2, 2.5],
     ["gpt-5.6-sol", 4, 5],
     ["gpt-5.6-terra", 2, 2.5],
     ["gpt-5.6-luna", 0.2, 0.25],

@@ -75,6 +75,9 @@ describe("Gemini long-context pricing", () => {
 describe("OpenAI long-context pricing", () => {
   const longContext = [
     { id: "gpt-6-astra", short: 10, long: 20, longOutput: 75 },
+    { id: "gpt-6.1-sol", short: 2, long: 4, longOutput: 15 },
+    { id: "gpt-6-sol", short: 2, long: 4, longOutput: 15 },
+    { id: "gpt-6-luna", short: 0.1, long: 0.2, longOutput: 0.75 },
     { id: "gpt-5.6-sol", short: 4, long: 8, longOutput: 30 },
     { id: "gpt-5.6-terra", short: 2, long: 4, longOutput: 18 },
     { id: "gpt-5.6-luna", short: 0.2, long: 0.4, longOutput: 1.8 },

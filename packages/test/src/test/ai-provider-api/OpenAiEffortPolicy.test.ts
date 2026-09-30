@@ -40,6 +40,10 @@ describe("openaiEffortPolicy", () => {
     });
   });
 
+  it("treats gpt-6.1-sol like gpt-6", () => {
+    expect(openaiEffortPolicy(cfg("gpt-6.1-sol"))).toEqual(openaiEffortPolicy(cfg("gpt-6-astra")));
+  });
+
   it("returns no levels for embeddings, image, and gpt-4o", () => {
     expect(openaiEffortPolicy(cfg("text-embedding-3-small"))?.supported).toEqual([]);
     expect(openaiEffortPolicy(cfg("gpt-image-2"))?.supported).toEqual([]);

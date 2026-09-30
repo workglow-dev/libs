@@ -164,3 +164,34 @@ describe("finalizeResponsesRequest on a model that takes no reasoning", () => {
     expect(params.temperature).toBe(0.4);
   });
 });
+
+describe("finalizeResponsesRequest across model classes with a pinned temperature", () => {
+  it("drops it and warns on gpt-6.1-sol, which cannot turn reasoning off", () => {
+    const params = finalizeResponsesRequest(
+      { provider_config: { model_name: "gpt-6.1-sol" } } as never,
+      { model: "gpt-6.1-sol", temperature: 0 }
+    );
+    expect(params.reasoning).toEqual({ effort: "medium" });
+    expect(params.temperature).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops it and warns on an o-series model rather than sending effort none", () => {
+    const params = finalizeResponsesRequest({ provider_config: { model_name: "o3" } } as never, {
+      model: "o3",
+      temperature: 0,
+    });
+    expect(params.reasoning).toEqual({ effort: "medium" });
+    expect(params.temperature).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops it and warns on gpt-5.5 rather than sending effort none", () => {
+    const params = finalizeResponsesRequest(
+      { provider_config: { model_name: "gpt-5.5" } } as never,
+      { model: "gpt-5.5", temperature: 0 }
+    );
+    expect(params.reasoning).toEqual({ effort: "medium" });
+    expect(params.temperature).toBeUndefined();
+  });
+});
