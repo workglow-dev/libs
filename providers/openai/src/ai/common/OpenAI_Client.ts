@@ -224,8 +224,9 @@ export function finalizeResponsesRequest(
   if (reasoning !== undefined) {
     params.reasoning = reasoning;
     if (reasoning.effort !== "none" && params.temperature !== undefined) {
+      const requested = params.model;
       warnTemperatureDroppedOnce(
-        String(params.model ?? model?.provider_config?.model_name ?? ""),
+        typeof requested === "string" ? requested : getModelId(model),
         reasoning.effort
       );
       delete params.temperature;
