@@ -53,7 +53,7 @@ export interface ModelUsageTier {
 
 /**
  * A rate card that replaces the base one inside a daily clock window, which is
- * how time-of-day discounts are published (DeepSeek's runs 16:30-00:30 UTC).
+ * how time-of-day discounts are published (DeepSeek's off-peak hours are an example).
  *
  * `start` and `end` are `HH:MM` in **UTC** — providers publish these windows in
  * UTC and a local-time reading would silently misprice by the host's offset.

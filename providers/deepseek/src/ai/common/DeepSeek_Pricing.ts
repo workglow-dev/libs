@@ -8,12 +8,20 @@ import type { ModelPricing, ModelTimingTier } from "@workglow/ai";
 import { resolveModelPricingFromTable } from "@workglow/ai";
 
 /**
- * DeepSeek's nightly discount, published as 16:30-00:30 UTC. Shared by every
- * model that gets it so the window is stated once.
+ * The windows DeepSeek bills at half its peak rates, for every model. Peak is
+ * 01:00-04:00 and 06:00-10:00 UTC on weekdays; everything else is off-peak.
+ * These two daily windows cover the weekday gaps; a clock window cannot drop
+ * weekend mornings, which the published table also treats as off-peak, so a
+ * weekend call in a peak hour is priced at the peak rate.
  */
-const DEEPSEEK_OFF_PEAK: ModelTimingTier[] = [
-  { start: "16:30", end: "00:30", pricing: { input: 0.66, output: 1.98, cached: 0.022 } },
-];
+function offPeak(rates: { input: number; output: number; cached: number }): ModelTimingTier[] {
+  return [
+    { start: "10:00", end: "01:00", pricing: { ...rates } },
+    { start: "04:00", end: "06:00", pricing: { ...rates } },
+  ];
+}
+
+const DEEPSEEK_OFF_PEAK: ModelTimingTier[] = offPeak({ input: 0.66, output: 1.98, cached: 0.022 });
 
 const DEEPSEEK_PRO: ModelPricing = {
   currency: "USD",
@@ -23,19 +31,11 @@ const DEEPSEEK_PRO: ModelPricing = {
   timingTiers: DEEPSEEK_OFF_PEAK,
 };
 
-/** Half the peak Flash rates, stated once for both off-peak windows. */
-const DEEPSEEK_FLASH_OFF_PEAK_RATES = { input: 0.15, output: 0.6, cached: 0.003 } as const;
-
-/**
- * DeepSeek Flash off-peak windows. Peak is 01:00–04:00 and 06:00–10:00 UTC
- * weekdays; everything else is half those rates. These two clock windows cover
- * the daily peak gaps; they cannot drop weekend mornings, which the published
- * table also treats as off-peak.
- */
-const DEEPSEEK_FLASH_OFF_PEAK: ModelTimingTier[] = [
-  { start: "10:00", end: "01:00", pricing: { ...DEEPSEEK_FLASH_OFF_PEAK_RATES } },
-  { start: "04:00", end: "06:00", pricing: { ...DEEPSEEK_FLASH_OFF_PEAK_RATES } },
-];
+const DEEPSEEK_FLASH_OFF_PEAK: ModelTimingTier[] = offPeak({
+  input: 0.15,
+  output: 0.6,
+  cached: 0.003,
+});
 
 /** Peak list rates for DeepSeek Flash; the dated and versioned ids share this card. */
 const DEEPSEEK_FLASH: ModelPricing = {
