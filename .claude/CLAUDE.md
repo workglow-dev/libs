@@ -228,6 +228,28 @@ approval), so a host draws one lifecycle rather than one per way a call can end.
 `approval: "never"` turns it off for a headless run, and with no connector registered such a
 call is refused rather than run.
 
+**A turn that must end in a typed answer** passes `outputSchema`: the loop adds a
+`submit_answer` tool (`AGENT_SUBMIT_TOOL_NAME`) taking that schema, ends with
+`stopReason: "submitted"` and the answer on `object` when a call passes it, and answers a
+failing one as a correction to make, so the model resubmits instead of the host failing the
+turn. A model that replies in text is reminded twice, then the turn ends `"answered"` with no
+`object`. An unset object port reaches the task as `{}`, and an empty schema counts as none.
+`checkSubmission` is where a host enforces what a schema cannot say — a section left empty
+that the document plainly has, two figures that must agree: given an answer that passed the
+schema and the turn so far, a returned reason goes back to the model as the submit call's
+error. It is turned away at most twice, then accepted, so a check can never hold a turn; the
+reasons are on `submissionRejections`.
+The rest are controls a batch host needs: `toolConcurrency` (opt-in; a round holding a call
+put to a person still runs one at a time, and results return in the order asked),
+`maxRoundRetries` (default 2, for a `RetryableJobError`, waiting as the provider's
+retry-after says within 1–60 s), `roundTimeoutMs` (a provider can accept a request and never answer;
+past it the round is abandoned as a retryable failure, so the retries cover it), and budgets — `maxInputTokens`, `maxCostUsd` (refused
+without a price card, since a budget it cannot measure never stops anything),
+`maxDurationMs` — each ending the turn `"budget"`, never between a `tool_use` and its result.
+Every round leaves an `AgentStep` on `steps` (timings, attempts, each tool's outcome and
+size, usage, cost) and rides on the `snapshot` beside `messages`; `costUsd` totals them when
+every round could be priced.
+
 **The loop and the model call can live in different places.** A host whose tools are closures
 (they draw on a screen, ask a person, read state only that process holds) but whose model is
 reachable only through a backend binds `AGENT_ROUND_RUNNER` on the run's registry: every round is
