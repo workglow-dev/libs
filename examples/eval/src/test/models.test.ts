@@ -27,8 +27,10 @@ describe("resolveModelConfig", () => {
       input: 1.32,
       output: 3.96,
       cached: 0.044,
+      // Half rate outside DeepSeek's weekday peak hours, 01:00-04:00 and 06:00-10:00 UTC.
       timingTiers: [
-        { start: "16:30", end: "00:30", pricing: { input: 0.66, output: 1.98, cached: 0.022 } },
+        { start: "10:00", end: "01:00", pricing: { input: 0.66, output: 1.98, cached: 0.022 } },
+        { start: "04:00", end: "06:00", pricing: { input: 0.66, output: 1.98, cached: 0.022 } },
       ],
     });
   });

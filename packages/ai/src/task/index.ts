@@ -11,6 +11,7 @@ export { registerAiTasks } from "./registerAiTasks";
 export * from "./AgentRoundRunner";
 export * from "./AgentTask";
 export * from "./AgentToolExecution";
+export * from "./AgentTurnRecord";
 export * from "./AiChatTask";
 export * from "./AiChatWithKbTask";
 export * from "./BackgroundRemovalTask";

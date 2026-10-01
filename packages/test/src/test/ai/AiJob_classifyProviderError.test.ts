@@ -16,6 +16,22 @@ import { rehydrateWorkerError, workerErrorPayload } from "@workglow/util/worker"
 import { describe, expect, it } from "vitest";
 
 describe("classifyProviderError mapping for image-generation errors", () => {
+  it("retries a provider's own server failure reported without an HTTP status", () => {
+    const streamed = Object.assign(new Error("An error occurred while processing the request."), {
+      code: "server_error",
+    });
+    expect(classifyProviderError(streamed, "ToolCallingTask", "OPENAI")).toBeInstanceOf(
+      RetryableJobError
+    );
+    const nested = Object.assign(new Error("stream failed"), { error: { type: "server_error" } });
+    expect(classifyProviderError(nested, "ToolCallingTask", "OPENAI")).toBeInstanceOf(
+      RetryableJobError
+    );
+    expect(
+      classifyProviderError(new Error("something unexplained"), "ToolCallingTask", "OPENAI")
+    ).toBeInstanceOf(PermanentJobError);
+  });
+
   it("maps ProviderUnsupportedFeatureError to PermanentJobError", () => {
     const err = new ProviderUnsupportedFeatureError("mask", "m", "not supported");
     const classified = classifyProviderError(err, "ImageGenerateTask", "TEST_PROVIDER");
