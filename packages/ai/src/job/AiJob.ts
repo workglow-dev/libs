@@ -202,6 +202,15 @@ export function classifyProviderError(err: unknown, taskType: string, provider: 
     );
   }
 
+  // A provider's own server failure reported in the body or mid-stream rather
+  // than as an HTTP status — OpenAI's streaming "server_error" event, "An error
+  // occurred while processing the request." — is as transient as a 5xx.
+  if (isServerErrorReport(err, message)) {
+    return new RetryableJobError(
+      withJobErrorDiagnostics(`Server error from ${provider} for ${taskType}: ${message}`, err)
+    );
+  }
+
   if (
     message.includes("ECONNREFUSED") ||
     message.includes("ECONNRESET") ||
@@ -225,6 +234,23 @@ export function classifyProviderError(err: unknown, taskType: string, provider: 
   return new PermanentJobError(
     withJobErrorDiagnostics(`Provider ${provider} failed for ${taskType}: ${message}`, err)
   );
+}
+
+/**
+ * Whether an error is a provider reporting its own server failure without an
+ * HTTP status: a `server_error` code or type on the error or the body it
+ * carries, or the message providers send with one.
+ */
+function isServerErrorReport(err: unknown, message: string): boolean {
+  const fields = (value: unknown): unknown[] => {
+    if (value === null || typeof value !== "object") return [];
+    const record = value as { code?: unknown; type?: unknown };
+    return [record.code, record.type];
+  };
+  const body =
+    err !== null && typeof err === "object" ? (err as { error?: unknown }).error : undefined;
+  if ([...fields(err), ...fields(body)].includes("server_error")) return true;
+  return /an error occurred while processing (the|your) request/i.test(message);
 }
 
 export class AiJob<

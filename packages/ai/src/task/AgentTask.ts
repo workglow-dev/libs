@@ -409,8 +409,11 @@ function submitToolFor(
       // Thrown as the tool's own words: the model reads the reason itself, not
       // a wrapped error, and answers it in its next round.
       if (reason !== undefined) {
+        // The whole answer again, not a patch: a model resubmitting only what the
+        // reason named drops every section it had already filled.
         throw new ToolCallError(
-          `Answer not recorded yet. ${reason} Then call submit_answer again.`
+          `Answer not recorded yet. ${reason} Then call submit_answer again with the complete ` +
+            "answer — every field, including those this does not mention, as you had them."
         );
       }
       return "Answer recorded.";
@@ -908,7 +911,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
         // which is what gets a model to resubmit rather than give up.
         const text =
           call.name === options.submitToolName
-            ? `Answer rejected; nothing was recorded. Fix these and call ${call.name} again: ${detail}`
+            ? `Answer rejected; nothing was recorded. Fix these and call ${call.name} again with the complete answer: ${detail}`
             : `Invalid arguments for ${call.name}: ${detail}`;
         return toolResult(call, text, true, options.maxResultChars);
       }
