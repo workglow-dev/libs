@@ -31,6 +31,7 @@ import {
 } from "@workglow/task-graph";
 import { asText, getLogger } from "@workglow/util";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import { retryDateFromRetryAfterHeader } from "../util/RetryAfter";
 import { safeFetch } from "../util/SafeFetch";
 import { classifyUrl, urlMatchesScope, urlResourcePattern } from "../util/UrlClassifier";
 import {
@@ -444,30 +445,10 @@ function assertMethodAllowsResponseType(
 }
 
 async function buildHttpError(url: string, response: Response): Promise<Error> {
-  let retryDate: Date | undefined;
-  if (response.status === 429 || response.status === 503 || response.headers.get("Retry-After")) {
-    const retryAfterStr = response.headers.get("Retry-After");
-    if (retryAfterStr) {
-      const seconds = Number(retryAfterStr);
-      // `>= 0`, not `> 0`: zero is a valid delta-seconds meaning "retry now",
-      // and it is the whole of what the server said. Excluding it dropped the
-      // header entirely — the date branch below reads "0" as the year 2000,
-      // which is in the past and so sets nothing — leaving the caller unable to
-      // tell `Retry-After: 0` from a response carrying no header at all. A
-      // caller that backs off on its own then applies its no-guidance default
-      // to a response that asked for no wait.
-      if (Number.isFinite(seconds) && seconds >= 0) {
-        retryDate = new Date(Date.now() + seconds * 1000);
-      } else {
-        // A negative or non-numeric value falls through to the HTTP-date form.
-        // The `> new Date()` guard is what rejects garbage that still parses as
-        // a date, so a past date is treated as no guidance rather than as
-        // "retry now" — only the numeric form can say that.
-        const parsedDate = new Date(retryAfterStr);
-        if (!isNaN(parsedDate.getTime()) && parsedDate > new Date()) retryDate = parsedDate;
-      }
-    }
-  }
+  // The header is remote-controlled, so the bounded parser owns the arithmetic:
+  // an unbounded value either parks the job for millennia or overflows into an
+  // Invalid Date the queue cannot reschedule from.
+  const retryDate = retryDateFromRetryAfterHeader(response.headers.get("Retry-After"));
   const body = await readHttpErrorBody(response);
   return createFetchUrlHttpError(url, response.status, response.statusText, retryDate, body);
 }

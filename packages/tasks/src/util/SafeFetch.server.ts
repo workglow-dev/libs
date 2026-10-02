@@ -29,6 +29,7 @@ import {
 import {
   applyCrossOriginHeaderStrip,
   applyRedirectMethodAndBody,
+  createSafeFetchRedirectError,
   registerSafeFetch,
   type SafeFetchFn,
   type SafeFetchOptions,
@@ -279,9 +280,7 @@ export const serverSafeFetch: SafeFetchFn = async (url, options) => {
       if (requestedRedirectMode === "error") {
         discardResponseBody(response);
         closeAgent(dispatcher);
-        throw new TypeError(
-          `Fetch for ${currentUrl} failed because redirect mode was set to 'error'.`
-        );
+        throw createSafeFetchRedirectError(currentUrl, response.status);
       }
 
       const location = response.headers.get("location");

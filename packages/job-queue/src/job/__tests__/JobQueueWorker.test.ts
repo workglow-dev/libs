@@ -6,6 +6,7 @@
 
 import type { IJobExecuteContext, JobStorageFormat } from "@workglow/job-queue";
 import {
+  DelayLimiter,
   InMemoryQueueStorage,
   InMemoryRateLimiterStorage,
   Job,
@@ -426,6 +427,72 @@ describe("JobQueueWorker limit overrides", () => {
     });
     // @ts-expect-error accessing protected internal for the assertion
     expect(worker.limiterMaxWakeMs).toBe(DEFAULT_LIMITS.jobQueueLimiterMaxWakeMs);
+    await storage.deleteAll();
+  });
+});
+
+describe("JobQueueWorker retry date validity", () => {
+  // An Invalid Date passes `instanceof Date`, so it used to be accepted as the
+  // job's next visible time. Its NaN then reached `claim.retry`'s
+  // `delaySeconds`, where `new Date(NaN).toISOString()` throws a RangeError —
+  // swallowed by rescheduleJob's own catch, leaving the claim dropped and the
+  // job never rescheduled at all. The observable bug is a stranded job, not a
+  // bad timestamp.
+  it("falls back to the limiter time when handed an invalid retry date", async () => {
+    const queueName = `retry-date-${uuid4()}`;
+    const storage = new InMemoryQueueStorage<TI, TO>(queueName);
+    await storage.migrate();
+    const { messageQueue, jobStore } = wrapQueueStorage(storage);
+
+    // A limiter time distinct from "now" so the fallback is unmistakable.
+    const limiter = new DelayLimiter();
+    const fallbackTime = new Date(Date.now() + 60_000);
+    await limiter.setNextAvailableTime(fallbackTime);
+
+    const worker = new JobQueueWorker<TI, TO, TJob>(TJob, {
+      messageQueue,
+      jobStore,
+      queueName,
+      pollIntervalMs: 5,
+      stopTimeoutMs: 0,
+      limiter,
+    });
+
+    const id = await storage.add({
+      input: { taskType: "default", data: "x" },
+      visible_at: null,
+      completed_at: null,
+      deadline_at: null,
+    } as any);
+
+    const claims = await messageQueue.receive({ workerId: "test-worker", leaseMs: 30_000, max: 1 });
+    expect(claims.length).toBe(1);
+    const claim = claims[0]!;
+
+    const retryDelays: (number | undefined)[] = [];
+    const originalRetry = claim.retry.bind(claim);
+    (claim as { retry: (opts?: { delaySeconds?: number }) => Promise<void> }).retry = async (
+      opts
+    ) => {
+      retryDelays.push(opts?.delaySeconds);
+      await originalRetry(opts);
+    };
+
+    const job = new TJob({ queueName, input: { taskType: "default", data: "x" }, id: claim.id });
+    // @ts-expect-error reaching the private claim registry the worker settles through
+    worker.activeClaims.set(claim.id, claim);
+
+    // @ts-expect-error rescheduleJob is protected; the invalid date is the point
+    await worker.rescheduleJob(job, new Date(NaN));
+
+    expect(retryDelays.length).toBe(1);
+    expect(Number.isFinite(retryDelays[0]!)).toBe(true);
+    expect(job.visibleAt.getTime()).toBe(fallbackTime.getTime());
+
+    const row = await storage.get(claim.id as any);
+    expect(row?.status).toBe(JobStatus.PENDING);
+    expect(Number.isFinite(Date.parse(String(row?.visible_at)))).toBe(true);
+
     await storage.deleteAll();
   });
 });

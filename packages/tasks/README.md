@@ -9,6 +9,9 @@ A package of task types for common operations, workflow management, and data pro
 - [Quick Start](#quick-start)
 - [Available Tasks](#available-tasks)
   - [FetchUrlTask](#fetchurltask)
+  - [WebhookNotifyTask](#webhooknotifytask)
+  - [SlackNotifyTask](#slacknotifytask)
+  - [DiscordNotifyTask](#discordnotifytask)
   - [DebugLogTask](#debuglogtask)
   - [DelayTask](#delaytask)
   - [JavaScriptTask](#javascripttask)
@@ -31,7 +34,7 @@ bun add @workglow/tasks
 ## Quick Start
 
 ```typescript
-import { Workflow, fetch, debugLog, delay } from "@workglow/tasks";
+import { Workflow } from "@workglow/tasks";
 
 // Simple workflow example (fluent API)
 const workflow = new Workflow()
@@ -43,23 +46,31 @@ const results = await workflow.run();
 ```
 
 ```typescript
-import { FetchUrlTask, DebugLogTask, DelayTask } from "@workglow/tasks";
+import { fetchUrl, debugLog, delay } from "@workglow/tasks";
 
-// Simple sequence using Task classes directly
-const fetchResult = await new FetchUrlTask({
+// Simple sequence using the exported helpers
+const fetchResult = await fetchUrl({
   url: "https://api.example.com/data",
   response_type: "json",
-}).run();
+});
 
-await new DebugLogTask({ console: fetchResult.json }, { log_level: "info" }).run();
+await debugLog({ console: fetchResult.json }, { log_level: "info" });
 
-await new DelayTask({}, { delay: 1000 }).run();
+await delay({}, { delay: 1000 });
 ```
 
-```typescript
-import { fetch, debugLog, delay } from "@workglow/tasks";
+> **Inputs go to `run()`, not to the constructor.** A task constructor takes
+> `(config, runConfig)`, and `TaskConfigSchema` is `additionalProperties: false`,
+> so `new SomeTask({ url: "…" })` throws a `TaskConfigurationError` before any
+> work happens. Each helper above (`fetchUrl`, `debugLog`, `slackNotify`, …) is
+> just `new SomeTask(config).run(input)` with the two arguments in the right
+> places. To bake input values into an instance, put them under the config's
+> `defaults` key — see the [WebhookNotifyTask](#webhooknotifytask) examples.
 
-const data = await fetch({
+```typescript
+import { fetchUrl, debugLog, delay } from "@workglow/tasks";
+
+const data = await fetchUrl({
   url: "https://example.com/readme.txt",
   response_type: "text",
 });
@@ -93,14 +104,14 @@ Makes HTTP requests with built-in retry logic, progress tracking, and multiple r
 
 ```typescript
 // Simple GET request
-const response = await new FetchUrlTask({
+const response = await fetchUrl({
   url: "https://api.example.com/users",
   response_type: "json",
-}).run();
+});
 console.log(response.json);
 
 // POST request with headers
-const postResponse = await new FetchUrlTask({
+const postResponse = await fetchUrl({
   url: "https://api.example.com/users",
   method: "POST",
   headers: {
@@ -109,13 +120,13 @@ const postResponse = await new FetchUrlTask({
   },
   body: JSON.stringify({ name: "John", email: "john@example.com" }),
   response_type: "json",
-}).run();
+});
 
 // Text response
-const textResponse = await new FetchUrlTask({
+const textResponse = await fetchUrl({
   url: "https://example.com/readme.txt",
   response_type: "text",
-}).run();
+});
 console.log(textResponse.text);
 ```
 
@@ -126,6 +137,198 @@ console.log(textResponse.text);
 - Request timeout handling
 - Queue-based rate limiting (requires creation of a `@workglow/job-queue` instance)
 - Comprehensive error handling
+
+### WebhookNotifyTask
+
+Sends a JSON payload to a webhook endpoint via HTTP POST.
+
+A webhook URL is treated as a secret throughout all three notification tasks: for
+Slack and Discord the token is part of the URL path, so the URL is kept out of the
+output schema and error messages report only the endpoint's origin.
+
+**Input Schema:**
+
+- `url` (string, optional): Webhook endpoint to POST to. Kept out of errors and output, but a value set here is stored verbatim in the graph JSON — use `url_credential_key` to keep the secret out of the saved workflow.
+- `payload` (object, required): JSON body to send
+- `headers` (object, optional): Additional headers, merged over the JSON content type (case-insensitively, so a lowercase `content-type` replaces it rather than being sent alongside it). A value set here is stored verbatim in the graph JSON — an authentication or signing secret belongs in `credential_key` instead
+- `timeout` (integer, optional): Request timeout in milliseconds, a whole number from 1 to 2147483647 (~24.8 days). Default: `30000`
+- `allow_private_destination` (boolean, optional): Permit posting to a private/internal/loopback destination — including a public-looking hostname that resolves into private address space. Requires the `network:private` entitlement, re-checked at execute time against the URL actually resolved. A destination whose URL does not already read as private additionally requires a registered entitlement enforcer to grant it. A declared private destination's reply body and reason phrase are never surfaced. Default: `false`
+- `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`. A value that is not an absolute `http(s)` URL (e.g. a bearer token) is rejected with a configuration error.
+- `credential_key` (string, optional): Credential store key whose resolved secret is placed on a request HEADER according to `credential_scheme`. This is the bearer/basic/API-key/HMAC shape, as opposed to `url_credential_key`'s "the URL itself is the secret" shape; the two are independent and may be combined. A configured key the store cannot answer is a permanent `CONFIGURATION` failure and nothing is sent — under every scheme, `none` included — rather than an unauthenticated post reported as success
+- `credential_scheme` (enum, optional): How the resolved credential is sent — `bearer` and `basic` use the `Authorization` header (`basic` expects an already base64-encoded `user:pass`), `header` uses `credential_header`, `none` resolves but sends nothing. Default: `bearer`
+- `credential_header` (string, optional): Header name used when `credential_scheme` is `header`. Must be a bare header token (letters, digits, hyphens). Default: `Authorization`
+
+**Output Schema:**
+
+- `success` (boolean): Always `true`; a non-2xx response throws
+- `status` (number): HTTP status code returned by the endpoint
+- `response` (string): Response body, truncated to 1KB. Always empty for a declared private destination
+
+**Examples:**
+
+```typescript
+// Direct task usage
+const result = await webhookNotify({
+  url: "https://example.com/hooks/abc123",
+  payload: { event: "deploy", version: "1.4.2" },
+  headers: { "X-Request-Id": "build-4471" },
+});
+console.log(result.status);
+
+// An authenticated endpoint: the secret is a credential-store KEY, so only the
+// key reaches the saved graph JSON. `credential_scheme: "header"` sends the
+// resolved value raw on `credential_header` instead of as a bearer token.
+await webhookNotify({
+  url: "https://example.com/hooks/abc123",
+  payload: { event: "deploy" },
+  credential_key: "deploy-webhook-token",
+});
+
+// Config vs. input: the constructor takes CONFIG, so a fixed endpoint belongs
+// under `defaults` — the per-run payload is still passed to `run()`.
+const notifier = new WebhookNotifyTask({
+  title: "Deploy hook",
+  defaults: { url: "https://example.com/hooks/abc123" },
+});
+await notifier.run({ payload: { event: "deploy", version: "1.4.2" } });
+
+// In a workflow
+const workflow = new Workflow()
+  .fetch({ url: "https://api.example.com/build" })
+  .webhookNotify({ url: "https://example.com/hooks/abc123", payload: { event: "build" } });
+```
+
+**Features:**
+
+- Runs inline through the SSRF-aware `safeFetch` wrapper
+- **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
+- **A private/internal destination is refused unless `allow_private_destination` is set** — which also declares the `network:private` entitlement, scoped to `url` when no credential key is configured. Without the flag the post fails with `PRIVATE_DENIED` before any request is made, and, when an entitlement enforcer is registered, the `network:private` grant is re-checked at execute time against the URL actually resolved — so a run-input or credential-supplied private destination cannot slip past the declaration the enforcer graded. The flag governs the transport whatever the URL's spelling, but only as far as the URL itself already declares: a private-reading URL is widened by the declaration alone (the destination is visible in the configured value), while a PUBLIC-looking hostname that resolves into private address space is reachable only when a registered entitlement enforcer grants `network:private` for it — there the widening is invisible in configuration and additionally bypasses the transport's DNS-resolution check, so with no enforcer to grade it the post is refused. **Residual:** on a URL that already reads private the flag is authorized by configuration alone, and if that URL arrives by dataflow rather than from the instance's own configuration the operator authorized nothing — `allow_private_destination` should be config-only, tracked as a follow-up
+- A declared private destination is reachable but its response body is **never echoed** — `response` is always `""`, whatever the URL's spelling, because the URL alone cannot say whether the host was internal. Notification needs no reply body, and returning one would make this task an SSRF read primitive (e.g. POSTing to a cloud metadata endpoint and reading the answer back into the graph)
+- 429/503 and 5xx raise `RetryableJobError`; retries require a `@workglow/job-queue` consumer, which these inline tasks do not have
+- Response bodies are read as a stream and abandoned past 1MB, so an endpoint answering with an unbounded body cannot exhaust runner memory — on the failure path too
+- Requests time out after 30s by default (`timeout`); a caller abort surfaces as an abort error rather than a retryable network failure
+- **A secret goes through `credential_key`, never `headers`** — `Task.toJSON` serializes `defaults` verbatim into the saved graph, so a bearer token or signing key inlined in `headers` is written into the workflow JSON. A credential KEY is only a reference; the resolved secret is placed on the outbound request and never persisted. `credential_scheme` chooses `Authorization: Bearer …`, `Authorization: Basic …`, a raw value on `credential_header`, or nothing at all
+- **An invalid request header is a permanent `CONFIGURATION` failure, not a retried network error** — `fetch` builds its `Headers` internally and rejects a malformed name or value with a bare `TypeError`, which was classified as a transient `NETWORK_ERROR` and retried forever. Names must be a bare header token (letters, digits, hyphens) and values must carry no NUL/CR/LF; both are checked before the request. The message names the offending header but **never echoes its value**, because `fetch`'s own message quotes it back and that text is spliced into a persisted job error — which for a `credential_key` header is the secret itself
+- **A resolved `credential_key` is redacted out of everything the task returns** — `response` reads up to 1 KB of a success body, so an echoing endpoint (webhook.site, RequestBin, a chatty 200) would otherwise hand the header secret straight back into a task output port that is pipeable and persisted with the run. The secret is stripped from the response body, the failure reason phrase, and every error message and stack, raw and percent-encoded alike, before truncation — cutting first would slice the value in half and leave a usable prefix. Exact secrets are replaced before the URL pass, so the URL pass cannot chop a substring out of one. Unlike URL path segments there is no minimum length, because a header secret is a known exact value rather than a guess: a short secret can mangle a diagnostic, which beats leaking a short API key
+- A configured `url_credential_key` or `credential_key` upgrades the `credential` entitlement from optional to enforced. Only `url_credential_key` unscopes a declared `network:private` grant, since only it hides the destination; a header credential changes what the request carries, not where it goes
+- Never cached — the task is side-effecting (`cachePolicy: { kind: "none" }`)
+
+### SlackNotifyTask
+
+Sends a message to a Slack incoming webhook.
+
+**Input Schema:**
+
+- `url` (string, optional): Slack incoming webhook URL. Kept out of errors and output, but a value set here is stored verbatim in the graph JSON — use `url_credential_key` to keep the secret out of the saved workflow.
+- `text` (string, required): Message text, also used as the notification fallback for block messages. HTML-entity escaped by default — see `allow_markup`
+- `blocks` (array, optional): Slack Block Kit blocks. Masked-link labels are stripped by default, in the `<url|label>` text form and the structural `url`-plus-label form alike — see `allow_markup`
+- `username` (string, optional): Overrides the display name of the posting bot
+- `icon_emoji` (string, optional): Overrides the bot icon, e.g. `:rocket:`
+- `allow_mentions` (boolean, optional): Send `text`, `blocks`, `username` and `icon_emoji` unmodified, and **implies `allow_markup`**. Governs channel-wide broadcasts (the `<!channel>`/`<!here>`/`<!everyone>`/`<!subteam^ID>` text forms, the `rich_text` broadcast/usergroup element shapes, and `link_names`). Default: `false`
+- `allow_markup` (boolean, optional): Send Slack markup live — `<url|label>` links, single-user `<@U123>` mentions and the `<!date^…>` token. Governs `text` and `blocks` only; `username` and `icon_emoji` get the broadcast escape either way. Default: `false`
+- `timeout` (integer, optional): Request timeout in milliseconds, a whole number from 1 to 2147483647 (~24.8 days). Default: `30000`
+- `allow_private_destination` (boolean, optional): Permit posting to a private/internal/loopback destination — including a public-looking hostname that resolves into private address space. Requires the `network:private` entitlement, re-checked at execute time against the URL actually resolved. A destination whose URL does not already read as private additionally requires a registered entitlement enforcer to grant it. A declared private destination's reply body and reason phrase are never surfaced. Default: `false`
+- `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
+
+**Output Schema:**
+
+- `success` (boolean): Always `true`; a non-2xx response throws
+- `status` (number): HTTP status code returned by Slack
+
+**Examples:**
+
+```typescript
+// Plain message
+await slackNotify({
+  url: "https://hooks.slack.com/services/T000/B000/xxx",
+  text: "Deploy finished",
+});
+
+// Block Kit message with a bot identity
+await slackNotify({
+  url: "https://hooks.slack.com/services/T000/B000/xxx",
+  text: "Deploy finished",
+  blocks: [{ type: "section", text: { type: "mrkdwn", text: "*Deploy finished*" } }],
+  username: "deploybot",
+  icon_emoji: ":rocket:",
+});
+
+// In a workflow
+const workflow = new Workflow().slackNotify({
+  url: "https://hooks.slack.com/services/T000/B000/xxx",
+  text: "Pipeline complete",
+});
+```
+
+**Features:**
+
+- Absent optional fields are omitted from the payload rather than sent as `null`
+- **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
+- **A private/internal destination is refused unless `allow_private_destination` is set**, which also declares the `network:private` entitlement, and, when an entitlement enforcer is registered, the `network:private` grant is re-checked at execute time against the URL actually resolved — so a run-input or credential-supplied private destination cannot slip past the declaration the enforcer graded. The flag governs the transport whatever the URL's spelling, but only as far as the URL itself already declares: a private-reading URL is widened by the declaration alone (the destination is visible in the configured value), while a PUBLIC-looking hostname that resolves into private address space is reachable only when a registered entitlement enforcer grants `network:private` for it — there the widening is invisible in configuration and additionally bypasses the transport's DNS-resolution check, so with no enforcer to grade it the post is refused. **Residual:** on a URL that already reads private the flag is authorized by configuration alone, and if that URL arrives by dataflow rather than from the instance's own configuration the operator authorized nothing — `allow_private_destination` should be config-only, tracked as a follow-up
+- Slack answers `200` with the body `ok`; failure bodies (`invalid_payload`, `no_service`) are surfaced in the error message — but **only for a destination not declared private**. A declared private destination's reply body and reason phrase are never spliced into the error, which would otherwise make the task an SSRF read primitive; its status is still reported
+- **Channel-wide broadcasts in `text` and `blocks` are neutralized by default** (`allow_mentions`), by two mechanisms, because Slack has two ways to say the same thing. _Lexical:_ Slack has no `allowed_mentions`; its documented control is HTML-entity escaping, so the literal `<!` is escaped to `&lt;!`. That defuses `<!channel>`, `<!here>`, `<!everyone>` and `<!subteam^ID>`, and `link_names: false` is sent explicitly. `<!` is Slack's control-sequence sigil rather than a broadcast sigil, and the two-field `<!date^ts^format|fallback>` token is its one member that can notify nobody, so it is exempted from the escape — escaping it would show the raw token instead of a localized date. `blocks` is walked to every string leaf, so a broadcast written inside a section, a `fields[]` entry or an `elements[]` entry is defused too. _Structural:_ a `rich_text` message expresses the same ping as an element shape with no `<!` in it at all — `{type: "broadcast", range: "channel"}` or `{type: "usergroup", usergroup_id: "S…"}` — so such an element is rewritten to a plain text node (`@channel`) rather than deleted, since dropping it could leave an `elements[]` empty and Slack rejects that. Residual: a new structural notification element type Slack introduces later is uncovered until it is added to the recognized set. Set `allow_mentions: true` to send both verbatim
+- **Slack markup is neutralized by default too** (`allow_markup`), because a masked link `<https://evil.example|Deploy succeeded>` renders the attacker-chosen LABEL in place of the attacker-chosen URL — a phishing primitive in exactly the piped/model-generated content this task's other controls exist for. `text` is HTML-entity escaped (`&` first, then `<` and `>`), so every link, mention and formatting token in it renders as literal characters; the message stays readable, only clickability is lost. `blocks` gets the weaker remedy — the link is reduced to its bare destination — because the deep walk is shape-agnostic and visits `url`, `image_url`, `value` and `action_id` leaves as readily as `text` ones, where escaping `&` would corrupt every query string (`?a=1&b=2` → `?a=1&amp;b=2`). `<!` is safe to escape everywhere precisely because it has no legitimate occurrence in those fields; `&` does. That reduction covers the `<url|label>` TEXT form, reduced to `<url>`, and the STRUCTURAL form, where an object pairs a destination field with a label field and masks it with no `<` in the payload at all — there the label is overwritten with the destination. The recognized pairs are `url` + `text` (a button, a rich_text `link` element, an overflow `option`) and `title_url` + `title` (a `video` block). Within a pair the rule keys on shape rather than on a list of element types, because an overflow `option` carries no `type` discriminator at all. An `image` block's `image_url` is deliberately NOT a pair even though the block may carry a `title`: it is the picture, not a destination a caption can mask, so a wildcard `*_url` rule would rewrite an image caption to its own CDN URL in the commonest block type there is. **Residual:** a url/label pair Slack adds later is uncovered until it joins that table, which is the price of that exclusion; and a `video` block additionally requires `links.embed:write` plus a registered unfurl domain, so an incoming webhook may be rejected with `invalid_blocks` before the pair ever renders. The destination is kept and the label rewritten, never the reverse — a button stripped of its `url` with no live `action_id` behind it is an availability change. The two-field `<!date^ts^format|fallback>` token is exempt from the delabeling (its `|` part is a fallback, not a masking label), so a date in `blocks` still works with no flag; the FOUR-field form `<!date^ts^label^link|fallback>` carries a destination and a label of its own, so it is escaped like any other broadcast, and the rich_text `date` element's optional `url` is deleted (its label comes from `format`/`fallback`, so it renders fine unlinked). `allow_mentions` implies `allow_markup`. **Residual:** with `allow_markup: true` a masked link in `text` is live again — that is what the flag means — and in `blocks` labels are stripped rather than escaped, so a bare `<https://evil.example>` link and a `<@U123>` mention still resolve there
+- Requests time out after 30s by default (`timeout`)
+- Response bodies are capped at 1MB while being read
+- Webhook token never appears in error messages, `error.url`, `error.stack`, or task output
+
+### DiscordNotifyTask
+
+Sends a message to a Discord webhook.
+
+**Input Schema:**
+
+- `url` (string, optional): Discord webhook URL. Kept out of errors and output, but a value set here is stored verbatim in the graph JSON — use `url_credential_key` to keep the secret out of the saved workflow.
+- `content` (string, required): Message content
+- `username` (string, optional): Overrides the display name of the webhook
+- `avatar_url` (string, optional): Overrides the avatar of the webhook
+- `embeds` (array, optional): Discord embed objects
+- `allow_mentions` (boolean, optional): Let the message ping. Default: `false`
+- `timeout` (integer, optional): Request timeout in milliseconds, a whole number from 1 to 2147483647 (~24.8 days). Default: `30000`
+- `allow_private_destination` (boolean, optional): Permit posting to a private/internal/loopback destination — including a public-looking hostname that resolves into private address space. Requires the `network:private` entitlement, re-checked at execute time against the URL actually resolved. A destination whose URL does not already read as private additionally requires a registered entitlement enforcer to grant it. A declared private destination's reply body and reason phrase are never surfaced. Default: `false`
+- `url_credential_key` (string, optional): Credential store key whose resolved value is the entire webhook URL — the secret itself, not a bearer token. Takes precedence over `url`.
+
+**Output Schema:**
+
+- `success` (boolean): Always `true`; a non-2xx response throws
+- `status` (number): HTTP status code returned by Discord, `204` on success
+
+**Examples:**
+
+```typescript
+// Plain message
+await discordNotify({
+  url: "https://discord.com/api/webhooks/123/xxx",
+  content: "Build passed",
+});
+
+// Embed with a custom identity
+await discordNotify({
+  url: "https://discord.com/api/webhooks/123/xxx",
+  content: "Build passed",
+  username: "ci",
+  avatar_url: "https://example.com/ci.png",
+  embeds: [{ title: "workglow", description: "All checks green" }],
+});
+
+// In a workflow
+const workflow = new Workflow().discordNotify({
+  url: "https://discord.com/api/webhooks/123/xxx",
+  content: "Pipeline complete",
+});
+```
+
+**Features:**
+
+- A successful post answers `204 No Content`, so no response body is read or parsed
+- **Redirects are refused** — a webhook that answers `3xx` fails rather than re-sending the payload and headers to the new origin. Point `url` at the final endpoint
+- **A private/internal destination is refused unless `allow_private_destination` is set**, which also declares the `network:private` entitlement, and, when an entitlement enforcer is registered, the `network:private` grant is re-checked at execute time against the URL actually resolved — so a run-input or credential-supplied private destination cannot slip past the declaration the enforcer graded. The flag governs the transport whatever the URL's spelling, but only as far as the URL itself already declares: a private-reading URL is widened by the declaration alone (the destination is visible in the configured value), while a PUBLIC-looking hostname that resolves into private address space is reachable only when a registered entitlement enforcer grants `network:private` for it — there the widening is invisible in configuration and additionally bypasses the transport's DNS-resolution check, so with no enforcer to grade it the post is refused. **Residual:** on a URL that already reads private the flag is authorized by configuration alone, and if that URL arrives by dataflow rather than from the instance's own configuration the operator authorized nothing — `allow_private_destination` should be config-only, tracked as a follow-up
+- A failure body is surfaced in the error message **only for a destination not declared private**; a declared private destination's reply body and reason phrase are never spliced in, which would otherwise make the task an SSRF read primitive
+- Rate limits arrive as `429` and may carry the delay as `{"retry_after": <seconds>}` in the body instead of a `Retry-After` header; both are parsed onto the raised `RetryableJobError`. Nothing acts on the value — retries require a `@workglow/job-queue` consumer, which these inline tasks do not have
+- **Mass mentions are suppressed by default** — `allowed_mentions: { parse: [] }` is sent, so `@everyone`/`@here`, role and user pings in `content` do nothing even when the content was piped in from a fetch or a model. Set `allow_mentions: true` to let the message ping
+- Requests time out after 30s by default (`timeout`)
+- Response bodies are capped at 1MB while being read
+- Webhook token never appears in error messages, `error.url`, `error.stack`, or task output
 
 ### DebugLogTask
 

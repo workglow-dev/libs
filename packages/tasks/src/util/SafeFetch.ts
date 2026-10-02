@@ -17,7 +17,12 @@
  */
 
 import { SECURITY_LIMITS } from "@workglow/util";
-import { createFetchUrlJobError, FetchUrlErrorCode } from "../task/FetchUrlJobError";
+import type { FetchUrlJobErrorInstance } from "../task/FetchUrlJobError";
+import {
+  createFetchUrlJobError,
+  FetchUrlErrorCode,
+  isFetchUrlJobError,
+} from "../task/FetchUrlJobError";
 import { classifyUrl, urlMatchesScope } from "./UrlClassifier";
 
 export interface SafeFetchOptions extends RequestInit {
@@ -251,6 +256,42 @@ function isRedirectStatus(status: number): boolean {
 }
 
 /**
+ * Builds the refusal both transports raise when a 3xx arrives and the caller
+ * asked for `redirect: "error"`. Every transport MUST route that refusal
+ * through this factory: it is the only construction site, so the single
+ * {@link FetchUrlErrorCode.REDIRECT_NOT_FOLLOWED} discriminant is what
+ * {@link isSafeFetchRedirectError} matches on, and no consumer has to
+ * recognize the refusal from the wording of a message.
+ *
+ * The `Location` header is deliberately neither read nor reported. A caller
+ * whose URL is itself a credential (see `postWebhookJson`) turns this into a
+ * user-facing message, and the target an untrusted endpoint tried to redirect
+ * to has no place in a log line.
+ */
+export function createSafeFetchRedirectError(
+  url: string,
+  status: number
+): FetchUrlJobErrorInstance {
+  return createFetchUrlJobError(
+    FetchUrlErrorCode.REDIRECT_NOT_FOLLOWED,
+    `Refusing to follow redirect from ${url}: responded ${status} and redirect mode is 'error'.`,
+    { url, httpStatus: status }
+  );
+}
+
+/**
+ * Narrow guard for the refusal {@link createSafeFetchRedirectError} builds.
+ *
+ * Exported so consumers never re-derive it from an error's name or message:
+ * prose drifts silently, and a consumer that stops recognizing this refusal
+ * falls through to its generic network branch — which is retryable, quietly
+ * turning a refused redirect into a retried one.
+ */
+export function isSafeFetchRedirectError(error: unknown): error is FetchUrlJobErrorInstance {
+  return isFetchUrlJobError(error) && error.code === FetchUrlErrorCode.REDIRECT_NOT_FOLLOWED;
+}
+
+/**
  * Browser-safe default implementation. Classifies the URL statically and
  * delegates to `globalThis.fetch`. Each redirect hop is validated before
  * following so a public URL cannot redirect to a private host.
@@ -291,9 +332,7 @@ async function defaultSafeFetch(url: string, options: SafeFetchOptions): Promise
     }
 
     if (requestedRedirectMode === "error") {
-      throw new TypeError(
-        `Fetch for ${currentUrl} failed because redirect mode was set to 'error'.`
-      );
+      throw createSafeFetchRedirectError(currentUrl, response.status);
     }
 
     const location = response.headers.get("location");

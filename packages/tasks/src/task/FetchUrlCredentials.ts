@@ -37,6 +37,18 @@ export const DEFAULT_CREDENTIAL_HEADER = "Authorization";
  */
 const CREDENTIAL_HEADER_NAME_PATTERN = /^[A-Z0-9-]{1,64}$/i;
 
+/**
+ * Whether `name` is a bare header token by the rule above.
+ *
+ * Exported so a caller validating request headers of its own applies the SAME
+ * rule the credential ports are held to, rather than a second spelling of it.
+ * The pattern itself stays private — it is a `g`-less but still shared `RegExp`,
+ * and a predicate cannot be re-pointed at a different one by accident.
+ */
+export function isBareHeaderName(name: string): boolean {
+  return CREDENTIAL_HEADER_NAME_PATTERN.test(name);
+}
+
 export interface ApplyCredentialOptions {
   readonly headers: Readonly<Record<string, string>> | undefined;
   readonly credential: string | undefined;
@@ -55,7 +67,7 @@ export function credentialHeaderName(
   scheme: CredentialScheme,
   headerName: string | undefined
 ): string {
-  if (headerName !== undefined && !CREDENTIAL_HEADER_NAME_PATTERN.test(headerName)) {
+  if (headerName !== undefined && !isBareHeaderName(headerName)) {
     throw new TaskConfigurationError(
       `FetchUrlTask: invalid credential_header ${JSON.stringify(headerName)}. ` +
         "Header names must be 1-64 characters of letters, digits, or hyphens."

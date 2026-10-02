@@ -8,7 +8,7 @@
  * through the graph runner.
  */
 
-import { PermanentJobError } from "@workglow/job-queue";
+import { PermanentJobError, RetryableJobError } from "@workglow/job-queue";
 import {
   createPolicyEnforcer,
   createProfilePolicy,
@@ -22,10 +22,13 @@ import {
 } from "@workglow/task-graph";
 import {
   classifyUrl,
+  createFetchUrlJobError,
+  createSafeFetchRedirectError,
   fetchUrlEntitlementsFor,
   FetchUrlErrorCode,
   FetchUrlTask,
   getSafeFetchImpl,
+  isSafeFetchRedirectError,
   MAX_PRIVATE_RESOURCE_PATTERNS,
   registerSafeFetch,
   resetSafeFetch,
@@ -45,6 +48,9 @@ import {
   setLogger,
 } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
+import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 const ok = (): Response =>
@@ -52,6 +58,8 @@ const ok = (): Response =>
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
+
+const transportDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../tasks/src/util");
 
 describe("URL classifier", () => {
   test("classifies canonical IPv4 loopback as private", () => {
@@ -1095,5 +1103,155 @@ describe("FetchUrlTask end-to-end entitlement enforcement", () => {
     await expect(runner.runGraph({}, { registry, enforceEntitlements: true })).rejects.toThrow(
       TaskEntitlementError
     );
+  });
+});
+
+// A 3xx answered under `redirect: "error"` is a refusal both transports have
+// to raise identically, and that consumers have to recognize WITHOUT reading
+// the message: `postWebhookJson` maps it to a permanent error, and its generic
+// fallback branch is retryable, so a refusal a consumer fails to recognize
+// silently becomes a retried request.
+describe("SafeFetch redirect refusal sentinel", () => {
+  const REQUESTED = "http://localhost:3000/hook";
+  const REDIRECT_TARGET = "https://attacker.example/collect";
+
+  const redirectTo = (location: string, status = 302): Response =>
+    new Response(null, { status, headers: { location } });
+
+  describe("isSafeFetchRedirectError", () => {
+    test("accepts the refusal the transports build", () => {
+      expect(isSafeFetchRedirectError(createSafeFetchRedirectError(REQUESTED, 302))).toBe(true);
+    });
+
+    test("rejects an ordinary TypeError, including one that names a redirect", () => {
+      expect(isSafeFetchRedirectError(new TypeError("connect ECONNREFUSED"))).toBe(false);
+      expect(isSafeFetchRedirectError(new TypeError("fetch failed: too many redirect hops"))).toBe(
+        false
+      );
+    });
+
+    test("rejects every other FetchUrlJobError, including the neighbouring redirect codes", () => {
+      expect(
+        isSafeFetchRedirectError(
+          createFetchUrlJobError(FetchUrlErrorCode.REDIRECT_MISSING_LOCATION, "no location")
+        )
+      ).toBe(false);
+      expect(
+        isSafeFetchRedirectError(
+          createFetchUrlJobError(FetchUrlErrorCode.TOO_MANY_REDIRECTS, "too many")
+        )
+      ).toBe(false);
+      expect(
+        isSafeFetchRedirectError(createFetchUrlJobError(FetchUrlErrorCode.NETWORK_ERROR, "boom"))
+      ).toBe(false);
+    });
+
+    test("rejects non-Error values without throwing", () => {
+      expect(isSafeFetchRedirectError(undefined)).toBe(false);
+      expect(isSafeFetchRedirectError(null)).toBe(false);
+      expect(isSafeFetchRedirectError("redirect")).toBe(false);
+      expect(isSafeFetchRedirectError({ code: FetchUrlErrorCode.REDIRECT_NOT_FOLLOWED })).toBe(
+        false
+      );
+    });
+  });
+
+  test("the refusal is permanent and carries the request URL and 3xx status", () => {
+    const error = createSafeFetchRedirectError(REQUESTED, 307);
+    expect(error).toBeInstanceOf(PermanentJobError);
+    expect(error).not.toBeInstanceOf(RetryableJobError);
+    expect(error.code).toBe(FetchUrlErrorCode.REDIRECT_NOT_FOLLOWED);
+    expect(error.url).toBe(REQUESTED);
+    expect(error.httpStatus).toBe(307);
+  });
+
+  describe("browser transport", () => {
+    let prevSafeFetch: SafeFetchFn;
+    let fetchMock: ReturnType<typeof vi.fn>;
+    let realFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      prevSafeFetch = getSafeFetchImpl();
+      resetSafeFetch();
+      realFetch = globalThis.fetch;
+      fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = realFetch;
+      registerSafeFetch(prevSafeFetch);
+    });
+
+    test("throws the sentinel for a 3xx and never issues the redirected request", async () => {
+      fetchMock.mockResolvedValueOnce(redirectTo(REDIRECT_TARGET));
+
+      const error = await safeFetch(REQUESTED, {
+        allowPrivate: true,
+        redirect: "error",
+      }).catch((e: unknown) => e);
+
+      expect(isSafeFetchRedirectError(error)).toBe(true);
+      expect((error as { httpStatus?: number }).httpStatus).toBe(302);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    test("neither the message nor the stack names the Location it refused", async () => {
+      fetchMock.mockResolvedValueOnce(redirectTo(REDIRECT_TARGET, 301));
+
+      const error = (await safeFetch(REQUESTED, {
+        allowPrivate: true,
+        redirect: "error",
+      }).catch((e: unknown) => e)) as Error;
+
+      expect(error.message).not.toContain(REDIRECT_TARGET);
+      expect(error.message).not.toContain("attacker.example");
+      expect(String(error.stack)).not.toContain("attacker.example");
+    });
+
+    test("`redirect: 'manual'` and `follow` are unaffected", async () => {
+      fetchMock.mockResolvedValueOnce(redirectTo(REDIRECT_TARGET));
+      const manual = await safeFetch(REQUESTED, { allowPrivate: true, redirect: "manual" });
+      expect(manual.status).toBe(302);
+
+      fetchMock
+        .mockResolvedValueOnce(redirectTo("http://localhost:3000/hook/v2"))
+        .mockResolvedValueOnce(ok());
+      const followed = await safeFetch(REQUESTED, { allowPrivate: true });
+      expect(followed.status).toBe(200);
+    });
+  });
+
+  // The server transport reaches the network through undici and a real socket,
+  // so its refusal branch is pinned at the source instead: BOTH transports must
+  // route through the one factory. Two hand-rolled throws is exactly how the
+  // refusals drift apart again — which the consumer would not notice, because
+  // its fallback is retryable.
+  describe("both transports refuse through the one factory", () => {
+    const transports = ["SafeFetch.ts", "SafeFetch.server.ts"] as const;
+
+    test.each(transports)("%s throws the sentinel for redirect mode 'error'", async (file) => {
+      const source = await readFile(resolve(transportDir, file), "utf8");
+      const branch = source.split(`if (requestedRedirectMode === "error") {`);
+
+      expect(branch.length).toBe(2);
+      const body = branch[1]!.split("}")[0]!;
+      expect(body).toContain("throw createSafeFetchRedirectError(currentUrl, response.status);");
+    });
+
+    test.each(transports)("%s constructs no bare TypeError refusal", async (file) => {
+      const source = await readFile(resolve(transportDir, file), "utf8");
+      expect(source).not.toContain("new TypeError");
+    });
+
+    test.each(transports)("%s does not read Location before refusing", async (file) => {
+      const source = await readFile(resolve(transportDir, file), "utf8");
+      // The only `location` read must come AFTER the refusal branch, on the
+      // follow path — the target of a refused redirect is never even looked at.
+      const refusalAt = source.indexOf(`if (requestedRedirectMode === "error") {`);
+      const locationAt = source.indexOf(`headers.get("location")`);
+      expect(refusalAt).toBeGreaterThan(-1);
+      expect(locationAt).toBeGreaterThan(refusalAt);
+    });
   });
 });
