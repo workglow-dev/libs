@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.12
+
+### Tests
+
+#### eval
+
+- expect DeepSeek v4-pro's published off-peak windows
+
 ## 0.6.11
 
 _No changes in this package._

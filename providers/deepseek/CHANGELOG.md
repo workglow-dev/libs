@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.12
+
+### Bug Fixes
+
+#### deepseek
+
+- bill every model off-peak in the published windows; opt out of turbo agent guidance
+
 ## 0.6.11
 
 ### Features

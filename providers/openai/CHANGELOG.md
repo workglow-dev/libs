@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.12
+
+### Features
+
+#### openai
+
+- add gpt-6.1-sol and limit the effort-none temperature path to GPT-5.6
+
+### Bug Fixes
+
+#### openai
+
+- narrow the model id before naming it in the temperature warning
+- honour a pinned temperature and warn when it is dropped
+
 ## 0.6.11
 
 ### Features

@@ -1,5 +1,17 @@
 # @workglow/cli
 
+## 0.6.12
+
+### Chores
+
+#### deps
+
+- update dependencies across multiple packages
+
+### Updated Dependencies
+
+- `preact`: ^11.0.0
+
 ## 0.6.11
 
 _No changes in this package._

@@ -1,5 +1,17 @@
 # @workglow/web
 
+## 0.6.12
+
+### Chores
+
+#### deps
+
+- update dependencies across multiple packages
+
+### Updated Dependencies
+
+- `vite`: ^8.3.2
+
 ## 0.6.11
 
 _No changes in this package._

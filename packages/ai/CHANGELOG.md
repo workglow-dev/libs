@@ -1,5 +1,23 @@
 # @workglow/ai
 
+## 0.6.12
+
+### Features
+
+#### ai
+
+- AgentTask turns that end in a checked answer, under budgets
+
+### Bug Fixes
+
+#### ai
+
+- retry a provider's statusless server error; ask for the whole answer back
+
+#### deepseek
+
+- bill every model off-peak in the published windows; opt out of turbo agent guidance
+
 ## 0.6.11
 
 _No changes in this package._

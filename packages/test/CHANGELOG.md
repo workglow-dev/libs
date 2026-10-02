@@ -1,5 +1,41 @@
 # @workglow/test
 
+## 0.6.12
+
+### Features
+
+#### ai
+
+- AgentTask turns that end in a checked answer, under budgets
+
+#### openai
+
+- add gpt-6.1-sol and limit the effort-none temperature path to GPT-5.6
+
+### Bug Fixes
+
+#### ai
+
+- retry a provider's statusless server error; ask for the whole answer back
+
+#### deepseek
+
+- bill every model off-peak in the published windows; opt out of turbo agent guidance
+
+#### openai
+
+- honour a pinned temperature and warn when it is dropped
+
+### Chores
+
+#### deps
+
+- update dependencies across multiple packages
+
+### Updated Dependencies
+
+- `miniflare`: ^5.20261001.0-alpha
+
 ## 0.6.11
 
 ### Features
