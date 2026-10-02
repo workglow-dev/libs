@@ -29,7 +29,7 @@
   "exports": {
     "./ai": {
       "browser": {
-        "types": "./dist/ai.d.ts",
+        "types": "./dist/ai.browser.d.ts",
         "import": "./dist/ai.browser.js"
       },
       "types": "./dist/ai.d.ts",
@@ -37,7 +37,7 @@
     },
     "./ai-runtime": {
       "browser": {
-        "types": "./dist/ai-runtime.d.ts",
+        "types": "./dist/ai-runtime.browser.d.ts",
         "import": "./dist/ai-runtime.browser.js"
       },
       "types": "./dist/ai-runtime.d.ts",

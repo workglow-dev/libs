@@ -116,7 +116,10 @@ Resolution rules:
 Each condition block includes a `"types"` field so that TypeScript resolves the correct `.d.ts`
 file for the platform. This is critical because the type declarations differ per platform — for
 example, the browser entry exports `Worker` as `globalThis.Worker` while the Node entry exports
-a `WorkerPolyfill` that wraps `worker_threads`.
+a `WorkerPolyfill` that wraps `worker_threads`. That resolution is not automatic for `tsc`:
+`"browser"` is not one of TypeScript's built-in conditions, so a browser consumer must set
+`"customConditions": ["browser"]` in its tsconfig or it type-checks the browser bundle against
+the node declarations. See [Conditional Exports](./19-build-system.md#conditional-exports).
 
 ### Sub-path exports
 

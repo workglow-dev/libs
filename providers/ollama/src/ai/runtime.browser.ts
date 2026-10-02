@@ -14,5 +14,7 @@
 // organize-imports-ignore
 
 export * from "./common/Ollama_Client.browser";
+export * from "./common/Ollama_TextGeneration";
+export * from "./common/Ollama_StructuredGeneration";
 export * from "./registerOllamaInline.browser";
 export * from "./registerOllamaWorker.browser";
