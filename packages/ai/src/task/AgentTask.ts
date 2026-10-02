@@ -57,7 +57,12 @@ import { collectToolUseIds, uniquifyToolCallIds } from "./ToolCallIds";
 import type { ToolCallingTaskInput, ToolCallingTaskOutput } from "./ToolCallingTask";
 import { ToolCallingInputSchema, ToolCallingTask } from "./ToolCallingTask";
 import type { ToolCall, ToolDefinition } from "./ToolCallingUtils";
-import { compileToolValidators, sanitizeToolArgs, ToolCallError } from "./ToolCallingUtils";
+import {
+  compileToolValidators,
+  describeSchemaErrors,
+  sanitizeToolArgs,
+  ToolCallError,
+} from "./ToolCallingUtils";
 import { RetryableJobError } from "@workglow/job-queue";
 
 /** Rounds before the loop gives up on the model reaching an answer. */
@@ -906,7 +911,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     if (validator) {
       const check = validator.validate(sanitized);
       if (!check.valid) {
-        const detail = check.errors.map((error) => error.message).join("; ") || "invalid arguments";
+        const detail = describeSchemaErrors(check.errors);
         // The answer itself failed its schema: say so as a correction to make,
         // which is what gets a model to resubmit rather than give up.
         const text =

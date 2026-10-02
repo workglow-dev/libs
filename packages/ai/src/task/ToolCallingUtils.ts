@@ -215,6 +215,77 @@ export function compileToolValidators(
   return validators;
 }
 
+/** One schema error as a validator reports it: the parts this module reads. */
+interface SchemaErrorLike {
+  readonly code?: string;
+  readonly message: string;
+  readonly data?: unknown;
+}
+
+/** The JSON type a value has, in the spelling a schema's `type` uses. */
+function jsonTypeOf(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  if (typeof value === "number") return Number.isInteger(value) ? "integer" : "number";
+  return typeof value;
+}
+
+function branchAccepts(branch: unknown, type: string): boolean {
+  if (branch === null || typeof branch !== "object") return false;
+  const declared = (branch as { type?: unknown }).type;
+  if (declared === undefined) return false;
+  const types = Array.isArray(declared) ? declared : [declared];
+  return types.includes(type) || (type === "integer" && types.includes("number"));
+}
+
+/**
+ * The validation errors as one line a model can act on.
+ *
+ * An `anyOf` that fails reports only that no branch matched, with the whole
+ * value and every branch echoed back. For the commonest shape — an object or
+ * null — that hides the one thing to fix: the object branch's own complaint,
+ * such as a property its schema does not allow. Where exactly one branch takes
+ * the value's JSON type, its errors are reported instead, at the path of the
+ * value that failed.
+ */
+export function describeSchemaErrors(errors: ReadonlyArray<{ readonly message: string }>): string {
+  const lines = errors.flatMap((error) => explainSchemaError(error as SchemaErrorLike, 0));
+  return lines.join("; ") || "invalid arguments";
+}
+
+function explainSchemaError(error: SchemaErrorLike, depth: number): string[] {
+  const data = error.data as
+    | { readonly pointer?: unknown; readonly value?: unknown; readonly anyOf?: unknown }
+    | undefined;
+  if (
+    depth > 4 ||
+    (error.code !== "any-of-error" && error.code !== "one-of-error") ||
+    data === undefined ||
+    !Array.isArray(data.anyOf ?? (data as { oneOf?: unknown }).oneOf)
+  ) {
+    return [error.message];
+  }
+  const branches = (data.anyOf ?? (data as { oneOf?: unknown }).oneOf) as unknown[];
+  const candidates = branches.filter((branch) => branchAccepts(branch, jsonTypeOf(data.value)));
+  if (candidates.length !== 1) return [error.message];
+  let inner: SchemaErrorLike[];
+  try {
+    const result = compileSchema(candidates[0] as JsonSchema).validate(data.value);
+    if (result.valid) return [error.message];
+    inner = result.errors as SchemaErrorLike[];
+  } catch {
+    return [error.message];
+  }
+  // The branch was validated on its own, so its paths start at `#`: re-root them
+  // at the value's place in the whole answer.
+  const at = typeof data.pointer === "string" ? data.pointer : "#";
+  return inner.flatMap((e) =>
+    explainSchemaError(e, depth + 1).map((line) =>
+      at === "#" ? line : line.replace(/`#(?=[/`])/g, `\`${at}`)
+    )
+  );
+}
+
 /**
  * Filter tool calls whose `input` doesn't match the tool's compiled
  * `inputSchema`. Tools without a compiled validator (compile failed,
