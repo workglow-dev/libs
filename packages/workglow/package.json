@@ -225,6 +225,7 @@
     "@workglow/node-llama-cpp": "workspace:*",
     "@workglow/tf-mediapipe": "workspace:*",
     "@workglow/chrome-ai": "workspace:*",
+    "@workglow/bootstrap": "workspace:*",
     "@workglow/knowledge-base": "workspace:*",
     "@workglow/job-queue": "workspace:*",
     "@workglow/duckdb": "workspace:*",
