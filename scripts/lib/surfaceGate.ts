@@ -14,8 +14,6 @@
  * is the declaration text itself, before and after — so the gate compares that,
  * block by block, against the version last published.
  *
- * Everything in this module is pure; the npm and filesystem half lives in
- * `require-surface-bump.ts`.
  */
 
 import { posix } from "node:path";
