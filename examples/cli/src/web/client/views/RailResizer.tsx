@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { JSX } from "preact";
+import type { JSX, TargetedKeyboardEvent, TargetedPointerEvent } from "preact";
 import { useCallback, useState } from "preact/hooks";
 import { clampRailWidth, RAIL_DEFAULTS, type RailSide } from "../railWidths";
 
@@ -50,7 +50,7 @@ export function RailResizer({ side, width, otherWidth, onResize }: RailResizerPr
   );
 
   const onPointerDown = useCallback(
-    (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+    (event: TargetedPointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
       event.preventDefault();
       // The second press of a double-click restores the default width, the way
@@ -69,7 +69,7 @@ export function RailResizer({ side, width, otherWidth, onResize }: RailResizerPr
   );
 
   const onPointerMove = useCallback(
-    (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+    (event: TargetedPointerEvent<HTMLDivElement>) => {
       if (!drag) return;
       const delta = event.clientX - drag.x;
       // The right rail grows as the pointer moves LEFT: it is anchored to the
@@ -79,7 +79,7 @@ export function RailResizer({ side, width, otherWidth, onResize }: RailResizerPr
     [apply, drag, side]
   );
 
-  const endDrag = useCallback((event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+  const endDrag = useCallback((event: TargetedPointerEvent<HTMLDivElement>) => {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -87,7 +87,7 @@ export function RailResizer({ side, width, otherWidth, onResize }: RailResizerPr
   }, []);
 
   const onKeyDown = useCallback(
-    (event: JSX.TargetedKeyboardEvent<HTMLDivElement>) => {
+    (event: TargetedKeyboardEvent<HTMLDivElement>) => {
       const step = event.shiftKey ? STEP_COARSE : STEP;
       // Arrow keys move the SEAM, not the rail: left always takes space from
       // whatever is to its left, which for the status rail means growing it.

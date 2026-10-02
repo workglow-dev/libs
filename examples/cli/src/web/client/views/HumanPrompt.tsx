@@ -6,7 +6,7 @@
  */
 
 import type { HumanResponseAction } from "@workglow/util";
-import type { JSX } from "preact";
+import type { JSX, TargetedInputEvent } from "preact";
 import { useState } from "preact/hooks";
 import { humanPromptModel } from "@workglow/util";
 
@@ -58,18 +58,23 @@ export function HumanPrompt({
                 <div>{detail.value}</div>
               </div>
             ))}
-            {properties.map(([key, property]) => (
-              <div key={key} style="margin-bottom:8px">
-                <div className="cmd-d">{property.title ?? key}</div>
-                <input
-                  type={property.format === "password" ? "password" : "text"}
-                  value={values[key] ?? ""}
-                  onInput={(event) =>
-                    setValues({ ...values, [key]: (event.target as HTMLInputElement).value })
-                  }
-                />
-              </div>
-            ))}
+            {properties.map(([key, property]) => {
+              // `type` is a discriminated union in Preact 11, so "password" | "text"
+              // matches neither branch. Each element carries one literal.
+              const onInput = (event: TargetedInputEvent<HTMLInputElement>) => {
+                setValues({ ...values, [key]: event.currentTarget.value });
+              };
+              return (
+                <div key={key} style="margin-bottom:8px">
+                  <div className="cmd-d">{property.title ?? key}</div>
+                  {property.format === "password" ? (
+                    <input type="password" value={values[key] ?? ""} onInput={onInput} />
+                  ) : (
+                    <input type="text" value={values[key] ?? ""} onInput={onInput} />
+                  )}
+                </div>
+              );
+            })}
             <div style="display:flex;gap:8px;margin-top:8px">
               {model.actions.includes("accept") ? (
                 <button
