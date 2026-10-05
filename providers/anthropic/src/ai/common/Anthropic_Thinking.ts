@@ -7,11 +7,11 @@
 import { resolveEnabledEffort, type ModelEffort } from "@workglow/ai/worker";
 import { getLogger } from "@workglow/util/worker";
 import { anthropicEffortPolicy } from "./Anthropic_EffortPolicy";
+import { normalizeAnthropicModelId, parseAnthropicModelId } from "./Anthropic_ModelId";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
 import {
   anthropicDefaultThinkingParams,
   anthropicMinimalThinkingParams,
-  parseAnthropicModelId,
 } from "./Anthropic_RequestParams";
 
 /** Token budgets for legacy `thinking.type = "enabled"` (and adaptive headroom). */
@@ -62,7 +62,7 @@ export function anthropicSupportsAdaptiveThinking(
 ): boolean {
   const id = (model?.provider_config as AnthropicThinkingProviderConfig | undefined)?.model_name;
   if (!id) return false;
-  const parsed = parseAnthropicModelId(id);
+  const parsed = parseAnthropicModelId(normalizeAnthropicModelId(id));
   if (parsed === undefined) return false;
   if (parsed.major > 4) return true;
   if (parsed.major < 4) return false;

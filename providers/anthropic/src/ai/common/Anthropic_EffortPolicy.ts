@@ -11,13 +11,13 @@ import {
   type ModelEffortPolicy,
   type ModelEffortPolicyFn,
 } from "@workglow/ai/worker";
-import { ANTHROPIC_GATEWAY_PREFIX, parseAnthropicModelId } from "./Anthropic_RequestParams";
+import { normalizeAnthropicModelId, parseAnthropicModelId } from "./Anthropic_ModelId";
 
 const CLAUDE = { supported: MODEL_EFFORTS, default: "none" } as const satisfies ModelEffortPolicy;
 
 /** Extended thinking arrived in Claude 3.7; older generations 400 on any thinking field. */
 function isPreThinkingClaude(id: string): boolean {
-  const parsed = parseAnthropicModelId(id.replace(ANTHROPIC_GATEWAY_PREFIX, ""));
+  const parsed = parseAnthropicModelId(normalizeAnthropicModelId(id));
   if (parsed === undefined) return false;
   if (parsed.major !== 3) return parsed.major < 3;
   return (parsed.minor ?? 0) < 7;
