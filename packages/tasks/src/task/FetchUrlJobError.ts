@@ -183,11 +183,12 @@ export function createFetchUrlHttpError(
   status: number,
   statusText: string,
   retryDate?: Date,
-  body?: string
+  body?: string,
+  options?: HttpErrorDetailOptions
 ): FetchUrlJobErrorInstance {
   const code = httpStatusToFetchUrlErrorCode(status);
   const statusPart = `${status} ${statusText}`;
-  const detail = httpErrorDetailFromBody(body);
+  const detail = httpErrorDetailFromBody(body, options);
   // A body that only restates the status line (`404 Not Found` answering with
   // `Not Found`) adds nothing to the message.
   const redundant =
@@ -195,10 +196,13 @@ export function createFetchUrlHttpError(
     [statusText.trim(), statusPart.trim(), String(status)].some(
       (s) => s !== "" && s.toLowerCase() === detail.toLowerCase()
     );
-  const httpErrorMessage = redundant ? undefined : detail;
+  const httpErrorMessage = redundant ? undefined : detail?.replace(/"/g, "'");
+  // The remote's words ride inside a fixed, quoted frame so a reader (a model
+  // included) can tell them from this task's own text; `sanitizeHttpErrorDetail`
+  // guarantees the detail cannot contain the frame's delimiters or a newline.
   const message =
     httpErrorMessage !== undefined
-      ? `Failed to fetch ${url}: ${statusPart}: ${httpErrorMessage}`
+      ? `Failed to fetch ${url}: ${statusPart} [remote said: "${httpErrorMessage}"]`
       : `Failed to fetch ${url}: ${statusPart}`;
   return createFetchUrlJobError(code, message, {
     url,
@@ -207,6 +211,83 @@ export function createFetchUrlHttpError(
     httpErrorMessage,
     retryDate,
   });
+}
+
+export interface HttpErrorDetailOptions {
+  /**
+   * Exact secret values (resolved credentials, key-like request headers) to
+   * blank out of the quoted detail wherever a server echoed them back.
+   */
+  readonly secrets?: readonly string[];
+  /**
+   * The response `Content-Type`. When given, a body that is not text, JSON or
+   * XML is never quoted raw. Omitted means unknown and does not restrict.
+   */
+  readonly contentType?: string;
+}
+
+/** A private-use placeholder, so the brackets in the final text survive the bracket neutralising. */
+const REDACTED = "\uE000";
+const REDACTED_TEXT = "[redacted]";
+
+/** Shortest secret worth scanning for; shorter ones would shred ordinary words. */
+const MIN_SECRET_CHARS = 4;
+
+const SECRET_PARAM_NAMES =
+  "api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token|auth(?:orization)?|token|secret|client[_-]?secret|password|passwd|pwd|signature|sig|key";
+
+const SECRET_PATTERNS: readonly RegExp[] = [
+  // `Authorization: Bearer abc1`, `Basic dXNlcjpwdw==`; the lookahead leaves prose (`Basic authentication required`) alone
+  /\b(?:bearer|basic)\s+(?=[A-Za-z0-9._~+/=-]*[\d=])[A-Za-z0-9._~+/=-]{6,}/gi,
+  // `api_key=abc`, `"token": "abc"`, `password: abc`
+  new RegExp(`\\b(${SECRET_PARAM_NAMES})\\b(["']?\\s*[:=]\\s*["']?)[^\\s"'&,;}<>]{3,}`, "gi"),
+  // Provider-shaped keys quoted without any label (`Invalid API key: sk-ant-…`).
+  /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g,
+  /\b(?:ghp|gho|ghu|ghs|github_pat|xox[abprs]|AKIA|AIza)[A-Za-z0-9_-]{12,}/g,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g,
+];
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Makes remote text safe to store and to hand to a model: secrets blanked out,
+ * control and invisible/bidi characters dropped, markup, backticks and the
+ * message frame's own delimiters neutralised, whitespace collapsed to one line.
+ * Runs before bounding so a secret cut by the length cap is not left half-visible.
+ */
+export function sanitizeHttpErrorDetail(text: string, secrets: readonly string[] = []): string {
+  let out = text;
+  // Longest first so a secret containing another is replaced whole.
+  const known = [...new Set(secrets.filter((s) => s.length >= MIN_SECRET_CHARS))].sort(
+    (a, b) => b.length - a.length
+  );
+  for (const secret of known) {
+    out = out.replace(new RegExp(escapeRegExp(secret), "g"), REDACTED);
+  }
+  out = out.replace(SECRET_PATTERNS[0]!, REDACTED);
+  out = out.replace(
+    SECRET_PATTERNS[1]!,
+    (_m, name: string, sep: string) => `${name}${sep}${REDACTED}`
+  );
+  for (const pattern of SECRET_PATTERNS.slice(2)) out = out.replace(pattern, REDACTED);
+  out = out
+    .replace(
+      // oxlint-disable-next-line no-control-regex -- stripping control characters is the point
+      /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2028\u2029\u2066-\u2069\uFEFF]/g,
+      " "
+    )
+    .replace(/[<>`]/g, "")
+    .replace(/\[/g, "(")
+    .replace(/\]/g, ")");
+  return out.replaceAll(REDACTED, REDACTED_TEXT);
+}
+
+function contentTypeAllowsRawQuote(contentType: string | undefined): boolean {
+  if (contentType === undefined) return true;
+  const type = contentType.split(";")[0]!.trim().toLowerCase();
+  return type.startsWith("text/") || /(?:^|[/+])(?:json|xml)$/.test(type);
 }
 
 /** Longest detail {@link httpErrorDetailFromBody} will put into an error message. */
@@ -242,7 +323,18 @@ const HTTP_ERROR_JSON_MAX_DEPTH = 3;
  * {@link HTTP_ERROR_DETAIL_MAX_CHARS}, because it lands in a log line and in
  * a persisted `error` column.
  */
-export function httpErrorDetailFromBody(body: string | undefined): string | undefined {
+export function httpErrorDetailFromBody(
+  body: string | undefined,
+  options?: HttpErrorDetailOptions
+): string | undefined {
+  const raw = rawHttpErrorDetail(body, options?.contentType);
+  return raw === undefined ? undefined : boundHttpErrorDetail(raw, options?.secrets);
+}
+
+function rawHttpErrorDetail(
+  body: string | undefined,
+  contentType: string | undefined
+): string | undefined {
   if (body === undefined) return undefined;
   const trimmed = body.trim();
   if (trimmed === "") return undefined;
@@ -257,8 +349,7 @@ export function httpErrorDetailFromBody(body: string | undefined): string | unde
     }
   }
   if (isJson) {
-    const text = jsonErrorText(parsed, 0);
-    return text === undefined ? undefined : boundHttpErrorDetail(text);
+    return jsonErrorText(parsed, 0);
   }
   if (looksBinary(trimmed)) return undefined;
   if (/^<(?:!doctype|html|\?xml|head|body)/i.test(trimmed)) {
@@ -267,9 +358,10 @@ export function httpErrorDetailFromBody(body: string | undefined): string | unde
     const text =
       /<title[^>]*>([^<]*)<\/title>/i.exec(trimmed)?.[1] ??
       /<message[^>]*>([^<]*)<\/message>/i.exec(trimmed)?.[1];
-    return text === undefined ? undefined : boundHttpErrorDetail(text);
+    return text;
   }
-  return boundHttpErrorDetail(trimmed);
+  if (!contentTypeAllowsRawQuote(contentType)) return undefined;
+  return trimmed;
 }
 
 /**
@@ -334,8 +426,8 @@ function looksBinary(text: string): boolean {
   return /[\u0000-\u0008\u000E-\u001F\u007F\uFFFD]/.test(text);
 }
 
-function boundHttpErrorDetail(text: string): string | undefined {
-  const collapsed = text.replace(/\s+/g, " ").trim();
+function boundHttpErrorDetail(text: string, secrets?: readonly string[]): string | undefined {
+  const collapsed = sanitizeHttpErrorDetail(text, secrets).replace(/\s+/g, " ").trim();
   if (collapsed === "") return undefined;
   if (collapsed.length <= HTTP_ERROR_DETAIL_MAX_CHARS) return collapsed;
   let cut = collapsed.slice(0, HTTP_ERROR_DETAIL_MAX_CHARS - 1);
