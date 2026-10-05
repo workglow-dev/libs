@@ -42,6 +42,7 @@ import {
 import {
   createFetchUrlAbortedError,
   createFetchUrlHttpError,
+  SECRET_QUERY_NAME,
   createFetchUrlJobError,
   FetchUrlErrorCode,
   isFetchUrlJobError,
@@ -444,7 +445,6 @@ function assertMethodAllowsResponseType(
 }
 
 const SECRET_HEADER_NAME = /authorization|cookie|api[-_]?key|token|secret|auth|key/i;
-const SECRET_QUERY_NAME = /key|token|secret|auth|password|passwd|pwd|signature|sig/i;
 
 /**
  * Values this request sent that a server might echo into an error body: the

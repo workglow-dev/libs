@@ -236,6 +236,14 @@ describe("redactUrlForMessage", () => {
     expect(shown).toContain("api.example.com/v1/items");
   });
 
+  test("matches credential names that only contain a key word", () => {
+    const shown = redactUrlForMessage(
+      "https://api.example.com/x?x-api-key=AAA111&keyId=BBB222&user_token=CCC333&q=ok"
+    );
+    for (const secret of ["AAA111", "BBB222", "CCC333"]) expect(shown).not.toContain(secret);
+    expect(shown).toContain("q=ok");
+  });
+
   test("returns a URL with nothing to hide unchanged", () => {
     const url = "https://example.com/a?b=c";
     expect(redactUrlForMessage(url)).toBe(url);

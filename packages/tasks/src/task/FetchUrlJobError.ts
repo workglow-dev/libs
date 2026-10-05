@@ -248,7 +248,12 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g,
 ];
 
-const SECRET_PARAM_NAME_ONLY = new RegExp(`^(?:${SECRET_PARAM_NAMES})$`, "i");
+/**
+ * Query parameter names treated as credentials, matched anywhere in the name
+ * (`x-api-key`, `keyId`, `user_token`). One definition for the URL redactor and
+ * the collector of values to blank from a response body, so they cannot disagree.
+ */
+export const SECRET_QUERY_NAME = /key|token|secret|auth|password|passwd|pwd|signature|sig/i;
 
 /**
  * The URL as it may appear in an error message: userinfo and the value of any
@@ -266,7 +271,7 @@ export function redactUrlForMessage(url: string): string {
       changed = true;
     }
     for (const name of [...new Set(parsed.searchParams.keys())]) {
-      if (SECRET_PARAM_NAME_ONLY.test(name)) {
+      if (SECRET_QUERY_NAME.test(name)) {
         parsed.searchParams.set(name, REDACTED_TEXT);
         changed = true;
       }
