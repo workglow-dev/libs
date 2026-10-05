@@ -169,12 +169,23 @@ describe("profile tables and pricing tables are one set of models", () => {
     (id) => {
       const { profile, source } = resolveAnthropicProfile(id);
       expect(source).toBe("table");
-      expect(resolveAnthropicOutputFormatSupport(claude(id)).value).toBe(
-        profile.supportsOutputFormat
-      );
-      expect(resolveAnthropicForcedToolChoice(claude(id)).value).toBe(
-        profile.acceptsForcedToolChoice
-      );
+      // Request building must read the table, in every spelling a gateway uses
+      // for the same model, not only the canonical id.
+      const spellings = [id, `anthropic/${id}`, `us.anthropic.${id}-v1:0`, `${id}@20251001`];
+      for (const spelled of spellings) {
+        const output = resolveAnthropicOutputFormatSupport(claude(spelled));
+        const forced = resolveAnthropicForcedToolChoice(claude(spelled));
+        expect([spelled, output.source, output.value]).toEqual([
+          spelled,
+          "table",
+          profile.supportsOutputFormat,
+        ]);
+        expect([spelled, forced.source, forced.value]).toEqual([
+          spelled,
+          "table",
+          profile.acceptsForcedToolChoice,
+        ]);
+      }
       const caps = inferAnthropicCapabilities({ model_id: id } as never);
       expect(caps.includes("vision-input")).toBe(profile.vision);
       expect(caps).toContain("text.generation");
@@ -186,9 +197,14 @@ describe("profile tables and pricing tables are one set of models", () => {
     (id) => {
       const { profile, source } = resolveOpenAiProfile(id);
       expect(source).toBe("table");
-      expect(resolveOpenAiTemperatureWithReasoning(gpt(id)).value).toBe(
-        profile!.acceptsTemperatureWithReasoning
-      );
+      for (const spelled of [id, `openai/${id}`]) {
+        const temperature = resolveOpenAiTemperatureWithReasoning(gpt(spelled));
+        expect([spelled, temperature.source, temperature.value]).toEqual([
+          spelled,
+          "table",
+          profile!.acceptsTemperatureWithReasoning,
+        ]);
+      }
       const caps = inferOpenAiCapabilities({ model_id: id } as never);
       expect(caps.includes("text.embedding")).toBe(profile!.kind === "embedding");
       expect(caps.includes("image.editing")).toBe(profile!.kind === "image-editing");
