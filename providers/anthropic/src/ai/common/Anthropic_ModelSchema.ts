@@ -76,6 +76,18 @@ export const AnthropicModelSchema = {
             "Override whether temperature/top_p are sent. Recent Claude models reject them with HTTP 400, so they are omitted unless the model id matches a generation known to accept them. Set explicitly only to correct that decision. Absent means 'decide from the model id'.",
           "x-ui-hidden": true,
         },
+        supports_output_format: {
+          type: "boolean",
+          description:
+            "Override whether the model accepts native structured outputs (`output_config.format`). Absent means 'decide from the model id'. A wrong `true` is an HTTP 400.",
+          "x-ui-hidden": true,
+        },
+        accepts_forced_tool_choice: {
+          type: "boolean",
+          description:
+            "Override whether the model accepts a forced `tool_choice` (`any` or `tool`). Absent means 'decide from the model id'. A wrong `true` is an HTTP 400.",
+          "x-ui-hidden": true,
+        },
       },
       required: ["model_name"],
       additionalProperties: false,

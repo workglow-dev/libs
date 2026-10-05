@@ -261,6 +261,29 @@ describe("FetchUrlTask", () => {
     }
   });
 
+  test("never stores the request's credential echoed by a 401 body", async () => {
+    const secret = "tok_live_51HxYz0987654321abcdef";
+    mockFetch.mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ message: `Invalid API key: ${secret}` }), {
+          status: 401,
+          statusText: "Unauthorized",
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+    );
+
+    const error = await fetchUrl({
+      url: "https://api.example.com/items",
+      response_type: "json",
+      headers: { Authorization: `Bearer ${secret}` },
+    }).catch((e: unknown) => e);
+    const jobFailed = error as JobTaskFailedError;
+    expect(jobFailed.jobError.message).not.toContain(secret);
+    expect((jobFailed.jobError as any).httpErrorMessage).not.toContain(secret);
+    expect(jobFailed.jobError.message).toContain("[redacted]");
+  });
+
   test("surfaces a nested Yahoo chart.error.description from a 400 body", async () => {
     mockFetch.mockImplementation(() =>
       Promise.resolve(
@@ -289,7 +312,7 @@ describe("FetchUrlTask", () => {
     expect(jobFailed.jobError).toBeInstanceOf(PermanentJobError);
     expect(jobFailed.jobError.code).toBe(FetchUrlErrorCode.HTTP_CLIENT_ERROR);
     expect(jobFailed.jobError.message).toBe(
-      "Failed to fetch https://api.example.com/chart: 400 Bad Request: Date range exceeds maximum of 5 years"
+      'Failed to fetch https://api.example.com/chart: 400 Bad Request [remote said: "Date range exceeds maximum of 5 years"]'
     );
     expect(mockFetch.mock.calls.length).toBe(1);
   });

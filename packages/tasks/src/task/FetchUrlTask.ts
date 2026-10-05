@@ -42,6 +42,7 @@ import {
 import {
   createFetchUrlAbortedError,
   createFetchUrlHttpError,
+  SECRET_QUERY_NAME,
   createFetchUrlJobError,
   FetchUrlErrorCode,
   isFetchUrlJobError,
@@ -443,7 +444,41 @@ function assertMethodAllowsResponseType(
   );
 }
 
-async function buildHttpError(url: string, response: Response): Promise<Error> {
+const SECRET_HEADER_NAME = /authorization|cookie|api[-_]?key|token|secret|auth|key/i;
+
+/**
+ * Values this request sent that a server might echo into an error body: the
+ * resolved credential (already placed in a header by the time a job runs),
+ * any key-like header, and key-like query parameters. Both the whole header
+ * value and the part after an auth scheme are collected, since servers quote
+ * either.
+ */
+export function collectRequestSecrets(
+  url: string,
+  headers: Record<string, string> | undefined
+): string[] {
+  const secrets: string[] = [];
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    if (typeof value !== "string" || !SECRET_HEADER_NAME.test(name)) continue;
+    secrets.push(value);
+    const schemeless = /^\s*\S+\s+(\S.*)$/.exec(value)?.[1];
+    if (schemeless !== undefined) secrets.push(schemeless.trim());
+  }
+  try {
+    for (const [name, value] of new URL(url).searchParams) {
+      if (SECRET_QUERY_NAME.test(name)) secrets.push(value);
+    }
+  } catch {
+    // An unparseable URL never reaches a response.
+  }
+  return secrets;
+}
+
+async function buildHttpError(
+  url: string,
+  response: Response,
+  requestHeaders?: Record<string, string>
+): Promise<Error> {
   let retryDate: Date | undefined;
   if (response.status === 429 || response.status === 503 || response.headers.get("Retry-After")) {
     const retryAfterStr = response.headers.get("Retry-After");
@@ -469,7 +504,10 @@ async function buildHttpError(url: string, response: Response): Promise<Error> {
     }
   }
   const body = await readHttpErrorBody(response);
-  return createFetchUrlHttpError(url, response.status, response.statusText, retryDate, body);
+  return createFetchUrlHttpError(url, response.status, response.statusText, retryDate, body, {
+    secrets: collectRequestSecrets(url, requestHeaders),
+    contentType: response.headers.get("content-type") ?? "",
+  });
 }
 
 const HTTP_ERROR_BODY_MAX_BYTES = 4096;
@@ -692,7 +730,7 @@ export class FetchUrlJob<
       // released. With a body there is nothing left to cancel and the stream is
       // still reader-locked, so a second `cancel()` only raises a TypeError for
       // `discardBody` to swallow; with no body it was a no-op to begin with.
-      const error = await buildHttpError(input.url!, response);
+      const error = await buildHttpError(input.url!, response, input.headers);
       throw error;
     }
 

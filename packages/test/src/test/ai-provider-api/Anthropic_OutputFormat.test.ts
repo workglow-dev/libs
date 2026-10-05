@@ -112,4 +112,32 @@ describe("toAnthropicOutputSchema", () => {
     });
     expect(out?.$defs).toEqual({ leaf: { type: "string" } });
   });
+
+  it("checks a diamond of shared definitions in linear time", () => {
+    const depth = 30;
+    const defs: Record<string, unknown> = { d0: { type: "string" } };
+    for (let k = 1; k <= depth; k++) {
+      defs[`d${k}`] = {
+        type: "object",
+        properties: { l: { $ref: `#/$defs/d${k - 1}` }, r: { $ref: `#/$defs/d${k - 1}` } },
+      };
+    }
+    const started = performance.now();
+    const out = toAnthropicOutputSchema({ $ref: `#/$defs/d${depth}`, $defs: defs });
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(out).toBeDefined();
+  });
+
+  it("still finds a cycle behind a diamond", () => {
+    const defs: Record<string, unknown> = {
+      d0: { type: "object", properties: { back: { $ref: "#/$defs/d5" } } },
+    };
+    for (let k = 1; k <= 5; k++) {
+      defs[`d${k}`] = {
+        type: "object",
+        properties: { l: { $ref: `#/$defs/d${k - 1}` }, r: { $ref: `#/$defs/d${k - 1}` } },
+      };
+    }
+    expect(toAnthropicOutputSchema({ $ref: "#/$defs/d5", $defs: defs })).toBeUndefined();
+  });
 });

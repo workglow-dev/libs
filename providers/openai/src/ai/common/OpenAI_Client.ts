@@ -8,6 +8,7 @@ import { isBrowserLike, resolveApiKey, validateProviderBaseUrl } from "@workglow
 import { resolveEnabledEffort, type ModelEffort } from "@workglow/ai/worker";
 import { openaiEffortPolicy } from "./OpenAI_EffortPolicy";
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
+import { resolveOpenAiTemperatureWithReasoning } from "./OpenAI_TemperatureCapability";
 import { warnTemperatureDroppedOnce } from "./OpenAI_ResponsesWarnings";
 
 /** Maps coarse {@link ModelEffort} to OpenAI Responses `reasoning.effort`. */
@@ -199,9 +200,10 @@ function getModelId(model: OpenAiModelConfig | undefined): string {
  * `temperature` is rejected alongside any reasoning effort but `"none"` —
  * verified live against `gpt-5.6-luna` and `gpt-6-astra` — so it is dropped
  * whenever reasoning is on rather than failing the request, with a warning.
- * A pinned temperature with no effort configured keeps reasoning off only on
- * the GPT-5.6 family, where `none` plus a temperature is accepted; any other
- * model is not guessed at, so its temperature is dropped.
+ * A pinned temperature with no effort configured keeps reasoning off only where
+ * {@link resolveOpenAiTemperatureWithReasoning} says `none` plus a temperature
+ * is accepted (the GPT-5.6 family by default); any other model is not guessed
+ * at, so its temperature is dropped.
  */
 export function finalizeResponsesRequest(
   model: OpenAiModelConfig | undefined,
@@ -211,7 +213,7 @@ export function finalizeResponsesRequest(
   const fallback = resolveEnabledEffort({ ...model, effort: policy.default }, policy);
   const configured = getReasoningConfig(model);
   const canDisable =
-    /^gpt-5\.6/i.test(getModelId(model)) &&
+    resolveOpenAiTemperatureWithReasoning(model).value &&
     policy.supported.includes("none") &&
     resolveEnabledEffort({ ...model, effort: "none" }, policy) === "none";
   const reasoning =

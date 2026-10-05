@@ -5,7 +5,13 @@
  */
 
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
-import { parsedModelName } from "./Anthropic_RequestParams";
+import type { AnthropicCapabilityResolution } from "./Anthropic_RequestParams";
+import {
+  ANTHROPIC_KNOWN_FAMILIES,
+  ANTHROPIC_LATEST_KNOWN_MAJOR,
+  anthropicCapabilityOverride,
+  parsedModelName,
+} from "./Anthropic_RequestParams";
 
 /**
  * Native structured outputs: `output_config.format = {type: "json_schema"}`.
@@ -17,29 +23,51 @@ import { parsedModelName } from "./Anthropic_RequestParams";
  * cannot carry extended thinking.
  */
 
+/** Generation-4 minors that accept `output_config.format`, per family. */
+const GENERATION_4_OUTPUT_FORMAT_MINORS: Readonly<Record<string, readonly number[]>> = {
+  opus: [8, 5, 1],
+  haiku: [5],
+  sonnet: [],
+  fable: [],
+  mythos: [],
+};
+
 /**
- * Whether the configured model accepts `output_config.format`.
+ * Whether the configured model accepts `output_config.format`, and how that was
+ * decided. `provider_config.supports_output_format` overrides everything;
+ * otherwise the id is read against the tables.
  *
  * Generation 5 and later in every family; in generation 4, Opus 4.8, Opus 4.5,
- * Opus 4.1 and Haiku 4.5. Opus 4.7, Opus 4.6 and the Sonnet 4.x line are not
- * listed as supporting it and keep the tool route. A wrong `false` costs only
- * the older route; a wrong `true` is a 400 — so an id the parser cannot read
- * answers `false`.
+ * Opus 4.1 and Haiku 4.5. Opus 4.7, Opus 4.6 and the Sonnet 4.x line keep the
+ * tool route. A wrong `true` is a 400 and a wrong `false` costs only the older
+ * route, so an id the parser cannot read, or a generation-4 family the table
+ * does not name, answers `false`. A generation beyond the newest the table
+ * knows, or a generation-5 family it does not name, answers `true`: the newest
+ * known generation supports it and rejects a forced tool choice, and a future
+ * id is assumed to behave as that one does (see `resolveAnthropicForcedToolChoice`).
  */
-export function anthropicSupportsOutputFormat(model: AnthropicModelConfig | undefined): boolean {
+export function resolveAnthropicOutputFormatSupport(
+  model: AnthropicModelConfig | undefined
+): AnthropicCapabilityResolution {
+  const override = anthropicCapabilityOverride(model, "supports_output_format");
+  if (override !== undefined) return override;
   const parsed = parsedModelName(model);
-  if (parsed === undefined) return false;
-  if (parsed.major >= 5) return true;
-  if (parsed.major < 4) return false;
-  const minor = parsed.minor ?? 0;
-  switch (parsed.family) {
-    case "opus":
-      return minor === 8 || minor === 5 || minor === 1;
-    case "haiku":
-      return minor === 5;
-    default:
-      return false;
+  if (parsed === undefined) return { value: false, source: "default" };
+  if (parsed.major < 4) return { value: false, source: "table" };
+  const known = ANTHROPIC_KNOWN_FAMILIES.has(parsed.family);
+  if (parsed.major === 4) {
+    const minors = GENERATION_4_OUTPUT_FORMAT_MINORS[parsed.family];
+    if (!known || minors === undefined) return { value: false, source: "default" };
+    return { value: minors.includes(parsed.minor ?? 0), source: "table" };
   }
+  return {
+    value: true,
+    source: known && parsed.major <= ANTHROPIC_LATEST_KNOWN_MAJOR ? "table" : "default",
+  };
+}
+
+export function anthropicSupportsOutputFormat(model: AnthropicModelConfig | undefined): boolean {
+  return resolveAnthropicOutputFormatSupport(model).value;
 }
 
 /**
@@ -112,17 +140,25 @@ function hasRefCycle(root: Record<string, unknown>): boolean {
           isRecord(node) ? node[part.replace(/~1/g, "/").replace(/~0/g, "~")] : undefined,
         root
       );
-  const visit = (node: unknown, open: ReadonlySet<string>): boolean => {
-    if (Array.isArray(node)) return node.some((child) => visit(child, open));
+  // `open` holds refs on the current path, `done` refs whose whole subtree was
+  // explored without finding a cycle. Without `done`, a definition referenced
+  // twice by each of N levels is re-expanded 2^N times.
+  const open = new Set<string>();
+  const done = new Set<string>();
+  const visit = (node: unknown): boolean => {
+    if (Array.isArray(node)) return node.some(visit);
     if (!isRecord(node)) return false;
     const ref = node.$ref;
-    if (typeof ref === "string" && ref.startsWith("#")) {
+    if (typeof ref === "string" && ref.startsWith("#") && !done.has(ref)) {
       if (open.has(ref)) return true;
-      if (visit(resolve(ref), new Set([...open, ref]))) return true;
+      open.add(ref);
+      if (visit(resolve(ref))) return true;
+      open.delete(ref);
+      done.add(ref);
     }
-    return Object.entries(node).some(([key, child]) => key !== "$ref" && visit(child, open));
+    return Object.entries(node).some(([key, child]) => key !== "$ref" && visit(child));
   };
-  return visit(root, new Set());
+  return visit(root);
 }
 
 function adapt(node: unknown): unknown {

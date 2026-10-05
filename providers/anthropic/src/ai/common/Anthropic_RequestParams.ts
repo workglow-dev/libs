@@ -213,29 +213,78 @@ export function parsedModelName(model: AnthropicModelConfig | undefined) {
   return parseAnthropicModelId(id.trim().replace(ANTHROPIC_GATEWAY_PREFIX, ""));
 }
 
+/** Where a capability decision came from. `"default"` means no table entry covered the id. */
+export type AnthropicCapabilitySource = "override" | "table" | "default";
+
+export interface AnthropicCapabilityResolution {
+  readonly value: boolean;
+  readonly source: AnthropicCapabilitySource;
+}
+
+/** Families the capability tables name; any other family falls to a default. */
+export const ANTHROPIC_KNOWN_FAMILIES: ReadonlySet<string> = new Set([
+  "fable",
+  "mythos",
+  "opus",
+  "sonnet",
+  "haiku",
+]);
+
+/** Newest generation the capability tables have an entry for. */
+export const ANTHROPIC_LATEST_KNOWN_MAJOR = 5;
+
+interface AnthropicCapabilityOverrides {
+  readonly supports_output_format?: boolean;
+  readonly accepts_forced_tool_choice?: boolean;
+}
+
+/** The record's explicit answer for a capability flag, when it carries one. */
+export function anthropicCapabilityOverride(
+  model: AnthropicModelConfig | undefined,
+  flag: keyof AnthropicCapabilityOverrides
+): AnthropicCapabilityResolution | undefined {
+  const value = (model?.provider_config as AnthropicCapabilityOverrides | undefined)?.[flag];
+  return typeof value === "boolean" ? { value, source: "override" } : undefined;
+}
+
 /**
  * Whether the configured model accepts a forced `tool_choice` (`any` or
- * `tool`). Claude Fable 5.1, Mythos 5.1, Opus 5.5 and Sonnet 5.5 reject both
- * with a 400, and later generations are assumed to follow them: a wrong `false`
- * only relaxes the choice to `auto`, a wrong `true` is an unrecoverable 400.
- * An id the parser cannot read keeps the forced choice, as before.
+ * `tool`), and how that was decided. `provider_config.accepts_forced_tool_choice`
+ * overrides everything; otherwise the id is read against the table below.
+ *
+ * Claude Fable 5.1, Mythos 5.1, Opus 5.5 and Sonnet 5.5 reject both with a 400.
+ * A wrong `true` is an unrecoverable 400 and a wrong `false` only relaxes the
+ * choice to `auto`, so ids no table entry covers take the newest known
+ * generation's behavior (rejects), and an id the parser cannot read takes the
+ * oldest (accepts, the pre-generation-5 route). Those two defaults are the
+ * counterparts of the ones in `resolveAnthropicOutputFormatSupport`: together a
+ * future id gets the newest known profile — native output format, no forced
+ * tool — and an unreadable id the legacy one — tool route, forced choice.
  */
-export function anthropicAcceptsForcedToolChoice(model: AnthropicModelConfig | undefined): boolean {
+export function resolveAnthropicForcedToolChoice(
+  model: AnthropicModelConfig | undefined
+): AnthropicCapabilityResolution {
+  const override = anthropicCapabilityOverride(model, "accepts_forced_tool_choice");
+  if (override !== undefined) return override;
   const parsed = parsedModelName(model);
-  if (parsed === undefined) return true;
-  if (parsed.major < 5) return true;
-  if (parsed.major > 5) return false;
+  if (parsed === undefined) return { value: true, source: "default" };
+  if (parsed.major < 5) return { value: true, source: "table" };
+  if (parsed.major > ANTHROPIC_LATEST_KNOWN_MAJOR) return { value: false, source: "default" };
   const minor = parsed.minor ?? 0;
   switch (parsed.family) {
     case "fable":
     case "mythos":
-      return minor < 1;
+      return { value: minor < 1, source: "table" };
     case "opus":
     case "sonnet":
-      return minor < 5;
+      return { value: minor < 5, source: "table" };
     default:
-      return false;
+      return { value: false, source: "default" };
   }
+}
+
+export function anthropicAcceptsForcedToolChoice(model: AnthropicModelConfig | undefined): boolean {
+  return resolveAnthropicForcedToolChoice(model).value;
 }
 
 /**

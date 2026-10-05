@@ -71,6 +71,12 @@ export const OpenAiModelSchema = {
           },
           additionalProperties: false,
         },
+        accepts_temperature_with_reasoning: {
+          type: "boolean",
+          description:
+            "Override whether the model accepts a pinned temperature with reasoning effort 'none'. Absent means 'decide from the model id'. A wrong `true` is an HTTP 400.",
+          "x-ui-hidden": true,
+        },
       },
       required: ["model_name"],
       additionalProperties: false,
