@@ -418,6 +418,24 @@ describe("AgentTask turn controls", () => {
       expect(output.stopReason).toBe("budget");
     });
 
+    it("does not let rounds that report no usage run past maxCostUsd", async () => {
+      const called = script([{ calls: [{ id: "c", name: "echo", input: { text: "again" } }] }]);
+      const output = await new AgentTask().run(
+        {
+          model: PRICED_MODEL,
+          prompt: "?",
+          tools: [ECHO],
+          maxCostUsd: 0.0001,
+          maxRounds: 6,
+          approval: "never",
+        },
+        { registry }
+      );
+      expect(called()).toBe(1);
+      expect(output.stopReason).toBe("budget");
+      expect(output.costUsd).toBeUndefined();
+    });
+
     it("refuses maxCostUsd for a model with no price card", async () => {
       script([forever]);
       await expect(

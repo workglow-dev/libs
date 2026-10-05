@@ -246,7 +246,8 @@ retry-after says within 1–60 s), `roundTimeoutMs` (a provider can accept a req
 past it the round is abandoned as a retryable failure, so the retries cover it; a round's text is
 forwarded only once the attempt settles, since a failed attempt's partial cannot be taken back
 from the accumulated text port), and budgets — `maxInputTokens`, `maxCostUsd` (refused
-without a price card, since a budget it cannot measure never stops anything),
+without a price card, since a budget it cannot measure never stops anything, and failing closed
+for a round that reports no usage: it cannot be priced, so the turn ends `"budget"` after it),
 `maxDurationMs` — each ending the turn `"budget"`, never between a `tool_use` and its result.
 Every round leaves an `AgentStep` on `steps` (timings, attempts, each tool's outcome and
 size, usage, cost) and rides on the `snapshot` beside `messages`; `costUsd` totals them when

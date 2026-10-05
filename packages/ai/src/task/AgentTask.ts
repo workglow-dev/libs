@@ -188,7 +188,7 @@ export const AgentInputSchema = {
       type: "number",
       title: "Max Cost (USD)",
       description:
-        "Estimated spend after which the turn stops with stopReason budget. Needs a price card for the model",
+        "Estimated spend after which the turn stops with stopReason budget. Needs a price card for the model. Fails closed: a round whose usage the provider did not report cannot be priced, so the turn stops with stopReason budget after that round",
       exclusiveMinimum: 0,
       "x-ui-group": "Configuration",
     },
@@ -546,6 +546,10 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     let spentTokens = 0;
     let spentUsd = 0;
     let costKnown = true;
+    // A round that reported no usage cannot be priced, and adding nothing for it
+    // would let a capped turn run every round for free. With maxCostUsd set it
+    // counts as spending the cap: the turn stops after that round.
+    let unmeteredRound = false;
     let reminders = 0;
 
     const messages: ChatMessage[] = [...(input.messages ?? []), promptToUserMessage(input.prompt)];
@@ -583,7 +587,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     });
     const overBudget = (): boolean =>
       (input.maxInputTokens !== undefined && spentTokens >= input.maxInputTokens) ||
-      (input.maxCostUsd !== undefined && spentUsd >= input.maxCostUsd);
+      (input.maxCostUsd !== undefined && (unmeteredRound || spentUsd >= input.maxCostUsd));
     yield transcript();
 
     for (let round = 0; round < maxRounds; round++) {
@@ -644,8 +648,10 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
           costUsd,
         });
         spentTokens += promptTokens(usage);
-        if (costUsd === undefined) costKnown = false;
-        else spentUsd += costUsd;
+        if (costUsd === undefined) {
+          costKnown = false;
+          unmeteredRound = true;
+        } else spentUsd += costUsd;
       };
 
       const calls = uniquifyToolCallIds(
