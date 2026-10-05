@@ -112,17 +112,25 @@ function hasRefCycle(root: Record<string, unknown>): boolean {
           isRecord(node) ? node[part.replace(/~1/g, "/").replace(/~0/g, "~")] : undefined,
         root
       );
-  const visit = (node: unknown, open: ReadonlySet<string>): boolean => {
-    if (Array.isArray(node)) return node.some((child) => visit(child, open));
+  // `open` holds refs on the current path, `done` refs whose whole subtree was
+  // explored without finding a cycle. Without `done`, a definition referenced
+  // twice by each of N levels is re-expanded 2^N times.
+  const open = new Set<string>();
+  const done = new Set<string>();
+  const visit = (node: unknown): boolean => {
+    if (Array.isArray(node)) return node.some(visit);
     if (!isRecord(node)) return false;
     const ref = node.$ref;
-    if (typeof ref === "string" && ref.startsWith("#")) {
+    if (typeof ref === "string" && ref.startsWith("#") && !done.has(ref)) {
       if (open.has(ref)) return true;
-      if (visit(resolve(ref), new Set([...open, ref]))) return true;
+      open.add(ref);
+      if (visit(resolve(ref))) return true;
+      open.delete(ref);
+      done.add(ref);
     }
-    return Object.entries(node).some(([key, child]) => key !== "$ref" && visit(child, open));
+    return Object.entries(node).some(([key, child]) => key !== "$ref" && visit(child));
   };
-  return visit(root, new Set());
+  return visit(root);
 }
 
 function adapt(node: unknown): unknown {
