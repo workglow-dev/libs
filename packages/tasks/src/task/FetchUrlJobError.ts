@@ -385,13 +385,27 @@ function rawHttpErrorDetail(
   if (/^<(?:!doctype|html|\?xml|head|body)/i.test(trimmed)) {
     // An HTML error page's `<title>`, or an XML error document's `<Message>`
     // (S3 and its imitators); the rest of the markup is noise.
-    const text =
-      /<title[^>]*>([^<]*)<\/title>/i.exec(trimmed)?.[1] ??
-      /<message[^>]*>([^<]*)<\/message>/i.exec(trimmed)?.[1];
-    return text;
+    return elementText(trimmed, "title") ?? elementText(trimmed, "message");
   }
   if (!contentTypeAllowsRawQuote(contentType)) return undefined;
   return trimmed;
+}
+
+/**
+ * The text of the first `<tag>` element when it holds no nested markup. Plain
+ * index scans rather than a pattern: the body is remote text, and a lazy or
+ * repeated group over it backtracks quadratically on a string of repeated open tags.
+ */
+function elementText(markup: string, tag: string): string | undefined {
+  const lower = markup.toLowerCase();
+  const open = lower.indexOf(`<${tag}`);
+  if (open < 0) return undefined;
+  const openEnd = lower.indexOf(">", open);
+  if (openEnd < 0) return undefined;
+  const close = lower.indexOf(`</${tag}>`, openEnd + 1);
+  if (close < 0) return undefined;
+  const inner = markup.slice(openEnd + 1, close);
+  return inner.includes("<") ? undefined : inner;
 }
 
 /**

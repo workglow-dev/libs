@@ -259,3 +259,25 @@ describe("redactUrlForMessage", () => {
     expect(error.message).not.toContain("SUPERSECRETVALUE");
   });
 });
+
+describe("markup error bodies", () => {
+  test("reads an HTML title and an XML Message", () => {
+    expect(
+      httpErrorDetailFromBody(
+        "<!DOCTYPE html><html><head><TITLE lang='en'>Bad Gateway</TITLE></head>"
+      )
+    ).toBe("Bad Gateway");
+    expect(
+      httpErrorDetailFromBody(
+        "<?xml version='1.0'?><Error><Message>Access Denied</Message></Error>"
+      )
+    ).toBe("Access Denied");
+  });
+
+  test("a body of repeated open tags returns quickly", () => {
+    const body = `<html>${"<title".repeat(4000)}`;
+    const started = performance.now();
+    httpErrorDetailFromBody(body);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+});
