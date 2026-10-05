@@ -30,6 +30,7 @@ import {
   warnTemperatureDroppedOnce,
 } from "./common/OpenAI_ResponsesWarnings";
 import { isStrictCompatibleSchema } from "./common/OpenAI_StructuredGeneration";
+import { resolveOpenAiTemperatureWithReasoning } from "./common/OpenAI_TemperatureCapability";
 import { OpenAiQueuedProvider } from "./OpenAiQueuedProvider";
 
 /**
@@ -42,6 +43,7 @@ export const _testOnly = {
   finalizeResponsesRequest,
   getReasoningConfig,
   resolvePromptCacheKey,
+  resolveOpenAiTemperatureWithReasoning,
   isStrictCompatibleSchema,
   warnPenaltyDroppedOnce,
   warnStrictDowngradedOnce,
