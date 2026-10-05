@@ -10,7 +10,9 @@ import {
   FetchUrlErrorCode,
   HTTP_ERROR_DETAIL_MAX_CHARS,
   httpErrorDetailFromBody,
+  redactUrlForMessage,
   sanitizeHttpErrorDetail,
+  wrapFetchUrlNetworkError,
 } from "@workglow/tasks";
 import { describe, expect, test } from "vitest";
 
@@ -219,5 +221,41 @@ describe("remote error text is untrusted", () => {
 
   test("sanitizeHttpErrorDetail ignores secrets too short to match safely", () => {
     expect(sanitizeHttpErrorDetail("the cat sat", ["cat"])).toBe("the cat sat");
+  });
+});
+
+describe("redactUrlForMessage", () => {
+  test("blanks credential-named query values and userinfo, leaves the rest", () => {
+    const shown = redactUrlForMessage(
+      "https://user:pw@api.example.com/v1/items?api_key=sk-live-1234&page=2&token=abc123"
+    );
+    expect(shown).not.toContain("sk-live-1234");
+    expect(shown).not.toContain("abc123");
+    expect(shown).not.toContain("user:pw");
+    expect(shown).toContain("page=2");
+    expect(shown).toContain("api.example.com/v1/items");
+  });
+
+  test("returns a URL with nothing to hide unchanged", () => {
+    const url = "https://example.com/a?b=c";
+    expect(redactUrlForMessage(url)).toBe(url);
+  });
+
+  test("the HTTP error message does not carry a query-string key", () => {
+    const error = createFetchUrlHttpError(
+      "https://api.example.com/x?apikey=SUPERSECRETVALUE",
+      401,
+      "Unauthorized"
+    );
+    expect(error.message).not.toContain("SUPERSECRETVALUE");
+    expect(error.message).toContain("401 Unauthorized");
+  });
+
+  test("the network error message does not carry a query-string key", () => {
+    const error = wrapFetchUrlNetworkError(
+      "https://api.example.com/x?access_token=SUPERSECRETVALUE",
+      new Error("socket hang up")
+    );
+    expect(error.message).not.toContain("SUPERSECRETVALUE");
   });
 });

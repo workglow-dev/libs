@@ -200,10 +200,11 @@ export function createFetchUrlHttpError(
   // The remote's words ride inside a fixed, quoted frame so a reader (a model
   // included) can tell them from this task's own text; `sanitizeHttpErrorDetail`
   // guarantees the detail cannot contain the frame's delimiters or a newline.
+  const shownUrl = redactUrlForMessage(url);
   const message =
     httpErrorMessage !== undefined
-      ? `Failed to fetch ${url}: ${statusPart} [remote said: "${httpErrorMessage}"]`
-      : `Failed to fetch ${url}: ${statusPart}`;
+      ? `Failed to fetch ${shownUrl}: ${statusPart} [remote said: "${httpErrorMessage}"]`
+      : `Failed to fetch ${shownUrl}: ${statusPart}`;
   return createFetchUrlJobError(code, message, {
     url,
     httpStatus: status,
@@ -246,6 +247,35 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\b(?:ghp|gho|ghu|ghs|github_pat|xox[abprs]|AKIA|AIza)[A-Za-z0-9_-]{12,}/g,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g,
 ];
+
+const SECRET_PARAM_NAME_ONLY = new RegExp(`^(?:${SECRET_PARAM_NAMES})$`, "i");
+
+/**
+ * The URL as it may appear in an error message: userinfo and the value of any
+ * credential-named query parameter blanked. A key passed on the query string
+ * (`?api_key=…`) is otherwise copied into every persisted error and log line
+ * that quotes the URL.
+ */
+export function redactUrlForMessage(url: string): string {
+  try {
+    const parsed = new URL(url);
+    let changed = false;
+    if (parsed.username !== "" || parsed.password !== "") {
+      parsed.username = "";
+      parsed.password = "";
+      changed = true;
+    }
+    for (const name of [...new Set(parsed.searchParams.keys())]) {
+      if (SECRET_PARAM_NAME_ONLY.test(name)) {
+        parsed.searchParams.set(name, REDACTED_TEXT);
+        changed = true;
+      }
+    }
+    return changed ? parsed.toString().replace(/%5Bredacted%5D/gi, REDACTED_TEXT) : url;
+  } catch {
+    return url;
+  }
+}
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -485,7 +515,7 @@ export function wrapFetchUrlNetworkError(url: string, cause: unknown): FetchUrlJ
   const detail = cause instanceof Error ? cause.message : String(cause);
   return createFetchUrlJobError(
     FetchUrlErrorCode.NETWORK_ERROR,
-    `Network error fetching ${url}: ${detail}`,
+    `Network error fetching ${redactUrlForMessage(url)}: ${detail}`,
     { url }
   );
 }
