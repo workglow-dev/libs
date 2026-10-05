@@ -7,11 +7,11 @@
 import { resolveEnabledEffort, type ModelEffort } from "@workglow/ai/worker";
 import { getLogger } from "@workglow/util/worker";
 import { anthropicEffortPolicy } from "./Anthropic_EffortPolicy";
+import { parseAnthropicModelId } from "./Anthropic_ModelId";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
 import {
   anthropicDefaultThinkingParams,
   anthropicMinimalThinkingParams,
-  parseAnthropicModelId,
 } from "./Anthropic_RequestParams";
 
 /** Token budgets for legacy `thinking.type = "enabled"` (and adaptive headroom). */

@@ -5,6 +5,8 @@
  */
 
 import { getLogger } from "@workglow/util/worker";
+import { normalizeAnthropicModelId, parseAnthropicModelId } from "./Anthropic_ModelId";
+import { resolveAnthropicProfile } from "./Anthropic_ModelProfiles";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
 
 /**
@@ -16,85 +18,8 @@ export const ANTHROPIC_LAST_SAMPLING_MAJOR = 4;
 /** Highest minor within {@link ANTHROPIC_LAST_SAMPLING_MAJOR} that accepts them. */
 export const ANTHROPIC_LAST_SAMPLING_MINOR = 6;
 
-/**
- * A numeric id segment this long is a release date (`20250514`), not a minor
- * version. Without this rule `claude-sonnet-4-20250514` parses as minor
- * 20250514 and is wrongly treated as a post-cutoff generation.
- */
-const DATE_SEGMENT = /^\d{6,}$/;
-const NUMERIC_SEGMENT = /^\d+$/;
-const CLAUDE_PREFIX = "claude-";
 /** Families that never accepted sampling parameters, whatever their version. */
 const REJECTED_FAMILY = /^claude-(?:fable|mythos)(?:$|[-.])/;
-
-/**
- * Gateways prefix the vendor onto the id (`us.anthropic.claude-…`,
- * `anthropic.claude-…`) and suffix a revision (`…-v1:0`). Stripping the prefix
- * grades those spellings on the same generation rule as a native id, instead of
- * having them fall out of the parser as "not a Claude id at all".
- */
-export const ANTHROPIC_GATEWAY_PREFIX = /^(?:[a-z0-9-]+\.)*anthropic\./i;
-
-interface ParsedAnthropicModelId {
-  /** Empty for the bare `claude-2.1` shape, which carries no family name. */
-  readonly family: string;
-  readonly major: number;
-  readonly minor: number | undefined;
-}
-
-/**
- * Parses the three id shapes Anthropic has shipped:
- * - modern `claude-<family>-<major>[-<minor>][-<date>]` (`claude-opus-4-8`)
- * - legacy `claude-<major>[-<minor>]-<family>[-<date>]` (`claude-3-5-sonnet-20241022`)
- * - bare `claude-[instant-]<major>[.<minor>]` (`claude-2.1`, `claude-instant-1.2`)
- *
- * Returns `undefined` for anything else, including non-Claude ids.
- */
-export function parseAnthropicModelId(id: string): ParsedAnthropicModelId | undefined {
-  const normalized = id.trim().toLowerCase();
-  if (!normalized.startsWith(CLAUDE_PREFIX)) return undefined;
-
-  let rest = normalized.slice(CLAUDE_PREFIX.length);
-  if (rest.length === 0) return undefined;
-
-  if (rest.startsWith("instant-")) rest = rest.slice("instant-".length);
-  const bare = /^(\d+)(?:\.(\d+))?$/.exec(rest);
-  if (bare) {
-    return {
-      family: "",
-      major: Number(bare[1]),
-      minor: bare[2] === undefined ? undefined : Number(bare[2]),
-    };
-  }
-
-  const segments = rest.split("-").filter((segment) => segment.length > 0);
-  if (segments.length < 2) return undefined;
-
-  const isVersionSegment = (segment: string | undefined): boolean =>
-    segment !== undefined && NUMERIC_SEGMENT.test(segment) && !DATE_SEGMENT.test(segment);
-
-  // Legacy shape leads with the version: claude-3-5-sonnet-20241022.
-  if (isVersionSegment(segments[0])) {
-    const major = Number(segments[0]);
-    let index = 1;
-    let minor: number | undefined;
-    if (isVersionSegment(segments[index])) {
-      minor = Number(segments[index]);
-      index += 1;
-    }
-    const family = segments[index];
-    if (family === undefined || NUMERIC_SEGMENT.test(family)) return undefined;
-    return { family, major, minor };
-  }
-
-  // Modern shape leads with the family: claude-opus-4-8.
-  if (!isVersionSegment(segments[1])) return undefined;
-  return {
-    family: segments[0]!,
-    major: Number(segments[1]),
-    minor: isVersionSegment(segments[2]) ? Number(segments[2]) : undefined,
-  };
-}
 
 interface AnthropicSamplingProviderConfig {
   readonly model_name?: string;
@@ -207,10 +132,13 @@ export function applyAnthropicSamplingParams(
   });
 }
 
-/** The configured model's id, parsed, with any cloud-gateway prefix removed. */
+export function modelNameOf(model: AnthropicModelConfig | undefined): string {
+  return (model?.provider_config as { model_name?: string } | undefined)?.model_name ?? "";
+}
+
+/** The configured model's id, parsed, with any cloud-gateway spelling reduced to the canonical one. */
 export function parsedModelName(model: AnthropicModelConfig | undefined) {
-  const id = (model?.provider_config as { model_name?: string } | undefined)?.model_name ?? "";
-  return parseAnthropicModelId(id.trim().replace(ANTHROPIC_GATEWAY_PREFIX, ""));
+  return parseAnthropicModelId(normalizeAnthropicModelId(modelNameOf(model)));
 }
 
 /** Where a capability decision came from. `"default"` means no table entry covered the id. */
@@ -220,18 +148,6 @@ export interface AnthropicCapabilityResolution {
   readonly value: boolean;
   readonly source: AnthropicCapabilitySource;
 }
-
-/** Families the capability tables name; any other family falls to a default. */
-export const ANTHROPIC_KNOWN_FAMILIES: ReadonlySet<string> = new Set([
-  "fable",
-  "mythos",
-  "opus",
-  "sonnet",
-  "haiku",
-]);
-
-/** Newest generation the capability tables have an entry for. */
-export const ANTHROPIC_LATEST_KNOWN_MAJOR = 5;
 
 interface AnthropicCapabilityOverrides {
   readonly supports_output_format?: boolean;
@@ -250,37 +166,16 @@ export function anthropicCapabilityOverride(
 /**
  * Whether the configured model accepts a forced `tool_choice` (`any` or
  * `tool`), and how that was decided. `provider_config.accepts_forced_tool_choice`
- * overrides everything; otherwise the id is read against the table below.
- *
- * Claude Fable 5.1, Mythos 5.1, Opus 5.5 and Sonnet 5.5 reject both with a 400.
- * A wrong `true` is an unrecoverable 400 and a wrong `false` only relaxes the
- * choice to `auto`, so ids no table entry covers take the newest known
- * generation's behavior (rejects), and an id the parser cannot read takes the
- * oldest (accepts, the pre-generation-5 route). Those two defaults are the
- * counterparts of the ones in `resolveAnthropicOutputFormatSupport`: together a
- * future id gets the newest known profile — native output format, no forced
- * tool — and an unreadable id the legacy one — tool route, forced choice.
+ * overrides everything; otherwise the model's row in `ANTHROPIC_MODEL_PROFILES`
+ * answers, and an id with no row takes the documented default profile there.
  */
 export function resolveAnthropicForcedToolChoice(
   model: AnthropicModelConfig | undefined
 ): AnthropicCapabilityResolution {
   const override = anthropicCapabilityOverride(model, "accepts_forced_tool_choice");
   if (override !== undefined) return override;
-  const parsed = parsedModelName(model);
-  if (parsed === undefined) return { value: true, source: "default" };
-  if (parsed.major < 5) return { value: true, source: "table" };
-  if (parsed.major > ANTHROPIC_LATEST_KNOWN_MAJOR) return { value: false, source: "default" };
-  const minor = parsed.minor ?? 0;
-  switch (parsed.family) {
-    case "fable":
-    case "mythos":
-      return { value: minor < 1, source: "table" };
-    case "opus":
-    case "sonnet":
-      return { value: minor < 5, source: "table" };
-    default:
-      return { value: false, source: "default" };
-  }
+  const { profile, source } = resolveAnthropicProfile(modelNameOf(model));
+  return { value: profile.acceptsForcedToolChoice, source };
 }
 
 export function anthropicAcceptsForcedToolChoice(model: AnthropicModelConfig | undefined): boolean {

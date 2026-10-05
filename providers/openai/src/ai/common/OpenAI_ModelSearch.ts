@@ -15,6 +15,7 @@ import { stampEffortOptions } from "@workglow/ai/worker";
 import { getClient } from "./OpenAI_Client";
 import { OPENAI } from "./OpenAI_Constants";
 import { openaiEffortPolicy } from "./OpenAI_EffortPolicy";
+import { openAiProfileCapabilities, resolveOpenAiProfile } from "./OpenAI_ModelProfiles";
 
 interface OpenAiModelListItem {
   readonly label: string;
@@ -48,13 +49,6 @@ const OPENAI_FALLBACK: Array<{ label: string; value: string }> = [
   { label: "o1-mini", value: "o1-mini" },
 ];
 
-const OPENAI_IMAGE_MODELS: Array<{ value: string; capabilities: string[] }> = [
-  { value: "gpt-image-2.5-sunburst", capabilities: ["image.generation", "image.editing"] },
-  { value: "gpt-image-2.5-flare", capabilities: ["image.generation", "image.editing"] },
-  { value: "gpt-image-2", capabilities: ["image.generation", "image.editing"] },
-  { value: "dall-e-3", capabilities: ["image.generation"] },
-];
-
 async function listOpenAiModels(credentialKey: string): Promise<OpenAiModelListItem[]> {
   const client = await getClient({
     provider: OPENAI,
@@ -75,7 +69,11 @@ async function listOpenAiModels(credentialKey: string): Promise<OpenAiModelListI
 
 function mapModelList(models: OpenAiModelListItem[]): ModelSearchResultItem[] {
   return models.map((m) => {
-    const imageEntry = OPENAI_IMAGE_MODELS.find((i) => i.value === m.value);
+    const { profile } = resolveOpenAiProfile(m.value);
+    const imageCapabilities =
+      profile?.kind === "image-generation" || profile?.kind === "image-editing"
+        ? openAiProfileCapabilities(profile).filter((c) => c.startsWith("image."))
+        : [];
     return {
       id: m.value,
       label: m.label,
@@ -86,7 +84,7 @@ function mapModelList(models: OpenAiModelListItem[]): ModelSearchResultItem[] {
           provider: OPENAI,
           title: m.value,
           description: "",
-          capabilities: imageEntry?.capabilities ?? [],
+          capabilities: imageCapabilities,
           provider_config: { model_name: m.value },
           metadata: {},
         },
