@@ -45,6 +45,8 @@ interface Round {
   readonly usage?: Usage;
   /** Thrown instead of answering. */
   readonly error?: Error;
+  /** Streamed before `error` is thrown, as a provider failing mid-stream does. */
+  readonly partial?: string;
   /** Never answers: waits until the call is abandoned. */
   readonly hang?: boolean;
 }
@@ -67,7 +69,10 @@ function script(rounds: readonly Round[]): () => number {
   const runFn: AiProviderRunFn = async (_input, _model, signal, emit) => {
     const round = rounds[Math.min(called, rounds.length - 1)]!;
     called++;
-    if (round.error) throw round.error;
+    if (round.error) {
+      if (round.partial) emit({ type: "text-delta", port: "text", textDelta: round.partial });
+      throw round.error;
+    }
     if (round.hang) {
       await new Promise<never>((_resolve, reject) => {
         if (signal.aborted) reject(signal.reason);
@@ -461,6 +466,26 @@ describe("AgentTask turn controls", () => {
       expect(called()).toBe(2);
       expect(output.stopReason).toBe("answered");
       expect(output.steps[0]!.attempts).toBe(2);
+    });
+
+    it("does not duplicate a failed attempt's streamed text on the retry", async () => {
+      script([
+        { partial: "Hello ", error: new RetryableJobError("overloaded", new Date(Date.now())) },
+        { text: "Hello world", usage: usage(10, 0, 2) },
+      ]);
+      const task = new AgentTask();
+      let streamed = "";
+      task.subscribe("stream_chunk", (event) => {
+        if (event.type === "text-delta") streamed += event.textDelta;
+      });
+      const output = await task.run(
+        { model: MODEL, prompt: "?", tools: [], approval: "never" },
+        { registry }
+      );
+      expect(output.steps[0]!.attempts).toBe(2);
+      expect(output.text).toBe("Hello world");
+      expect(output.steps[0]!.text).toBe("Hello world");
+      expect(streamed).toBe(output.text);
     });
 
     it("fails at once on a permanent failure, or when retries are off", async () => {

@@ -880,8 +880,14 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     // unhandled; it is re-thrown below, once the events already produced have
     // reached the caller.
     run.catch(() => {});
-    for await (const event of queue.iterable) yield event;
+    // Held until the attempt settles: the stream accumulates every delta it is
+    // handed into the task's text port and offers no way to take one back, so
+    // text forwarded from an attempt that then fails and is retried would be
+    // joined to the retry's. A failed attempt throws here and its text is dropped.
+    const held: StreamEvent<AgentTaskOutput>[] = [];
+    for await (const event of queue.iterable) held.push(event);
     await run;
+    for (const event of held) yield event;
   }
 
   /**

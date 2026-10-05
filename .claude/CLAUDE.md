@@ -243,7 +243,9 @@ The rest are controls a batch host needs: `toolConcurrency` (opt-in; a round hol
 put to a person still runs one at a time, and results return in the order asked),
 `maxRoundRetries` (default 2, for a `RetryableJobError`, waiting as the provider's
 retry-after says within 1–60 s), `roundTimeoutMs` (a provider can accept a request and never answer;
-past it the round is abandoned as a retryable failure, so the retries cover it), and budgets — `maxInputTokens`, `maxCostUsd` (refused
+past it the round is abandoned as a retryable failure, so the retries cover it; a round's text is
+forwarded only once the attempt settles, since a failed attempt's partial cannot be taken back
+from the accumulated text port), and budgets — `maxInputTokens`, `maxCostUsd` (refused
 without a price card, since a budget it cannot measure never stops anything),
 `maxDurationMs` — each ending the turn `"budget"`, never between a `tool_use` and its result.
 Every round leaves an `AgentStep` on `steps` (timings, attempts, each tool's outcome and
