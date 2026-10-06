@@ -34,6 +34,25 @@
         "@sqliteai/sqlite-vector-win32-x86_64": "^1.1.2",
       },
     },
+    "examples/agent-eval": {
+      "name": "@workglow/agent-eval",
+      "version": "0.6.12",
+      "bin": {
+        "workglow-agent-eval": "./dist/workglow-agent-eval.js",
+      },
+      "dependencies": {
+        "@workglow/ai": "workspace:*",
+        "@workglow/anthropic": "workspace:*",
+        "@workglow/deepseek": "workspace:*",
+        "@workglow/google-gemini": "workspace:*",
+        "@workglow/openai": "workspace:*",
+        "@workglow/openrouter": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+        "@workglow/xai": "workspace:*",
+        "commander": "catalog:",
+      },
+    },
     "examples/cli": {
       "name": "@workglow/cli",
       "version": "0.6.12",
@@ -1762,6 +1781,8 @@
     "@workglow/a2a": ["@workglow/a2a@workspace:packages/a2a"],
 
     "@workglow/a2ui": ["@workglow/a2ui@workspace:packages/a2ui"],
+
+    "@workglow/agent-eval": ["@workglow/agent-eval@workspace:examples/agent-eval"],
 
     "@workglow/ai": ["@workglow/ai@workspace:packages/ai"],
 

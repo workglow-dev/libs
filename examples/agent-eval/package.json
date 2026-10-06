@@ -1,0 +1,39 @@
+{
+  "name": "@workglow/agent-eval",
+  "private": true,
+  "type": "module",
+  "version": "0.6.12",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/workglow-dev/libs.git",
+    "directory": "examples/agent-eval"
+  },
+  "bugs": {
+    "url": "https://github.com/workglow-dev/libs/issues"
+  },
+  "description": "Agent harness eval: run Workglow's AgentTask, opencode and pi on the same public agentic benchmarks through Harbor, and compare them task by task.",
+  "homepage": "https://workglow.dev",
+  "scripts": {
+    "build-example": "concurrently -c 'auto' -n 'agent,cli,types' 'bun run build-agent' 'bun run build-cli' 'bun run build-types'",
+    "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
+    "build-agent": "bun build --target=node --format=esm --outfile ./dist/workglow-agent.mjs ./src/bin/workglow-agent.ts",
+    "build-cli": "bun build --target=bun --packages=external --outdir ./dist ./src/bin/workglow-agent-eval.ts",
+    "build-types": "rm -f tsconfig.tsbuildinfo && tsc --noEmit",
+    "test": "vitest run --config ../../vitest.config.ts --project agent-eval"
+  },
+  "bin": {
+    "workglow-agent-eval": "./dist/workglow-agent-eval.js"
+  },
+  "dependencies": {
+    "@workglow/ai": "workspace:*",
+    "@workglow/anthropic": "workspace:*",
+    "@workglow/deepseek": "workspace:*",
+    "@workglow/google-gemini": "workspace:*",
+    "@workglow/openai": "workspace:*",
+    "@workglow/openrouter": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*",
+    "@workglow/xai": "workspace:*",
+    "commander": "catalog:"
+  }
+}

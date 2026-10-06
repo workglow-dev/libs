@@ -539,6 +539,32 @@ The client bundles via `bun run build-web` into `dist/web` and is part of `build
 deliberately non-render-blocking; a blocking font link blanks the console on any machine
 that cannot reach the CDN.
 
+### `examples/agent-eval` — the harness comparison
+
+This example runs `AgentTask`, opencode and pi on public benchmarks (Terminal-Bench 2.0,
+Aider Polyglot, SWE-bench Verified) through **Harbor**, with the same model for all three, and
+compares them task by task. Harbor is a Python tool and needs Docker; it ships the opencode and
+pi adapters.
+
+What the Workglow arm is:
+
+- **The agent.** `src/bin/workglow-agent.ts` is `AgentTask` plus four coding tools (`read`,
+  `bash`, `edit`, `write`). The tools match pi's defaults and limits on purpose, so the
+  Workglow–pi gap measures the loop and not the tools.
+- **How it gets into the container.** It is bundled into one Node file. `harbor/workglow_agent.py`
+  uploads that bundle into each task container, so a run measures the checkout it was built
+  from: rebuild with `bun run build-agent` after touching `AgentTask`.
+
+Two rules hold for every run:
+
+- **Parity.** `run` sets the turn cap and the reasoning level explicitly for every arm, because
+  the three harnesses' defaults differ enough to decide the result.
+- **Blocked trials.** A trial whose container or install failed is _blocked_, and is excluded
+  from every rate rather than counted as a failure.
+
+`mock-model` is a scripted Anthropic API. With it, the whole pipeline runs offline with no key
+and no cost.
+
 ### `@workglow/util`
 
 `EventEmitter`, `ServiceRegistry` (DI), `DirectedAcyclicGraph`, `DataPortSchema`/`JsonSchema`,
