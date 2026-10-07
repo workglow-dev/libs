@@ -20,7 +20,7 @@ import { createWriteTool } from "../agent/tools/write";
 let dir: string;
 let context: CodingToolContext;
 const signal = new AbortController().signal;
-const call = { toolUseId: "t1", signal };
+const call = { toolUseId: "t1", signal, deadline: undefined };
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "agent-eval-tools-"));

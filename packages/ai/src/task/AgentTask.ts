@@ -392,6 +392,8 @@ interface RunCallOptions {
   readonly validators: ReturnType<typeof compileToolValidators>;
   readonly approval: AgentApprovalMode;
   readonly maxResultChars: number;
+  /** When the turn's time budget runs out; see {@link ToolExecuteContext.deadline}. */
+  readonly deadline: number | undefined;
   /** The tool that submits the answer, when the turn has an `outputSchema`. */
   readonly submitToolName: string | undefined;
 }
@@ -554,6 +556,8 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     }
 
     const startedAt = Date.now();
+    const deadline =
+      input.maxDurationMs === undefined ? undefined : startedAt + input.maxDurationMs;
     const steps: AgentStep[] = [];
     let spentTokens = 0;
     let spentUsd = 0;
@@ -719,6 +723,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
         validators,
         approval,
         maxResultChars: maxToolResultChars,
+        deadline,
         submitToolName: submitTool?.name,
       })) {
         yield event;
@@ -948,6 +953,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     const result = await runAgentTool(tool, { ...call, input: sanitized }, context, {
       approval: options.approval,
       maxResultChars: options.maxResultChars,
+      deadline: options.deadline,
     });
     return toolResult(call, result.text, result.isError, options.maxResultChars, result.images);
   }

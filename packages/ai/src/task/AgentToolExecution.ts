@@ -258,7 +258,11 @@ export async function runAgentTool(
   tool: ToolDefinition,
   call: ToolCall,
   context: IExecuteContext,
-  options: { readonly approval: AgentApprovalMode; readonly maxResultChars: number }
+  options: {
+    readonly approval: AgentApprovalMode;
+    readonly maxResultChars: number;
+    readonly deadline: number | undefined;
+  }
 ): Promise<AgentToolResult> {
   const refusal = toolCallNeedsApproval(tool, options.approval, context.registry)
     ? await approveToolCall(tool, call, context)
@@ -266,7 +270,7 @@ export async function runAgentTool(
   if (refusal) return refusal;
 
   try {
-    const output = await invokeTool(tool, call, context);
+    const output = await invokeTool(tool, call, context, options.deadline);
     if (output instanceof ToolResultContent) {
       const text = output.content
         .flatMap((block) => (block.type === "text" ? [block.text] : []))
@@ -303,13 +307,14 @@ export async function runAgentTool(
 async function invokeTool(
   tool: ToolDefinition,
   call: ToolCall,
-  context: IExecuteContext
+  context: IExecuteContext,
+  deadline: number | undefined
 ): Promise<unknown> {
   if (tool.type === "function" || (tool.type === undefined && tool.execute)) {
     if (!tool.execute) {
       throw new Error(`Tool "${tool.name}" is declared type "function" but supplies no execute()`);
     }
-    return await tool.execute(call.input, { toolUseId: call.id, signal: context.signal });
+    return await tool.execute(call.input, { toolUseId: call.id, signal: context.signal, deadline });
   }
   const ctor = getTaskConstructors(context.registry).get(backingTaskType(tool));
   if (!ctor) {
