@@ -98,9 +98,6 @@ function locate(content: string, edit: TextEdit, path: string, index: number): R
   if (edit.oldText.length === 0) {
     throw new ToolCallError(`${label}: oldText is empty. Use write to create a file.`);
   }
-  if (edit.oldText === edit.newText) {
-    throw new ToolCallError(`${label}: oldText and newText are identical; nothing would change.`);
-  }
   const exact = exactRanges(content, edit.oldText);
   if (exact.length === 1) {
     return { start: exact[0]!, end: exact[0]! + edit.oldText.length, fuzzy: false };
@@ -125,30 +122,67 @@ function locate(content: string, edit: TextEdit, path: string, index: number): R
   );
 }
 
+export interface EditOutcome {
+  readonly content: string;
+  /** Applied edits that matched only after normalizing whitespace and quotes. */
+  readonly fuzzy: number;
+  /** Indices of the edits written. */
+  readonly applied: readonly number[];
+  /** Indices of edits whose newText equals their oldText: nothing to do. */
+  readonly unchanged: readonly number[];
+  /** Why each remaining edit was not applied, as `edits[i]: reason`. */
+  readonly failures: readonly string[];
+}
+
 /**
- * Applies `edits` to `content`, each located against the ORIGINAL text, so
- * one edit cannot move or invalidate another's match. Overlapping edits are
- * refused rather than resolved in some order.
+ * Applies every edit that can be applied, each located against the ORIGINAL
+ * text so one edit cannot move another's match, and reports the rest. Failing
+ * the whole call for one bad entry costs the model a round resending the good
+ * ones; this way it resends only what failed. An edit overlapping one earlier
+ * in the list is refused rather than resolved in some order.
  */
-export function applyEdits(
-  content: string,
-  edits: readonly TextEdit[],
-  path: string
-): { readonly content: string; readonly fuzzy: number } {
-  const located = edits.map((edit, index) => ({ edit, range: locate(content, edit, path, index) }));
-  const ordered = [...located].sort((a, b) => a.range.start - b.range.start);
-  for (let i = 1; i < ordered.length; i++) {
-    if (ordered[i]!.range.start < ordered[i - 1]!.range.end) {
-      throw new ToolCallError(
-        "Two edits overlap. Merge them into one edit, or make each oldText cover a separate region."
-      );
+export function applyEdits(content: string, edits: readonly TextEdit[], path: string): EditOutcome {
+  const unchanged: number[] = [];
+  const failures: string[] = [];
+  const located: Array<{
+    readonly index: number;
+    readonly edit: TextEdit;
+    readonly range: Range;
+  }> = [];
+  edits.forEach((edit, index) => {
+    if (edit.oldText.length > 0 && edit.oldText === edit.newText) {
+      unchanged.push(index);
+      return;
     }
-  }
+    try {
+      const range = locate(content, edit, path, index);
+      const clash = located.find(
+        (other) => range.start < other.range.end && other.range.start < range.end
+      );
+      if (clash) {
+        failures.push(
+          `edits[${index}]: overlaps edits[${clash.index}]. Merge them into one edit, or make ` +
+            "each oldText cover a separate region."
+        );
+        return;
+      }
+      located.push({ index, edit, range });
+    } catch (error) {
+      if (!(error instanceof ToolCallError)) throw error;
+      failures.push(error.message);
+    }
+  });
   let next = content;
-  for (const { edit, range } of ordered.reverse()) {
+  for (const { edit, range } of [...located].sort((a, b) => b.range.start - a.range.start)) {
     next = next.slice(0, range.start) + edit.newText + next.slice(range.end);
   }
-  return { content: next, fuzzy: located.filter((entry) => entry.range.fuzzy).length };
+  return {
+    content: next,
+    fuzzy: located.filter((entry) => entry.range.fuzzy).length,
+    applied: located.map((entry) => entry.index).sort((a, b) => a - b),
+    unchanged,
+    failures,
+  };
 }
 
 /**
@@ -178,7 +212,8 @@ export function createEditTool(context: CodingToolContext): ToolDefinition {
       "Replace text in an existing file. Each edit's oldText must match exactly one place in " +
       "the file as it was before this call (a match that differs only in trailing whitespace " +
       "or typographic quotes is accepted). Put several disjoint changes to one file in one call. " +
-      "Keep oldText as short as uniqueness allows.",
+      "Edits that match are applied even when others in the call do not; the result names " +
+      "the ones that were not. Keep oldText as short as uniqueness allows.",
     inputSchema: {
       type: "object",
       properties: {
@@ -217,10 +252,29 @@ export function createEditTool(context: CodingToolContext): ToolDefinition {
         edits.map((edit) => ({ oldText: lf(edit.oldText), newText: lf(edit.newText) })),
         path
       );
-      const out = bom + (crlf ? result.content.replace(/\n/g, "\r\n") : result.content);
-      await writeFile(path, out, "utf8");
+      if (result.applied.length > 0) {
+        const out = bom + (crlf ? result.content.replace(/\n/g, "\r\n") : result.content);
+        await writeFile(path, out, "utf8");
+      }
       const note = result.fuzzy > 0 ? ` (${result.fuzzy} matched ignoring whitespace/quotes)` : "";
-      return `Applied ${edits.length} edit(s) to ${path}${note}`;
+      const same =
+        result.unchanged.length > 0
+          ? `; ${result.unchanged.length} already matched their newText`
+          : "";
+      if (result.failures.length === 0) {
+        return result.applied.length > 0
+          ? `Applied ${result.applied.length} edit(s) to ${path}${note}${same}`
+          : `No changes to ${path}: every edit's oldText equals its newText.`;
+      }
+      const head =
+        result.applied.length > 0
+          ? `Applied ${result.applied.length} of ${edits.length} edits to ${path}${note}; the ` +
+            "file now contains them. Not applied:"
+          : `No edits applied to ${path}:`;
+      throw new ToolCallError(
+        `${head}\n${result.failures.join("\n")}\n` +
+          "Retry only these, against the file as it is now."
+      );
     },
   };
 }

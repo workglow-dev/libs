@@ -75,28 +75,36 @@ describe("edit", () => {
     expect(result.content).toBe("1\none and a half\ntwo\n3\n");
   });
 
-  it("refuses an ambiguous match", () => {
-    expect(() => applyEdits("x\nx\n", [{ oldText: "x", newText: "y" }], "f")).toThrow(
-      /2 occurrences/
+  it("reports an ambiguous match and applies nothing for it", () => {
+    const result = applyEdits("x\nx\n", [{ oldText: "x", newText: "y" }], "f");
+    expect(result.content).toBe("x\nx\n");
+    expect(result.failures).toEqual([expect.stringMatching(/^edits\[0\]: .*2 occurrences/)]);
+  });
+
+  it("applies the first of two overlapping edits and reports the second", () => {
+    const result = applyEdits(
+      "abcdef",
+      [
+        { oldText: "abcd", newText: "1" },
+        { oldText: "cdef", newText: "2" },
+      ],
+      "f"
     );
+    expect(result.content).toBe("1ef");
+    expect(result.applied).toEqual([0]);
+    expect(result.failures).toEqual([expect.stringMatching(/^edits\[1\]: overlaps edits\[0\]/)]);
   });
 
-  it("refuses overlapping edits", () => {
-    expect(() =>
-      applyEdits(
-        "abcdef",
-        [
-          { oldText: "abcd", newText: "1" },
-          { oldText: "cdef", newText: "2" },
-        ],
-        "f"
-      )
-    ).toThrow(/overlap/);
+  it("counts an edit whose text is already in place as unchanged, not as a failure", () => {
+    const result = applyEdits("a", [{ oldText: "a", newText: "a" }], "f");
+    expect(result.unchanged).toEqual([0]);
+    expect(result.failures).toEqual([]);
   });
 
-  it("refuses a no-op and an empty oldText", () => {
-    expect(() => applyEdits("a", [{ oldText: "a", newText: "a" }], "f")).toThrow(/identical/);
-    expect(() => applyEdits("a", [{ oldText: "", newText: "b" }], "f")).toThrow(/empty/);
+  it("reports an empty oldText", () => {
+    expect(applyEdits("a", [{ oldText: "", newText: "b" }], "f").failures).toEqual([
+      expect.stringMatching(/empty/),
+    ]);
   });
 
   it("matches whole lines that differ only in trailing whitespace and typographic quotes", () => {
@@ -115,9 +123,26 @@ describe("edit", () => {
   });
 
   it("says what to do when nothing matches", () => {
-    expect(() => applyEdits("abc", [{ oldText: "zzz", newText: "y" }], "f")).toThrow(
-      /Read the file again/
-    );
+    expect(applyEdits("abc", [{ oldText: "zzz", newText: "y" }], "f").failures).toEqual([
+      expect.stringMatching(/Read the file again/),
+    ]);
+  });
+
+  it("writes the edits that apply and names the ones that did not", async () => {
+    writeFileSync(join(dir, "f.txt"), "one\ntwo\ntwo\n");
+    await expect(
+      createEditTool(context).execute!(
+        {
+          path: "f.txt",
+          edits: [
+            { oldText: "one", newText: "1" },
+            { oldText: "two", newText: "2" },
+          ],
+        },
+        call
+      )
+    ).rejects.toThrow(/Applied 1 of 2 edits[\s\S]*edits\[1\]: .*2 occurrences/);
+    expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("1\ntwo\ntwo\n");
   });
 
   it("keeps CRLF line endings and a BOM through the tool", async () => {
