@@ -9,7 +9,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createBashTool } from "../agent/tools/bash";
+import { commandTimeoutSec, createBashTool } from "../agent/tools/bash";
 import type { CodingToolContext } from "../agent/tools/context";
 import { applyEdits, createEditTool, normalizeLine } from "../agent/tools/edit";
 import { codingSystemPrompt } from "../agent/systemPrompt";
@@ -218,6 +218,24 @@ describe("bash", () => {
     await expect(
       createBashTool(context).execute!({ command: "sleep 30", timeout: 1 }, call)
     ).rejects.toThrow(/timed out after 1s/);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("cuts a timeout to the time left, and only when it is shorter", () => {
+    expect(commandTimeoutSec(120, undefined, 0)).toEqual({ sec: 120, capped: false });
+    expect(commandTimeoutSec(120, 300_000, 0)).toEqual({ sec: 120, capped: false });
+    expect(commandTimeoutSec(600, 90_500, 0)).toEqual({ sec: 90, capped: true });
+    expect(commandTimeoutSec(600, 100, 0)).toEqual({ sec: 1, capped: true });
+  });
+
+  it("kills a command when the task's time runs out, whatever timeout it asked for", async () => {
+    const started = Date.now();
+    await expect(
+      createBashTool(context).execute!(
+        { command: "sleep 30", timeout: 600 },
+        { ...call, deadline: Date.now() + 1_500 }
+      )
+    ).rejects.toThrow(/all the time left/);
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 

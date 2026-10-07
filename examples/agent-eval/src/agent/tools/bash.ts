@@ -117,6 +117,21 @@ export function runCommand(
   });
 }
 
+/**
+ * The timeout a command runs under: what was asked for, cut to the whole
+ * seconds the task has left. At least one second, so a command started at the
+ * wire still reports rather than never running.
+ */
+export function commandTimeoutSec(
+  requested: number,
+  deadline: number | undefined,
+  now: number
+): { readonly sec: number; readonly capped: boolean } {
+  if (deadline === undefined) return { sec: requested, capped: false };
+  const left = Math.max(1, Math.floor((deadline - now) / 1000));
+  return left < requested ? { sec: left, capped: true } : { sec: requested, capped: false };
+}
+
 export function createBashTool(context: CodingToolContext): ToolDefinition {
   return {
     name: "bash",
@@ -125,7 +140,8 @@ export function createBashTool(context: CodingToolContext): ToolDefinition {
       "Each call is a fresh shell: cd and exported variables do not carry over, so chain " +
       "commands with && when they depend on each other. Output is truncated to the last 2000 " +
       `lines or 50KB; the full output is saved to a file named in the result. Commands time out ` +
-      `after ${context.defaultCommandTimeoutSec}s unless you pass a larger timeout (seconds). ` +
+      `after ${context.defaultCommandTimeoutSec}s unless you pass a larger timeout (seconds), ` +
+      "and never run past the time left for the task: run long jobs in the background and poll. " +
       "Do not start interactive programs.",
     inputSchema: {
       type: "object",
@@ -137,9 +153,10 @@ export function createBashTool(context: CodingToolContext): ToolDefinition {
       additionalProperties: false,
     },
     requiresApproval: false,
-    execute: async (input, { signal }) => {
+    execute: async (input, { signal, deadline }) => {
       const command = requireString(input, "command");
-      const timeoutSec = optionalInteger(input, "timeout") ?? context.defaultCommandTimeoutSec;
+      const requested = optionalInteger(input, "timeout") ?? context.defaultCommandTimeoutSec;
+      const { sec: timeoutSec, capped } = commandTimeoutSec(requested, deadline, Date.now());
       const result = await runCommand(command, context.cwd, timeoutSec * 1000, signal);
 
       const tail = truncateTail(result.output);
@@ -158,8 +175,11 @@ export function createBashTool(context: CodingToolContext): ToolDefinition {
       if (text.length === 0) text = "(no output)";
       if (result.timedOut) {
         throw new ToolCallError(
-          `${text}\n\nCommand timed out after ${timeoutSec}s and was killed. ` +
-            "Pass a larger timeout, or run it in the background and poll."
+          capped
+            ? `${text}\n\nCommand was killed after ${timeoutSec}s, all the time left for this ` +
+                "task. Finish with what you have."
+            : `${text}\n\nCommand timed out after ${timeoutSec}s and was killed. ` +
+                "Pass a larger timeout, or run it in the background and poll."
         );
       }
       if (result.exitCode !== 0) {
