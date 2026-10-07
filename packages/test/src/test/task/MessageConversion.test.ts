@@ -217,6 +217,75 @@ describe("toOpenAIMessages", () => {
     expect(parts[0]).toEqual({ type: "text", text: "Plain text" });
     expect(parts[1].type).toBe("image_url");
   });
+
+  describe("reasoning and tool images", () => {
+    const history = makeInput({
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Look" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "I should read the file." },
+            { type: "tool_use", id: "c1", name: "read", input: { path: "board.png" } },
+          ],
+        },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "c1",
+              content: [
+                { type: "text", text: "Image: board.png" },
+                { type: "image", mimeType: "image/png", data: "AAAA" },
+              ],
+              is_error: undefined,
+            },
+          ],
+        },
+      ],
+    });
+
+    test("drops reasoning blocks unless asked to replay them", () => {
+      const msgs = toOpenAIMessages(history);
+      expect(msgs[1]).not.toHaveProperty("reasoning_content");
+      expect(msgs[1]!.content).toBeNull();
+    });
+
+    test("replays reasoning as reasoning_content when asked", () => {
+      const msgs = toOpenAIMessages(history, { replayReasoning: true });
+      expect(msgs[1]).toMatchObject({
+        role: "assistant",
+        reasoning_content: "I should read the file.",
+        tool_calls: [{ id: "c1" }],
+      });
+    });
+
+    test("keeps tool images inline by default", () => {
+      const msgs = toOpenAIMessages(history);
+      expect(msgs[2]).toMatchObject({ role: "tool", tool_call_id: "c1" });
+      expect(msgs[2]!.content).toEqual([
+        { type: "text", text: "Image: board.png" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+      ]);
+    });
+
+    test("moves tool images into a user message after the turn's results when asked", () => {
+      const msgs = toOpenAIMessages(history, { toolImagesInUserMessage: true });
+      expect(msgs[2]).toEqual({
+        role: "tool",
+        tool_call_id: "c1",
+        content: "Image: board.png\n[1 image(s) from this result follow in the next message]",
+      });
+      expect(msgs[3]).toEqual({
+        role: "user",
+        content: [
+          { type: "text", text: "Images returned by the tool calls above:" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+        ],
+      });
+    });
+  });
 });
 
 // ========================================================================

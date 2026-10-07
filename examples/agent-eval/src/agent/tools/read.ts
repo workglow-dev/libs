@@ -5,7 +5,7 @@
  */
 
 import type { ToolDefinition } from "@workglow/ai";
-import { ToolCallError } from "@workglow/ai";
+import { ToolCallError, ToolResultContent } from "@workglow/ai";
 import { readdir, readFile, stat } from "node:fs/promises";
 import type { CodingToolContext } from "./context";
 import { optionalInteger, requireString, resolvePath } from "./context";
@@ -13,6 +13,29 @@ import { MAX_OUTPUT_BYTES, truncateHead } from "./truncate";
 
 /** Bytes sampled to decide a file is binary. */
 const BINARY_SNIFF_BYTES = 8000;
+
+/**
+ * Largest image handed to the model. Providers cap an image at about 5 MB and
+ * bill it on every later round of the turn, so a bigger one is refused with a
+ * way to shrink it rather than sent to fail.
+ */
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+
+/** The image formats every vision provider takes, recognised by their leading bytes. */
+export function imageMimeType(buffer: Buffer): string | undefined {
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return "image/png";
+  }
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+  if (buffer.subarray(0, 6).toString("latin1").startsWith("GIF8")) return "image/gif";
+  if (
+    buffer.subarray(0, 4).toString("latin1") === "RIFF" &&
+    buffer.subarray(8, 12).toString("latin1") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return undefined;
+}
 
 function looksBinary(buffer: Buffer): boolean {
   const sample = buffer.subarray(0, BINARY_SNIFF_BYTES);
@@ -25,7 +48,10 @@ export function createReadTool(context: CodingToolContext): ToolDefinition {
     description:
       "Read a text file. Output is truncated to 2000 lines or 50KB, whichever comes first; " +
       "use offset and limit to page through a longer file. Lines are shown as they are, " +
-      "without line numbers.",
+      "without line numbers." +
+      (context.images
+        ? " An image (png, jpg, gif, webp) is shown to you as the image itself."
+        : ""),
     inputSchema: {
       type: "object",
       properties: {
@@ -53,6 +79,19 @@ export function createReadTool(context: CodingToolContext): ToolDefinition {
       }
 
       const buffer = await readFile(path);
+      const mimeType = context.images ? imageMimeType(buffer) : undefined;
+      if (mimeType !== undefined) {
+        if (buffer.length > MAX_IMAGE_BYTES) {
+          throw new ToolCallError(
+            `${path} is a ${buffer.length}-byte image, over the ${MAX_IMAGE_BYTES}-byte limit. ` +
+              "Shrink it first (e.g. with Python's PIL) and read the smaller copy."
+          );
+        }
+        return new ToolResultContent([
+          { type: "text", text: `Image: ${path} (${mimeType}, ${buffer.length} bytes)` },
+          { type: "image", mimeType, data: buffer.toString("base64") },
+        ]);
+      }
       if (looksBinary(buffer)) {
         throw new ToolCallError(`${path} is a binary file (${buffer.length} bytes)`);
       }

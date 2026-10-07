@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ToolCallError } from "@workglow/ai";
+import { ToolCallError, ToolResultContent } from "@workglow/ai";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +12,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBashTool } from "../agent/tools/bash";
 import type { CodingToolContext } from "../agent/tools/context";
 import { applyEdits, createEditTool, normalizeLine } from "../agent/tools/edit";
-import { createReadTool } from "../agent/tools/read";
+import { codingSystemPrompt } from "../agent/systemPrompt";
+import { createReadTool, imageMimeType } from "../agent/tools/read";
 import { truncateHead, truncateTail } from "../agent/tools/truncate";
 import { createWriteTool } from "../agent/tools/write";
 
@@ -23,7 +24,12 @@ const call = { toolUseId: "t1", signal };
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "agent-eval-tools-"));
-  context = { cwd: dir, spillDir: join(dir, ".spill"), defaultCommandTimeoutSec: 10 };
+  context = {
+    cwd: dir,
+    spillDir: join(dir, ".spill"),
+    defaultCommandTimeoutSec: 10,
+    images: true,
+  };
 });
 
 afterEach(() => {
@@ -158,6 +164,33 @@ describe("read and write", () => {
     expect(out).toContain("x.txt");
   });
 
+  it("returns an image as an image the model can see", async () => {
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from([0, 0, 0, 0]),
+    ]);
+    writeFileSync(join(dir, "board.png"), png);
+    const out = await createReadTool(context).execute!({ path: "board.png" }, call);
+    expect(out).toBeInstanceOf(ToolResultContent);
+    const content = (out as ToolResultContent).content;
+    expect(content[0]).toMatchObject({ type: "text" });
+    expect(content[1]).toEqual({
+      type: "image",
+      mimeType: "image/png",
+      data: png.toString("base64"),
+    });
+  });
+
+  it("refuses an image as binary when images are switched off", async () => {
+    writeFileSync(
+      join(dir, "board.png"),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0])
+    );
+    await expect(
+      createReadTool({ ...context, images: false }).execute!({ path: "board.png" }, call)
+    ).rejects.toThrow(/binary/);
+  });
+
   it("refuses a binary file", async () => {
     writeFileSync(join(dir, "bin"), Buffer.from([1, 0, 2, 0]));
     await expect(createReadTool(context).execute!({ path: "bin" }, call)).rejects.toThrow(/binary/);
@@ -207,5 +240,30 @@ describe("bash", () => {
     expect(readFileSync(join(context.spillDir, spilled[0]!), "utf8").startsWith("1\n2\n")).toBe(
       true
     );
+  });
+});
+
+describe("imageMimeType", () => {
+  it("recognises the formats vision providers take, by their leading bytes", () => {
+    expect(imageMimeType(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBe("image/jpeg");
+    expect(imageMimeType(Buffer.from("GIF89a"))).toBe("image/gif");
+    expect(imageMimeType(Buffer.from("RIFF\0\0\0\0WEBPVP8 "))).toBe("image/webp");
+    expect(imageMimeType(Buffer.from("plain text"))).toBeUndefined();
+  });
+});
+
+describe("codingSystemPrompt", () => {
+  const env = { cwd: "/app", platform: "linux x64", date: "2026-10-07" };
+  it("asks for concision only when switched on", () => {
+    expect(codingSystemPrompt({ ...env, concise: true, images: true })).toContain("Be concise");
+    expect(codingSystemPrompt({ ...env, concise: false, images: true })).not.toContain(
+      "Be concise"
+    );
+  });
+  it("tells the model read shows images only when it does", () => {
+    expect(codingSystemPrompt({ ...env, concise: true, images: true })).toContain(
+      "shows you images"
+    );
+    expect(codingSystemPrompt({ ...env, concise: true, images: false })).not.toContain("images");
   });
 });

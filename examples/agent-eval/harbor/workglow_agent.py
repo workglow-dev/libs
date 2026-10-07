@@ -80,6 +80,16 @@ class WorkglowOptions(InstalledAgentOptions):
     append_system_prompt: Annotated[str | None, Cli("--append-system-prompt")] = Field(
         default=None, description="Text appended to the system prompt."
     )
+    concise: Annotated[str | None, Cli("--concise")] = Field(
+        default=None, description="on|off: ask for terse replies between tool calls (default on)."
+    )
+    images: Annotated[str | None, Cli("--images")] = Field(
+        default=None, description="on|off: let read show images to the model (default on)."
+    )
+    replay_reasoning: Annotated[str | None, Cli("--replay-reasoning")] = Field(
+        default=None,
+        description="on|off: send the model's reasoning back on later rounds (default on).",
+    )
     bundle_path: str | None = Field(
         default=None,
         description="Local path of workglow-agent.mjs (default: ../dist, or $WORKGLOW_AGENT_BUNDLE).",

@@ -48,6 +48,7 @@ import {
 import type {
   ChatMessage,
   ContentBlock,
+  ContentBlockImage,
   ContentBlockInToolResultBody,
   ContentBlockToolResult,
 } from "./ChatMessage";
@@ -329,8 +330,17 @@ function isAnswerable(call: ToolCall): boolean {
   return typeof call.id === "string" && call.id.length > 0 && typeof call.name === "string";
 }
 
-function assistantMessage(text: string, calls: readonly ToolCall[]): ChatMessage {
+function assistantMessage(
+  text: string,
+  calls: readonly ToolCall[],
+  reasoning: string | undefined
+): ChatMessage {
   const content: ContentBlock[] = [];
+  // Reasoning rides only on a reply that has something else: on its own it is
+  // not a reply, and an assistant turn with no text and no call is rejected.
+  if (reasoning && (text.length > 0 || calls.length > 0)) {
+    content.push({ type: "reasoning", text: reasoning });
+  }
   if (text.length > 0) content.push({ type: "text", text });
   for (const call of calls) {
     content.push({
@@ -362,10 +372,12 @@ function toolResult(
   call: ToolCall,
   text: string,
   isError: boolean,
-  maxChars: number
+  maxChars: number,
+  images: ReadonlyArray<ContentBlockImage> = []
 ): ContentBlockToolResult {
   const body: ContentBlockInToolResultBody[] = [
     { type: "text", text: clampToolText(text, maxChars) },
+    ...images,
   ];
   return {
     type: "tool_result",
@@ -661,7 +673,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       // A turn with neither text nor a usable call records nothing: an empty
       // assistant message is not a reply, and providers reject a replayed
       // prefix containing one.
-      const reply = assistantMessage(output?.text ?? "", calls);
+      const reply = assistantMessage(output?.text ?? "", calls, output?.reasoning);
       if (reply.content.length > 0) {
         messages.push(reply);
         yield transcript();
@@ -937,7 +949,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       approval: options.approval,
       maxResultChars: options.maxResultChars,
     });
-    return toolResult(call, result.text, result.isError, options.maxResultChars);
+    return toolResult(call, result.text, result.isError, options.maxResultChars, result.images);
   }
 }
 

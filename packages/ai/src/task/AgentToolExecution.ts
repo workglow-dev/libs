@@ -17,8 +17,9 @@ import {
 import type { IHumanRequest, IHumanResponse, ServiceRegistry } from "@workglow/util";
 import { createServiceToken, getLogger, HUMAN_CONNECTOR, uuid4 } from "@workglow/util";
 import type { DataPortSchema } from "@workglow/util/schema";
+import type { ContentBlockImage } from "./ChatMessage";
 import type { ToolCall, ToolDefinition } from "./ToolCallingUtils";
-import { ToolCallError } from "./ToolCallingUtils";
+import { ToolCallError, ToolResultContent } from "./ToolCallingUtils";
 
 /**
  * When a tool call is put to a human before it runs.
@@ -62,6 +63,8 @@ function hostAllowsSkippingApproval(registry: ServiceRegistry | undefined): bool
 export interface AgentToolResult {
   readonly text: string;
   readonly isError: boolean;
+  /** Images the tool returned through {@link ToolResultContent}, shown after the text. */
+  readonly images?: ReadonlyArray<ContentBlockImage> | undefined;
 }
 
 /**
@@ -264,6 +267,19 @@ export async function runAgentTool(
 
   try {
     const output = await invokeTool(tool, call, context);
+    if (output instanceof ToolResultContent) {
+      const text = output.content
+        .flatMap((block) => (block.type === "text" ? [block.text] : []))
+        .join("\n");
+      const images = output.content.filter(
+        (block): block is ContentBlockImage => block.type === "image"
+      );
+      return {
+        text: clampToolText(text, options.maxResultChars),
+        isError: false,
+        ...(images.length > 0 ? { images } : {}),
+      };
+    }
     return {
       text: clampToolText(stringifyForModel(output), options.maxResultChars),
       isError: false,

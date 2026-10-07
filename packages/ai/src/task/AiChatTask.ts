@@ -208,6 +208,7 @@ export type AiChatTaskInput = Omit<
               )[];
               tool_use_id: string;
             }
+          | { type: "reasoning"; text: string }
         )[];
   },
   "messages"

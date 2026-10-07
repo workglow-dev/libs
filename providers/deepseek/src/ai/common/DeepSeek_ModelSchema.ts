@@ -48,6 +48,12 @@ export const DeepSeekModelSchema = {
           description:
             "Tokens added to the answer budget to leave room for reasoning. Set 0 for a non-thinking model; omit for the default.",
         },
+        replay_reasoning: {
+          type: "boolean",
+          description:
+            "Send each assistant turn's reasoning back on later rounds of a tool-calling loop (default true). Off saves the prompt tokens it costs, at the price of the model working its plan out again each round.",
+          "x-ui-hidden": true,
+        },
       },
       required: ["model_name"],
       additionalProperties: false,

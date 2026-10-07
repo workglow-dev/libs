@@ -14,6 +14,8 @@ export interface CodingToolContext {
   readonly spillDir: string;
   /** Seconds a command may run when the model does not say. */
   readonly defaultCommandTimeoutSec: number;
+  /** Whether `read` returns images to the model, or refuses them as binary. */
+  readonly images: boolean;
 }
 
 /**

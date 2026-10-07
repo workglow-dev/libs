@@ -8,6 +8,7 @@ import type { SchemaNode } from "@workglow/util/schema";
 import { compileSchema } from "@workglow/util/schema";
 import type { JsonSchema } from "@workglow/util/worker";
 import { getLogger } from "@workglow/util/worker";
+import type { ContentBlockImage, ContentBlockText } from "./ChatMessage";
 
 /**
  * A tool definition that can be passed to an LLM for tool calling.
@@ -88,6 +89,16 @@ export interface ToolExecuteContext {
  * the model exactly as written, so the tool keeps the wording it chose,
  * including whatever it wants the model to do next.
  */
+/**
+ * A tool result made of content blocks rather than one string — what a tool's
+ * `execute` returns to hand the model an image. Anything else a tool returns is
+ * shown to the model as text, so without this an image would arrive as a
+ * base64 string, clamped.
+ */
+export class ToolResultContent {
+  constructor(readonly content: ReadonlyArray<ContentBlockText | ContentBlockImage>) {}
+}
+
 export class ToolCallError extends Error {
   constructor(message: string) {
     super(message);

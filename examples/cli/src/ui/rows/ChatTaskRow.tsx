@@ -39,6 +39,9 @@ function blockToText(block: ContentBlock): string {
       return `[tool_use: ${block.name}]`;
     case "tool_result":
       return "[tool_result]";
+    case "reasoning":
+      // Kept for the model, not shown as part of the reply.
+      return "";
   }
 }
 

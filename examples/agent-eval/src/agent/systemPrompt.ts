@@ -8,6 +8,10 @@ export interface SystemPromptEnvironment {
   readonly cwd: string;
   readonly platform: string;
   readonly date: string;
+  /** Ask for terse replies between tool calls; off reproduces the earlier prompt. */
+  readonly concise: boolean;
+  /** Whether `read` shows images, which the tools line then says. */
+  readonly images: boolean;
 }
 
 /**
@@ -22,7 +26,9 @@ export function codingSystemPrompt(env: SystemPromptEnvironment): string {
       "No one will answer questions: make reasonable decisions and finish the task.",
     "",
     "<tools>",
-    "- read: read file contents (use offset/limit to page through long files)",
+    env.images
+      ? "- read: read file contents (use offset/limit to page through long files); shows you images (png, jpg, gif, webp)"
+      : "- read: read file contents (use offset/limit to page through long files)",
     "- bash: run shell commands (ls, rg, find, tests, builds, package managers)",
     "- edit: replace exact text in a file; several disjoint edits per call",
     "- write: create a file or overwrite it completely",
@@ -34,6 +40,12 @@ export function codingSystemPrompt(env: SystemPromptEnvironment): string {
     "- Each bash call is a fresh shell; chain dependent commands with &&.",
     "- Verify your work: run the code or its tests before you finish.",
     "- When the task is complete, reply with a short summary and no tool calls.",
+    ...(env.concise
+      ? [
+          // Narration between calls is output the model pays for and nobody reads.
+          "- Be concise: do not narrate between tool calls; say only what the next step needs.",
+        ]
+      : []),
     "</rules>",
     "",
     "<environment>",

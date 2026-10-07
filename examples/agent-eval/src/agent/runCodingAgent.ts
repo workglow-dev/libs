@@ -58,6 +58,8 @@ export interface CodingAgentSettings {
   readonly roundTimeoutMs: number | undefined;
   readonly maxRoundRetries: number | undefined;
   readonly systemPromptAppend: string | undefined;
+  /** Ask for terse replies between tool calls. */
+  readonly concise: boolean;
 }
 
 export interface CodingAgentRun {
@@ -151,6 +153,8 @@ export async function runCodingAgent(run: CodingAgentRun): Promise<CodingAgentRe
         cwd: run.tools.cwd,
         platform: `${process.platform} ${process.arch}`,
         date: new Date().toISOString().slice(0, 10),
+        concise: settings.concise,
+        images: run.tools.images,
       }) + (settings.systemPromptAppend ? `\n\n${settings.systemPromptAppend}` : ""),
     tools: createCodingTools(run.tools),
     maxRounds: settings.maxRounds,

@@ -54,6 +54,7 @@ export function buildAnthropicMessages(
   for (const msg of messages) {
     if (msg.role === "user") {
       const blocks = msg.content
+        .filter((b) => b.type !== "reasoning")
         .map((b) => {
           if (b.type === "text") return { type: "text", text: b.text };
           if (b.type === "image") {
@@ -68,7 +69,10 @@ export function buildAnthropicMessages(
       if (blocks.length === 0) continue;
       out.push({ role: "user", content: blocks });
     } else if (msg.role === "assistant") {
+      // Reasoning another provider streamed as text has no Anthropic form (its
+      // thinking blocks are signed), and an unknown block is a 400.
       const blocks = msg.content
+        .filter((b) => b.type !== "reasoning")
         .map((b) => {
           if (b.type === "text") return { type: "text", text: b.text };
           if (b.type === "tool_use") {

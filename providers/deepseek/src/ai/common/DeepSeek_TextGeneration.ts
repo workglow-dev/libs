@@ -21,6 +21,7 @@ import {
   getClient,
   getModelName,
   resolveMaxTokens,
+  reasoningParams,
 } from "./DeepSeek_Client";
 import type { DeepSeekModelConfig } from "./DeepSeek_ModelSchema";
 import { mapDeepSeekUsage } from "./DeepSeek_Usage";
@@ -62,6 +63,7 @@ function buildChatParams(
   };
   const resolvedMaxTokens = resolveMaxTokens(model, input.maxTokens);
   if (resolvedMaxTokens !== undefined) params.max_tokens = resolvedMaxTokens;
+  Object.assign(params, reasoningParams(model));
   if (input.temperature !== undefined) params.temperature = input.temperature;
   if ((input as { topP?: number }).topP !== undefined)
     params.top_p = (input as { topP?: number }).topP;

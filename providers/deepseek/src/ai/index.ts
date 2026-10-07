@@ -11,6 +11,7 @@ export {
   DEEPSEEK_ALLOWED_HOSTS,
   DEEPSEEK_DEFAULT_BASE_URL,
   DEEPSEEK_DEFAULT_REASONING_ALLOWANCE,
+  reasoningParams,
   resolveMaxTokens,
 } from "./common/DeepSeek_Client";
 export * from "./common/DeepSeek_Constants";

@@ -35,6 +35,13 @@ function integer(value: string): number {
   return n;
 }
 
+/** `on`/`off` switches, spelled so Harbor agent kwargs pass them through as strings. */
+function onOff(value: string): boolean {
+  if (value === "on" || value === "true") return true;
+  if (value === "off" || value === "false") return false;
+  throw new Error(`expected on or off, got ${value}`);
+}
+
 function number(value: string): number {
   const n = Number(value);
   if (!Number.isFinite(n)) throw new Error(`expected a number, got ${value}`);
@@ -89,13 +96,28 @@ const program = new Command()
   .option("--max-round-retries <n>", "retries of a failed model call", Number)
   .option("--command-timeout-sec <n>", "default bash timeout", integer, 600)
   .option("--append-system-prompt <text>", "text appended to the system prompt")
+  .option("--concise <on|off>", "ask for terse replies between tool calls", onOff, true)
+  .option("--images <on|off>", "let read show images to the model", onOff, true)
+  .option(
+    "--replay-reasoning <on|off>",
+    "send the model's reasoning back on later rounds (providers that take it)",
+    onOff,
+    true
+  )
   .action(async (words: string[], opts) => {
     const instruction = opts.instructionFile
       ? readFileSync(opts.instructionFile, "utf8")
       : words.join(" ");
     if (instruction.trim() === "") throw new Error("no instruction given");
 
-    const model = resolveAgentModel(opts.model, { effort: parseEffort(opts.effort) });
+    const resolved = resolveAgentModel(opts.model, { effort: parseEffort(opts.effort) });
+    // An ablation switch for the provider's reasoning replay; only DeepSeek reads it today.
+    const model = opts.replayReasoning
+      ? resolved
+      : ({
+          ...resolved,
+          provider_config: { ...resolved.provider_config, replay_reasoning: false },
+        } as typeof resolved);
     await registerAgentProvider(model.provider);
 
     const cwd = resolve(opts.cwd);
@@ -116,6 +138,7 @@ const program = new Command()
         cwd,
         spillDir: join(logsDir ?? tmpdir(), "spill"),
         defaultCommandTimeoutSec: opts.commandTimeoutSec,
+        images: opts.images,
       },
       settings: {
         maxRounds: opts.maxRounds,
@@ -129,6 +152,7 @@ const program = new Command()
           opts.roundTimeoutSec === undefined ? undefined : opts.roundTimeoutSec * 1000,
         maxRoundRetries: opts.maxRoundRetries,
         systemPromptAppend: opts.appendSystemPrompt,
+        concise: opts.concise,
       },
       signal: controller.signal,
       onEvent: (event) => {

@@ -53,6 +53,25 @@ export interface OpenAICompatMessage {
     function: { name: string; arguments: string };
   }>;
   tool_call_id?: string;
+  /** An assistant turn's reasoning, under the name the provider reads it back by. */
+  reasoning_content?: string;
+}
+
+export interface OpenAIMessageOptions {
+  /**
+   * Send each assistant turn's reasoning back as `reasoning_content`. DeepSeek's
+   * thinking models read it on the turns of a tool-calling loop; other
+   * OpenAI-compatible APIs do not know the field, so it is opt-in and reasoning
+   * blocks are otherwise dropped.
+   */
+  readonly replayReasoning?: boolean | undefined;
+  /**
+   * Chat-completions accepts only text in a `tool` message. With this set, the
+   * images a turn's tools returned are sent in one user message after that
+   * turn's tool results, and each tool message says an image follows. Without
+   * it they stay inline in the tool message, for APIs that accept that.
+   */
+  readonly toolImagesInUserMessage?: boolean | undefined;
 }
 
 /**
@@ -61,7 +80,10 @@ export interface OpenAICompatMessage {
  *
  * Multi-turn capable: preserves full tool call metadata across turns.
  */
-export function toOpenAIMessages(input: ToolCallingTaskInput): OpenAICompatMessage[] {
+export function toOpenAIMessages(
+  input: ToolCallingTaskInput,
+  options: OpenAIMessageOptions = {}
+): OpenAICompatMessage[] {
   const messages: OpenAICompatMessage[] = [];
 
   if (input.systemPrompt) {
@@ -139,13 +161,41 @@ export function toOpenAIMessages(input: ToolCallingTaskInput): OpenAICompatMessa
       if (toolCalls.length > 0) {
         entry.tool_calls = toolCalls;
       }
+      if (options.replayReasoning) {
+        // Sent even when empty: DeepSeek returns an empty reasoning on some
+        // turns and still expects the field on every assistant turn it reads.
+        entry.reasoning_content = msg.content
+          .filter((b): b is Extract<ContentBlock, { type: "reasoning" }> => b.type === "reasoning")
+          .map((b) => b.text)
+          .join("");
+      }
       messages.push(entry);
     } else if (msg.role === "tool") {
+      const deferredImages: Array<{ type: string; [key: string]: unknown }> = [];
       for (const block of msg.content) {
         if (block.type !== "tool_result") continue;
         let content: string | Array<{ type: string; [key: string]: unknown }>;
         if (block.content.length === 1 && block.content[0].type === "text") {
           content = block.content[0].text;
+        } else if (options.toolImagesInUserMessage) {
+          const text = block.content
+            .filter((inner) => inner.type === "text")
+            .map((inner) => (inner as { text: string }).text)
+            .join("\n");
+          const images = block.content.filter(
+            (inner): inner is Extract<typeof inner, { type: "image" }> => inner.type === "image"
+          );
+          for (const image of images) {
+            deferredImages.push({
+              type: "image_url",
+              image_url: { url: `data:${image.mimeType};base64,${image.data}` },
+            });
+          }
+          const note =
+            images.length > 0
+              ? `[${images.length} image(s) from this result follow in the next message]`
+              : "";
+          content = [text, note].filter((part) => part.length > 0).join("\n");
         } else {
           const parts: Array<{ type: string; [key: string]: unknown }> = [];
           for (const inner of block.content) {
@@ -161,6 +211,15 @@ export function toOpenAIMessages(input: ToolCallingTaskInput): OpenAICompatMessa
           content = parts;
         }
         messages.push({ role: "tool", content, tool_call_id: block.tool_use_id });
+      }
+      if (deferredImages.length > 0) {
+        messages.push({
+          role: "user",
+          content: [
+            { type: "text", text: "Images returned by the tool calls above:" },
+            ...deferredImages,
+          ],
+        });
       }
     }
   }

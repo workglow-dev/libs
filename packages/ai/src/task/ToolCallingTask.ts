@@ -258,6 +258,13 @@ export const ToolCallingOutputSchema = {
       description: "Tool calls requested by the model",
       "x-stream": "object",
     },
+    reasoning: {
+      type: "string",
+      title: "Reasoning",
+      description:
+        "What a thinking model reasoned before replying, when its provider returns it as text",
+      "x-stream": "append",
+    },
     ...CheckpointOutputProperty,
   },
   required: ["text", "toolCalls"],
@@ -320,6 +327,8 @@ export type ToolCallingTaskOutput = {
     input: { [x: string]: unknown };
     providerSignature?: string;
   }[];
+  /** Present when the provider returned the model's reasoning as text. */
+  reasoning?: string | undefined;
   checkpoint?: string | undefined;
 };
 export type ToolCallingTaskConfig = TaskConfig<ToolCallingTaskInput>;

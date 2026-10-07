@@ -95,7 +95,12 @@ describe("runCodingAgent against the mock model", () => {
       instruction: "Create hello.txt",
       modelId: "anthropic/claude-sonnet-5-5",
       model: resolveAgentModel("anthropic/claude-sonnet-5-5"),
-      tools: { cwd: work, spillDir: join(work, ".spill"), defaultCommandTimeoutSec: 30 },
+      tools: {
+        cwd: work,
+        spillDir: join(work, ".spill"),
+        defaultCommandTimeoutSec: 30,
+        images: true,
+      },
       settings: {
         maxRounds: 10,
         maxToolResultChars: 60_000,
@@ -107,6 +112,7 @@ describe("runCodingAgent against the mock model", () => {
         roundTimeoutMs: undefined,
         maxRoundRetries: undefined,
         systemPromptAppend: undefined,
+        concise: true,
       },
       signal: new AbortController().signal,
       onEvent: (event) => events.push(event),
@@ -146,7 +152,12 @@ describe("runCodingAgent against the mock model", () => {
       instruction: "Create hello.txt",
       modelId: "anthropic/claude-sonnet-5-5",
       model: resolveAgentModel("anthropic/claude-sonnet-5-5"),
-      tools: { cwd: work, spillDir: join(work, ".spill"), defaultCommandTimeoutSec: 30 },
+      tools: {
+        cwd: work,
+        spillDir: join(work, ".spill"),
+        defaultCommandTimeoutSec: 30,
+        images: true,
+      },
       settings: {
         maxRounds: 2,
         maxToolResultChars: 60_000,
@@ -158,6 +169,7 @@ describe("runCodingAgent against the mock model", () => {
         roundTimeoutMs: undefined,
         maxRoundRetries: undefined,
         systemPromptAppend: undefined,
+        concise: true,
       },
       signal: new AbortController().signal,
     });

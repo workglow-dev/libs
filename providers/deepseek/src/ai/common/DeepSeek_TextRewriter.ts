@@ -14,7 +14,7 @@ import {
   createEstimatedOutputUsageReporter,
   OPENAI_STREAM_USAGE_OPTIONS,
 } from "@workglow/ai/provider-utils";
-import { getClient, getModelName } from "./DeepSeek_Client";
+import { getClient, getModelName, reasoningParams } from "./DeepSeek_Client";
 import type { DeepSeekModelConfig } from "./DeepSeek_ModelSchema";
 import { mapDeepSeekUsage } from "./DeepSeek_Usage";
 
@@ -42,6 +42,7 @@ export const DeepSeek_TextRewriter_Stream: AiProviderRunFn<
         { role: "system", content: input.prompt },
         { role: "user", content: input.text },
       ],
+      ...reasoningParams(model),
       stream: true,
       ...OPENAI_STREAM_USAGE_OPTIONS,
     },

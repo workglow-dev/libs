@@ -39,6 +39,18 @@ export type ContentBlockToolUse = {
  * recursive `$ref` (which fails to resolve when `ContentBlockSchema` is nested
  * under a larger document such as `ToolCallingInputSchema`).
  */
+/**
+ * What a thinking model reasoned before the rest of its reply, kept so it can
+ * be handed back on later rounds of the same turn. Some providers ask for it
+ * back (DeepSeek's `reasoning_content` on an assistant turn that called tools),
+ * and a model given its own reasoning continues from it rather than working the
+ * plan out again each round. A provider that has no use for it skips the block.
+ */
+export type ContentBlockReasoning = {
+  readonly type: "reasoning";
+  readonly text: string;
+};
+
 export type ContentBlockInToolResultBody =
   | ContentBlockText
   | ContentBlockImage
@@ -55,7 +67,8 @@ export type ContentBlock =
   | ContentBlockText
   | ContentBlockImage
   | ContentBlockToolUse
-  | ContentBlockToolResult;
+  | ContentBlockToolResult
+  | ContentBlockReasoning;
 
 export type ChatRole = "user" | "assistant" | "tool" | "system";
 
@@ -98,6 +111,16 @@ const ContentBlockToolUseSchema = {
   additionalProperties: false,
 } as const;
 
+const ContentBlockReasoningSchema = {
+  type: "object",
+  properties: {
+    type: { type: "string", enum: ["reasoning"] },
+    text: { type: "string" },
+  },
+  required: ["type", "text"],
+  additionalProperties: false,
+} as const;
+
 /** `tool_result.content` — text, image, and tool_use only (no nested `tool_result`). */
 const ContentBlockInToolResultBodySchema = {
   oneOf: [ContentBlockTextSchema, ContentBlockImageSchema, ContentBlockToolUseSchema],
@@ -126,6 +149,7 @@ export const ContentBlockSchema = {
     ContentBlockImageSchema,
     ContentBlockToolUseSchema,
     ContentBlockToolResultSchema,
+    ContentBlockReasoningSchema,
   ],
   title: "ContentBlock",
   description: "A single content block within a chat message",
@@ -189,6 +213,8 @@ export function isContentBlock(value: unknown): value is ContentBlock {
         Array.isArray(v.content) &&
         v.content.every(isContentBlockInToolResultBody)
       );
+    case "reasoning":
+      return typeof v.text === "string";
     default:
       return false;
   }
