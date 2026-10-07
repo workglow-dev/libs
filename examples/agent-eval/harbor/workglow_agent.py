@@ -152,10 +152,12 @@ class WorkglowAgent(BaseInstalledAgent):
             return None
         if base is None:
             return None
-        seconds = base * (config.agent_timeout_multiplier or config.timeout_multiplier)
-        if config.agent.max_timeout_sec is not None:
-            seconds = min(seconds, config.agent.max_timeout_sec)
-        return seconds
+        multiplier = (
+            config.agent_timeout_multiplier
+            if config.agent_timeout_multiplier is not None
+            else config.timeout_multiplier
+        )
+        return min(base, config.agent.max_timeout_sec or float("inf")) * multiplier
 
     def _max_duration_sec(self) -> int | None:
         if self.options.max_duration_sec is not None:
