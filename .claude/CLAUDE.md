@@ -252,15 +252,18 @@ for a round that reports no usage: it cannot be priced, so the turn ends `"budge
 Every round leaves an `AgentStep` on `steps` (timings, attempts, each tool's outcome and
 size, usage, cost) and rides on the `snapshot` beside `messages`; `costUsd` totals them when
 every round could be priced.
-A tool is handed the turn's `deadline` on its `ToolExecuteContext` (undefined without
-`maxDurationMs`): the loop stops only between rounds, so a tool that can bound its own work caps
-it there. `announceTimeLeft` appends the time left to each round's last tool result — the model
-cannot budget time it is never told about, and a long command started in the last minutes is how
-a turn runs past its budget.
-`reviewPrompt` is sent once, the first time the model replies without a tool call, so it checks
-its answer against what it was asked before the turn ends; the model may go back to its tools.
-It is skipped with `outputSchema` (that is `checkSubmission`'s job) and when no round, budget or
-time is left. The turn's `text` then carries both replies.
+A tool with an `execute` function is handed the turn's `deadline` on its `ToolExecuteContext`
+(undefined without `maxDurationMs`; a task-backed tool never receives it): the loop stops only
+between rounds, so a tool that can bound its own work caps it there. A retry wait that would pass
+the deadline ends the turn `"budget"` instead of sleeping. `announceTimeLeft` appends the time
+left to the text of each round's last tool result, and the notice stays in the returned
+`messages` — the model cannot budget time it is never told about, and a long command started in
+the last minutes is how a turn runs past its budget.
+`reviewPrompt` is sent once per turn, the first time the model replies without a tool call, so it
+checks its answer against what it was asked before the turn ends; the model may go back to its
+tools. A chat host that passes it on every turn gets a review each turn. It is skipped with
+`outputSchema` (that is `checkSubmission`'s job) and when no round, budget or time is left. The
+turn's `text` then carries both replies.
 
 **The loop and the model call can live in different places.** A host whose tools are closures
 (they draw on a screen, ask a person, read state only that process holds) but whose model is

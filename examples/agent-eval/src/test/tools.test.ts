@@ -101,7 +101,9 @@ describe("edit", () => {
     );
     expect(result.content).toBe("1ef");
     expect(result.applied).toEqual([0]);
-    expect(result.failures).toEqual([expect.stringMatching(/^edits\[1\]: overlaps edits\[0\]/)]);
+    expect(result.failures).toEqual([
+      expect.stringMatching(/^edits\[1\]: overlaps edits\[0\], which was applied\. Read the file/),
+    ]);
   });
 
   it("counts an edit whose text is already in place as unchanged, not as a failure", () => {
@@ -152,6 +154,35 @@ describe("edit", () => {
       )
     ).rejects.toThrow(/Applied 1 of 2 edits[\s\S]*edits\[1\]: .*2 occurrences/);
     expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("1\ntwo\ntwo\n");
+  });
+
+  it("says how many edits already matched when others in the call fail", async () => {
+    writeFileSync(join(dir, "p.txt"), "one\nsame\ntwo\ntwo\n");
+    await expect(
+      createEditTool(context).execute!(
+        {
+          path: "p.txt",
+          edits: [
+            { oldText: "one", newText: "1" },
+            { oldText: "same", newText: "same" },
+            { oldText: "two", newText: "2" },
+          ],
+        },
+        call
+      )
+    ).rejects.toThrow(/Applied 1 of 3 edits to .*p\.txt; 1 already matched their newText/);
+  });
+
+  it("leaves the file byte-identical when every edit fails, CRLF included", async () => {
+    const path = join(dir, "all-failed.txt");
+    writeFileSync(path, "a\r\nb\r\n");
+    await expect(
+      createEditTool(context).execute!(
+        { path: "all-failed.txt", edits: [{ oldText: "not there", newText: "x" }] },
+        call
+      )
+    ).rejects.toThrow(/No edits applied/);
+    expect(readFileSync(path)).toEqual(Buffer.from("a\r\nb\r\n"));
   });
 
   it("keeps CRLF line endings and a BOM through the tool", async () => {
@@ -271,6 +302,18 @@ describe("bash", () => {
       )
     ).rejects.toThrow(/all the time left/);
     expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("does not run a command when no time is left", async () => {
+    await expect(
+      createBashTool(context).execute!(
+        { command: "touch ran.txt" },
+        { ...call, deadline: Date.now() - 1 }
+      )
+    ).rejects.toThrow(
+      "No time is left for this task; the command was not run. Finish with what you have."
+    );
+    expect(readdirSync(dir)).not.toContain("ran.txt");
   });
 
   it("does not wait for a process the command left in the background", async () => {

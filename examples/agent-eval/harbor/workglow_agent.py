@@ -148,7 +148,12 @@ class WorkglowAgent(BaseInstalledAgent):
             base = config.agent.override_timeout_sec or Task(
                 config.task.get_local_path()
             ).config.agent.timeout_sec
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
+            self.logger.warning(
+                "Could not resolve the trial's agent time limit (%s); the workglow agent "
+                "runs without a time budget.",
+                error,
+            )
             return None
         if base is None:
             return None

@@ -666,6 +666,12 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
           if (attempts > maxRoundRetries || !isRetryableRoundError(err)) throw err;
           context.signal.throwIfAborted();
           const wait = retryDelayMs(err, attempts);
+          // Nothing from the failed attempt has been recorded, so the turn can end
+          // here as cleanly as between rounds.
+          if (deadline !== undefined && Date.now() + wait >= deadline) {
+            yield finish("budget");
+            return;
+          }
           await context.updateProgress(undefined, `Retrying in ${Math.ceil(wait / 1000)}s`);
           await sleepUnlessAborted(wait, context.signal);
         }
@@ -777,10 +783,17 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       // a changing line costs no prompt cache.
       if (input.announceTimeLeft && deadline !== undefined && results.length > 0) {
         const last = results[results.length - 1]!;
-        results[results.length - 1] = {
-          ...last,
-          content: [...last.content, { type: "text", text: timeLeftNotice(deadline - Date.now()) }],
-        };
+        const notice = timeLeftNotice(deadline - Date.now());
+        // Joined onto the last text block, not added as a second one: a result of
+        // one text block stays one, which providers send as a plain string (or
+        // parse as a whole) and a second block would turn into a list of parts.
+        // A result of images alone has no text to join, so the notice leads them.
+        const content = [...last.content];
+        const at = content.findLastIndex((block) => block.type === "text");
+        const block = content[at];
+        if (block?.type === "text") content[at] = { ...block, text: block.text + notice };
+        else content.unshift({ type: "text", text: notice });
+        results[results.length - 1] = { ...last, content };
       }
       messages.push({ role: "tool", content: results });
       record(toolRecords);

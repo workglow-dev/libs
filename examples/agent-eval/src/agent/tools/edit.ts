@@ -161,8 +161,8 @@ export function applyEdits(content: string, edits: readonly TextEdit[], path: st
       );
       if (clash) {
         failures.push(
-          `edits[${index}]: overlaps edits[${clash.index}]. Merge them into one edit, or make ` +
-            "each oldText cover a separate region."
+          `edits[${index}]: overlaps edits[${clash.index}], which was applied. Read the file and ` +
+            "resend this change against its current text."
         );
         return;
       }
@@ -268,8 +268,8 @@ export function createEditTool(context: CodingToolContext): ToolDefinition {
       }
       const head =
         result.applied.length > 0
-          ? `Applied ${result.applied.length} of ${edits.length} edits to ${path}${note}; the ` +
-            "file now contains them. Not applied:"
+          ? `Applied ${result.applied.length} of ${edits.length} edits to ${path}${note}${same}; ` +
+            "the file now contains them. Not applied:"
           : `No edits applied to ${path}:`;
       throw new ToolCallError(
         `${head}\n${result.failures.join("\n")}\n` +

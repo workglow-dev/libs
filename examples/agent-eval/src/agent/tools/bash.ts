@@ -156,6 +156,11 @@ export function createBashTool(context: CodingToolContext): ToolDefinition {
     execute: async (input, { signal, deadline }) => {
       const command = requireString(input, "command");
       const requested = optionalInteger(input, "timeout") ?? context.defaultCommandTimeoutSec;
+      if (deadline !== undefined && deadline - Date.now() <= 0) {
+        throw new ToolCallError(
+          "No time is left for this task; the command was not run. Finish with what you have."
+        );
+      }
       const { sec: timeoutSec, capped } = commandTimeoutSec(requested, deadline, Date.now());
       const result = await runCommand(command, context.cwd, timeoutSec * 1000, signal);
 

@@ -18,6 +18,7 @@ import {
   getAiProviderRegistry,
   setAiProviderRegistry,
 } from "@workglow/ai";
+import { RetryableJobError } from "@workglow/job-queue";
 import { TaskConfigurationError } from "@workglow/task-graph";
 import { Container, ServiceRegistry } from "@workglow/util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -151,10 +152,9 @@ describe("AgentTask announceTimeLeft", () => {
       content: Array<{ type: string; text?: string }>;
     }>;
     expect(first!.content.map((block) => block.text)).toEqual(["looked"]);
-    expect(last!.content.map((block) => block.text)).toEqual([
-      "looked",
-      expect.stringMatching(/^\n\n\[Time left: (9m [0-5]?\d|10m 0)s\]$/),
-    ]);
+    expect(last!.content).toHaveLength(1);
+    expect(last!.content[0]!.type).toBe("text");
+    expect(last!.content[0]!.text).toMatch(/^looked\n\n\[Time left: (9m [0-5]?\d|10m 0)s\]$/);
   });
 
   it("says nothing about time unless asked", async () => {
@@ -174,6 +174,37 @@ describe("AgentTask announceTimeLeft", () => {
         { registry }
       )
     ).rejects.toBeInstanceOf(TaskConfigurationError);
+  });
+});
+
+describe("AgentTask deadline and round retries", () => {
+  let registry: ServiceRegistry;
+
+  beforeEach(() => {
+    setAiProviderRegistry(new AiProviderRegistry());
+    getAiProviderRegistry().setDefaultStrategy(new DirectExecutionStrategy());
+    registry = new ServiceRegistry(new Container());
+  });
+
+  afterEach(() => {
+    getAiProviderRegistry().unregisterProvider(PROVIDER);
+  });
+
+  it("ends the turn instead of sleeping through a retry wait that passes the deadline", async () => {
+    let calls = 0;
+    const runFn: AiProviderRunFn = async () => {
+      calls++;
+      throw new RetryableJobError("429", new Date(Date.now() + 30_000));
+    };
+    getAiProviderRegistry().registerRunFn(PROVIDER, { serves: ["tool-use"], runFn });
+    const started = Date.now();
+    const output = await new AgentTask().run(
+      { model: MODEL, prompt: "?", tools: [], maxDurationMs: 5_000 },
+      { registry }
+    );
+    expect(output.stopReason).toBe("budget");
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(calls).toBe(1);
   });
 });
 
