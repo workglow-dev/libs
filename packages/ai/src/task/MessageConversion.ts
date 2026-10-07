@@ -227,6 +227,51 @@ export function toOpenAIMessages(
   return messages;
 }
 
+/** A message whose content is either workglow content blocks or a bare string. */
+export interface LooseChatMessage {
+  readonly role: string;
+  readonly content: string | ReadonlyArray<ContentBlock>;
+}
+
+/**
+ * Chat history as content blocks, accepting the bare-string `content` that
+ * text-generation callers have always been allowed to pass. A provider runs
+ * this before its converter, so a string message and a block message reach the
+ * wire the same way instead of the array being forwarded unconverted.
+ */
+export function normalizeChatMessages(messages: ReadonlyArray<LooseChatMessage>): ChatMessage[] {
+  return messages.map((message) => ({
+    role: message.role as ChatMessage["role"],
+    content:
+      typeof message.content === "string"
+        ? [{ type: "text", text: message.content }]
+        : message.content,
+  }));
+}
+
+/**
+ * Moves system-role messages out of a history and into the system prompt. The
+ * converters take the system prompt as its own input and skip system turns in
+ * `messages`, so a caller that put its instructions in the history would
+ * otherwise lose them.
+ */
+export function liftSystemMessages(
+  history: ReadonlyArray<ChatMessage>,
+  systemPrompt: string | undefined
+): { readonly messages: ChatMessage[]; readonly systemPrompt: string | undefined } {
+  const lifted = history
+    .filter((message) => message.role === "system")
+    .map((message) =>
+      message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("")
+    )
+    .filter((text) => text.length > 0);
+  const parts = [systemPrompt, ...lifted].filter((text): text is string => !!text);
+  return {
+    messages: history.filter((message) => message.role !== "system"),
+    systemPrompt: parts.length > 0 ? parts.join("\n\n") : undefined,
+  };
+}
+
 export interface TextFlatMessage {
   role: string;
   content: string;

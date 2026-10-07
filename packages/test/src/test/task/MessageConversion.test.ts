@@ -5,7 +5,12 @@
  */
 
 import type { ToolCallingTaskInput, ToolDefinition } from "@workglow/ai";
-import { toOpenAIMessages, toTextFlatMessages } from "@workglow/ai";
+import {
+  liftSystemMessages,
+  normalizeChatMessages,
+  toOpenAIMessages,
+  toTextFlatMessages,
+} from "@workglow/ai";
 import { describe, expect, test } from "vitest";
 
 const dummyTools: ToolDefinition[] = [
@@ -434,5 +439,38 @@ describe("toTextFlatMessages", () => {
 
     expect(msgs).toHaveLength(1);
     expect(msgs[0]).toEqual({ role: "user", content: "Look at this" });
+  });
+});
+
+describe("normalizeChatMessages", () => {
+  test("turns bare-string content into a text block and leaves blocks alone", () => {
+    const blocks = [{ type: "image" as const, mimeType: "image/png", data: "AAAA" }];
+    expect(
+      normalizeChatMessages([
+        { role: "user", content: "hi" },
+        { role: "user", content: blocks },
+      ])
+    ).toEqual([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      { role: "user", content: blocks },
+    ]);
+  });
+});
+
+describe("liftSystemMessages", () => {
+  test("moves system turns into the system prompt, after the one given", () => {
+    const lifted = liftSystemMessages(
+      [
+        { role: "system", content: [{ type: "text", text: "rule one" }] },
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+      ],
+      "base"
+    );
+    expect(lifted.systemPrompt).toBe("base\n\nrule one");
+    expect(lifted.messages).toEqual([{ role: "user", content: [{ type: "text", text: "hi" }] }]);
+  });
+
+  test("leaves the system prompt undefined when there is none anywhere", () => {
+    expect(liftSystemMessages([], undefined).systemPrompt).toBeUndefined();
   });
 });

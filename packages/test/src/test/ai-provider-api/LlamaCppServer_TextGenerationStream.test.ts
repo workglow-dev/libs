@@ -73,6 +73,48 @@ describe("createLlamaCppServerTextGenerationStream", () => {
     ]);
   });
 
+  it("converts block history to chat-completions parts and drops blocks it has no form for", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(sseResponse([dataLine("ok"), "data: [DONE]\n"]));
+    const fn = createLlamaCppServerTextGenerationStream({});
+    await fn(
+      {
+        prompt: "",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "What is this?" },
+              { type: "image", mimeType: "image/png", data: "AAAA" },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              { type: "reasoning", text: "It looks red." },
+              { type: "text", text: "A red square." },
+            ],
+          },
+        ],
+      } as any,
+      model,
+      undefined as any,
+      () => undefined
+    );
+    const body = JSON.parse(asText((fetchSpy.mock.calls[0]![1] as RequestInit).body));
+    expect(body.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is this?" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+        ],
+      },
+      { role: "assistant", content: "A red square." },
+    ]);
+  });
+
   it("throws on non-2xx with informative message", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 500 }));
     const fn = createLlamaCppServerTextGenerationStream({});

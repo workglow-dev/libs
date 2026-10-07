@@ -207,3 +207,50 @@ describe("createOllamaTextGenerationStream usage", () => {
     expect(finish.usage.output).toBe(3);
   });
 });
+
+describe("createOllamaTextGenerationStream chat history", () => {
+  const model = {
+    model_id: "ollama:test",
+    provider_config: { model_name: "llava" },
+  } as any;
+
+  it("sends block history as Ollama messages: string content, images beside it, unknown blocks dropped", async () => {
+    const chat = vi.fn().mockResolvedValue(makeFakeStream(["ok"]));
+    const streamFn = createOllamaTextGenerationStream(vi.fn().mockResolvedValue({ chat }));
+    await streamFn(
+      {
+        prompt: "",
+        systemPrompt: "be brief",
+        messages: [
+          { role: "system", content: [{ type: "text", text: "answer in English" }] },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "What is this?" },
+              { type: "image", mimeType: "image/png", data: "AAAA" },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              { type: "reasoning", text: "It looks red." },
+              { type: "text", text: "A red square." },
+            ],
+          },
+          { role: "user", content: "Thanks" },
+        ],
+      } as any,
+      model,
+      new AbortController().signal,
+      () => {}
+    );
+
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(chat.mock.calls[0]![0].messages).toEqual([
+      { role: "system", content: "be brief\n\nanswer in English" },
+      { role: "user", content: "What is this?", images: ["AAAA"] },
+      { role: "assistant", content: "A red square." },
+      { role: "user", content: "Thanks" },
+    ]);
+  });
+});

@@ -6,10 +6,13 @@
 
 import type {
   AiProviderRunFn,
+  LooseChatMessage,
+  OpenAICompatMessage,
   TextGenerationTaskInput,
   TextGenerationTaskOutput,
   Usage,
 } from "@workglow/ai";
+import { liftSystemMessages, normalizeChatMessages, toOpenAIMessages } from "@workglow/ai/worker";
 import {
   createEstimatedOutputUsageReporter,
   localOnlyFetch,
@@ -28,15 +31,7 @@ import { getLlamaCppServerModelName } from "./LlamaCppServer_ModelUtil";
 type AcquireFn = typeof acquireBaseUrl;
 
 interface UnifiedTextGenerationInput extends TextGenerationTaskInput {
-  readonly messages?: ReadonlyArray<{
-    readonly role: string;
-    readonly content:
-      | string
-      | ReadonlyArray<
-          | { readonly type: "text"; readonly text: string }
-          | { readonly type: "image_url"; readonly image_url: { readonly url: string } }
-        >;
-  }>;
+  readonly messages?: ReadonlyArray<LooseChatMessage>;
   readonly systemPrompt?: string;
 }
 
@@ -62,11 +57,15 @@ export function createLlamaCppServerTextGenerationStream(
     const unified = input as UnifiedTextGenerationInput;
     const hasMessages = Array.isArray(unified.messages) && unified.messages.length > 0;
 
+    // llama-server speaks chat-completions, so history goes through the shared
+    // OpenAI converter: workglow image blocks become `image_url` parts (llava),
+    // and blocks the endpoint has no form for are dropped rather than sent.
     const messages = hasMessages
-      ? [
-          ...(unified.systemPrompt ? [{ role: "system", content: unified.systemPrompt }] : []),
-          ...unified.messages!.map((m) => ({ role: m.role, content: m.content })),
-        ]
+      ? toOpenAIMessages({
+          ...liftSystemMessages(normalizeChatMessages(unified.messages!), unified.systemPrompt),
+          prompt: "",
+          tools: [],
+        } as never).map(collapseTextOnlyContent)
       : [{ role: "user", content: input.prompt }];
 
     const body = JSON.stringify({
@@ -121,6 +120,20 @@ export function createLlamaCppServerTextGenerationStream(
     } finally {
       await release();
     }
+  };
+}
+
+/**
+ * A user turn that is text alone goes out as a plain string, as it always has:
+ * only a turn carrying an image needs the parts array, and a server built
+ * without multimodal support is the one that may not accept one.
+ */
+function collapseTextOnlyContent(message: OpenAICompatMessage): OpenAICompatMessage {
+  const content = message.content;
+  if (!Array.isArray(content) || !content.every((part) => part.type === "text")) return message;
+  return {
+    ...message,
+    content: content.map((part) => (typeof part.text === "string" ? part.text : "")).join(""),
   };
 }
 

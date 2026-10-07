@@ -6,10 +6,12 @@
 
 import type {
   AiProviderRunFn,
+  LooseChatMessage,
   TextGenerationTaskInput,
   TextGenerationTaskOutput,
   Usage,
 } from "@workglow/ai";
+import { liftSystemMessages, normalizeChatMessages, toTextFlatMessages } from "@workglow/ai/worker";
 import { createEstimatedOutputUsageReporter } from "@workglow/ai/provider-utils";
 import type { OllamaModelConfig } from "./Ollama_ModelSchema";
 import { getOllamaModelName } from "./Ollama_ModelUtil";
@@ -18,8 +20,45 @@ import { mapOllamaUsage } from "./Ollama_Usage";
 type GetClient = (model: OllamaModelConfig | undefined) => Promise<any>;
 
 interface UnifiedTextGenerationInput extends TextGenerationTaskInput {
-  readonly messages?: readonly { readonly role: string; readonly content: string }[];
+  readonly messages?: ReadonlyArray<LooseChatMessage>;
   readonly systemPrompt?: string;
+}
+
+interface OllamaChatMessage {
+  readonly role: string;
+  readonly content: string;
+  /** Base64 image data, which Ollama takes beside the text rather than inside it. */
+  readonly images?: readonly string[];
+}
+
+/**
+ * Chat history in Ollama's shape: `content` is a string, and a user turn's
+ * images ride in its own `images` field. The text comes from the shared
+ * flattener, which keeps every user turn (so the Nth user turn there is the Nth
+ * here) and drops the blocks Ollama has no form for.
+ */
+export function toOllamaChatMessages(
+  messages: ReadonlyArray<LooseChatMessage>,
+  systemPrompt: string | undefined
+): OllamaChatMessage[] {
+  const lifted = liftSystemMessages(normalizeChatMessages(messages), systemPrompt);
+  const history = lifted.messages;
+  const userImages = history
+    .filter((message) => message.role === "user")
+    .map((message) =>
+      message.content.flatMap((block) => (block.type === "image" ? [block.data] : []))
+    );
+  let userIndex = 0;
+  return toTextFlatMessages({
+    messages: history,
+    systemPrompt: lifted.systemPrompt,
+    prompt: "",
+    tools: [],
+  } as never).map((message) => {
+    if (message.role !== "user") return message;
+    const images = userImages[userIndex++] ?? [];
+    return images.length > 0 ? { ...message, images } : message;
+  });
 }
 
 /**
@@ -41,11 +80,8 @@ export function createOllamaTextGenerationStream(
     const unified = input as UnifiedTextGenerationInput;
     const hasMessages = Array.isArray(unified.messages) && unified.messages.length > 0;
 
-    const messages = hasMessages
-      ? [
-          ...(unified.systemPrompt ? [{ role: "system", content: unified.systemPrompt }] : []),
-          ...unified.messages!.map((m) => ({ role: m.role, content: m.content })),
-        ]
+    const messages: OllamaChatMessage[] = hasMessages
+      ? toOllamaChatMessages(unified.messages!, unified.systemPrompt)
       : [{ role: "user", content: input.prompt }];
 
     // Ollama only reports counts on the terminal `done: true` chunk; estimate ↑
