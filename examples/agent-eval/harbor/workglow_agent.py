@@ -118,12 +118,20 @@ class WorkglowAgent(BaseInstalledAgent):
     @override
     async def install(self, environment: BaseEnvironment) -> None:
         bundle = self._bundle()
-        await self.ensure_system_dependencies(
-            environment, ("curl", "bash", "ca_certificates", "nodejs", "npm")
+        # Only what nvm needs. Distro Node is not asked for: on glibc images nvm
+        # installs its own, and asking apt for `nodejs` fails the whole install
+        # on images whose package index has gone stale.
+        await self.ensure_system_dependencies(environment, ("curl", "bash", "ca_certificates"))
+        # The bundle needs Node 22+. On glibc, install it with nvm the way the
+        # opencode and pi adapters do; on musl nvm's binaries do not run, so
+        # the packaged Node is all there is.
+        await self.exec_as_root(
+            environment,
+            command=(
+                "if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then "
+                "command -v node >/dev/null || apk add --no-cache nodejs; fi"
+            ),
         )
-        # The bundle needs Node 22+. Distro Node is often older, so install it
-        # with nvm the way the opencode and pi adapters do — except on musl,
-        # where nvm's binaries do not run and the packaged Node is all there is.
         await self.exec_as_agent(
             environment,
             command=(
