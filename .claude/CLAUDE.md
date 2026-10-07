@@ -252,6 +252,11 @@ for a round that reports no usage: it cannot be priced, so the turn ends `"budge
 Every round leaves an `AgentStep` on `steps` (timings, attempts, each tool's outcome and
 size, usage, cost) and rides on the `snapshot` beside `messages`; `costUsd` totals them when
 every round could be priced.
+A tool is handed the turn's `deadline` on its `ToolExecuteContext` (undefined without
+`maxDurationMs`): the loop stops only between rounds, so a tool that can bound its own work caps
+it there. `announceTimeLeft` appends the time left to each round's last tool result — the model
+cannot budget time it is never told about, and a long command started in the last minutes is how
+a turn runs past its budget.
 
 **The loop and the model call can live in different places.** A host whose tools are closures
 (they draw on a screen, ask a person, read state only that process holds) but whose model is

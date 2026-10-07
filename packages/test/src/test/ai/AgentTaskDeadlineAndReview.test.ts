@@ -6,6 +6,7 @@
 
 import type {
   AiProviderRunFn,
+  ChatMessage,
   ModelConfig,
   ToolCallingTaskInput,
   ToolDefinition,
@@ -17,6 +18,7 @@ import {
   getAiProviderRegistry,
   setAiProviderRegistry,
 } from "@workglow/ai";
+import { TaskConfigurationError } from "@workglow/task-graph";
 import { Container, ServiceRegistry } from "@workglow/util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -112,5 +114,65 @@ describe("AgentTask deadline", () => {
       { registry }
     );
     expect(seen).toEqual([undefined]);
+  });
+});
+
+describe("AgentTask announceTimeLeft", () => {
+  let registry: ServiceRegistry;
+
+  beforeEach(() => {
+    setAiProviderRegistry(new AiProviderRegistry());
+    getAiProviderRegistry().setDefaultStrategy(new DirectExecutionStrategy());
+    registry = new ServiceRegistry(new Container());
+  });
+
+  afterEach(() => {
+    getAiProviderRegistry().unregisterProvider(PROVIDER);
+  });
+
+  const look = tool("look", async () => "looked");
+
+  it("appends the time left to the round's last tool result", async () => {
+    const seen = script([
+      {
+        calls: [
+          { id: "c1", name: "look", input: {} },
+          { id: "c2", name: "look", input: {} },
+        ],
+      },
+      { text: "done" },
+    ]);
+    await new AgentTask().run(
+      { model: MODEL, prompt: "?", tools: [look], maxDurationMs: 600_000, announceTimeLeft: true },
+      { registry }
+    );
+    const sent = (seen[1]!.messages as ChatMessage[]).find((m) => m.role === "tool")!;
+    const [first, last] = sent.content as Array<{
+      content: Array<{ type: string; text?: string }>;
+    }>;
+    expect(first!.content.map((block) => block.text)).toEqual(["looked"]);
+    expect(last!.content.map((block) => block.text)).toEqual([
+      "looked",
+      expect.stringMatching(/^\n\n\[Time left: (9m [0-5]?\d|10m 0)s\]$/),
+    ]);
+  });
+
+  it("says nothing about time unless asked", async () => {
+    const seen = script([{ calls: [{ id: "c1", name: "look", input: {} }] }, { text: "done" }]);
+    await new AgentTask().run(
+      { model: MODEL, prompt: "?", tools: [look], maxDurationMs: 600_000 },
+      { registry }
+    );
+    expect(JSON.stringify(seen[1]!.messages)).not.toContain("Time left");
+  });
+
+  it("refuses announceTimeLeft without a time budget to announce", async () => {
+    script([{ text: "done" }]);
+    await expect(
+      new AgentTask().run(
+        { model: MODEL, prompt: "?", tools: [look], announceTimeLeft: true },
+        { registry }
+      )
+    ).rejects.toBeInstanceOf(TaskConfigurationError);
   });
 });

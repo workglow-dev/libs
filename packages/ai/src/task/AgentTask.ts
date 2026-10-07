@@ -201,6 +201,13 @@ export const AgentInputSchema = {
       minimum: 1,
       "x-ui-group": "Configuration",
     },
+    announceTimeLeft: {
+      type: "boolean",
+      title: "Announce Time Left",
+      description:
+        "Append the time left before maxDurationMs to the last tool result of every round, so the model can plan the work it has time for. Needs maxDurationMs",
+      "x-ui-group": "Configuration",
+    },
     approval: {
       type: "string",
       title: "Approval",
@@ -297,6 +304,7 @@ export type AgentTaskInput = {
   readonly maxInputTokens?: number | undefined;
   readonly maxCostUsd?: number | undefined;
   readonly maxDurationMs?: number | undefined;
+  readonly announceTimeLeft?: boolean | undefined;
   readonly approval?: AgentApprovalMode | undefined;
 };
 
@@ -385,6 +393,13 @@ function toolResult(
     content: body,
     is_error: isError ? true : undefined,
   };
+}
+
+/** The time a turn has left, as the model is shown it: whole seconds, rounded down. */
+function timeLeftNotice(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  return `\n\n[Time left: ${minutes > 0 ? `${minutes}m ` : ""}${total % 60}s]`;
 }
 
 interface RunCallOptions {
@@ -552,6 +567,11 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       // caller set it precisely so that something would.
       throw new TaskConfigurationError(
         "AgentTask: maxCostUsd needs a price card for the model, and none was found"
+      );
+    }
+    if (input.announceTimeLeft && input.maxDurationMs === undefined) {
+      throw new TaskConfigurationError(
+        "AgentTask: announceTimeLeft needs maxDurationMs, the budget it announces"
       );
     }
 
@@ -727,6 +747,16 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
         submitToolName: submitTool?.name,
       })) {
         yield event;
+      }
+      // On the last result rather than in a message of its own: a tool message
+      // holds only tool results, and the tail of the transcript is the one place
+      // a changing line costs no prompt cache.
+      if (input.announceTimeLeft && deadline !== undefined && results.length > 0) {
+        const last = results[results.length - 1]!;
+        results[results.length - 1] = {
+          ...last,
+          content: [...last.content, { type: "text", text: timeLeftNotice(deadline - Date.now()) }],
+        };
       }
       messages.push({ role: "tool", content: results });
       record(toolRecords);
