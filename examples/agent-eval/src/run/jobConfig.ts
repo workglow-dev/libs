@@ -101,6 +101,19 @@ export interface HarborJobOptions {
 }
 
 /**
+ * Exceptions that mean the infrastructure failed before or around the agent:
+ * a container that would not build or start (Docker reports those as
+ * `RuntimeError`), or an install that timed out. Retrying them is free of
+ * bias. Nothing the agent itself did is listed — retrying an agent failure
+ * would turn one attempt into best-of-n for whichever arm failed more.
+ */
+export const INFRASTRUCTURE_RETRY_EXCEPTIONS = [
+  "RuntimeError",
+  "EnvironmentStartTimeoutError",
+  "AgentSetupTimeoutError",
+] as const;
+
+/**
  * One Harbor job holding every arm, so all of them run the same task list
  * under the same environment settings; the comparison then pairs trials by
  * task. The workglow arm is loaded by import path, which needs this
@@ -112,6 +125,7 @@ export function buildHarborJob(options: HarborJobOptions): Record<string, unknow
     jobs_dir: options.jobsDir,
     n_attempts: options.attempts,
     n_concurrent_trials: options.concurrency,
+    retry: { max_retries: 2, include_exceptions: [...INFRASTRUCTURE_RETRY_EXCEPTIONS] },
     ...(options.timeoutMultiplier === undefined
       ? {}
       : { timeout_multiplier: options.timeoutMultiplier }),

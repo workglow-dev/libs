@@ -55,6 +55,15 @@ describe("buildHarborJob", () => {
       timeoutMultiplier: undefined,
     });
     expect(job).toMatchObject({ job_name: "j", n_attempts: 3, n_concurrent_trials: 2 });
+    // Only infrastructure failures are retried; an agent's own failure never is.
+    expect(job.retry).toEqual({
+      max_retries: 2,
+      include_exceptions: [
+        "RuntimeError",
+        "EnvironmentStartTimeoutError",
+        "AgentSetupTimeoutError",
+      ],
+    });
     const agents = job.agents as Array<Record<string, unknown>>;
     expect(agents[0]).toMatchObject({
       import_path: "workglow_agent:WorkglowAgent",
