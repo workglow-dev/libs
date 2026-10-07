@@ -155,6 +155,7 @@ export async function runCodingAgent(run: CodingAgentRun): Promise<CodingAgentRe
         date: new Date().toISOString().slice(0, 10),
         concise: settings.concise,
         images: run.tools.images,
+        commands: undefined,
       }) + (settings.systemPromptAppend ? `\n\n${settings.systemPromptAppend}` : ""),
     tools: createCodingTools(run.tools),
     maxRounds: settings.maxRounds,

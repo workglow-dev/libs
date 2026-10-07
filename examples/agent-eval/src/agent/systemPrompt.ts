@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { CommandInventory } from "./environment";
+
 export interface SystemPromptEnvironment {
   readonly cwd: string;
   readonly platform: string;
@@ -12,6 +14,8 @@ export interface SystemPromptEnvironment {
   readonly concise: boolean;
   /** Whether `read` shows images, which the tools line then says. */
   readonly images: boolean;
+  /** Commands probed on PATH; undefined leaves the line out. */
+  readonly commands: CommandInventory | undefined;
 }
 
 /**
@@ -29,7 +33,7 @@ export function codingSystemPrompt(env: SystemPromptEnvironment): string {
     env.images
       ? "- read: read file contents (use offset/limit to page through long files); shows you images (png, jpg, gif, webp)"
       : "- read: read file contents (use offset/limit to page through long files)",
-    "- bash: run shell commands (ls, rg, find, tests, builds, package managers)",
+    "- bash: run shell commands (ls, grep, find, tests, builds, package managers)",
     "- edit: replace exact text in a file; several disjoint edits per call",
     "- write: create a file or overwrite it completely",
     "</tools>",
@@ -52,6 +56,24 @@ export function codingSystemPrompt(env: SystemPromptEnvironment): string {
     `cwd: ${env.cwd}`,
     `platform: ${env.platform}`,
     `date: ${env.date}`,
+    ...(env.commands === undefined
+      ? []
+      : [
+          `commands on PATH: ${env.commands.found.join(", ") || "(none of the usual ones)"}`,
+          ...(env.commands.missing.length > 0
+            ? [`not installed: ${env.commands.missing.join(", ")}`]
+            : []),
+        ]),
     "</environment>",
   ].join("\n");
 }
+
+/**
+ * Sent once when the model first tries to finish. The tests are often hidden,
+ * and the requirement a correct-looking answer misses is an exact string the
+ * instruction named (an error message, an output format, a file name).
+ */
+export const REVIEW_PROMPT =
+  "Before you finish, reread the task instructions. Check each exact requirement they state " +
+  "(names, messages, output formats, file paths, values) against what you built, and fix " +
+  "any mismatch. Then reply with your summary.";

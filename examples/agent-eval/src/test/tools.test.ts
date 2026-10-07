@@ -5,10 +5,19 @@
  */
 
 import { ToolCallError, ToolResultContent } from "@workglow/ai";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { probeCommands } from "../agent/environment";
 import { commandTimeoutSec, createBashTool } from "../agent/tools/bash";
 import type { CodingToolContext } from "../agent/tools/context";
 import { applyEdits, createEditTool, normalizeLine } from "../agent/tools/edit";
@@ -295,8 +304,22 @@ describe("imageMimeType", () => {
   });
 });
 
+describe("probeCommands", () => {
+  it("finds executables on PATH and lists the rest as missing", () => {
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "python3"), "#!/bin/sh\n");
+    chmodSync(join(bin, "python3"), 0o755);
+    writeFileSync(join(bin, "rg"), "not executable");
+    expect(probeCommands(["python3", "python", "rg"], bin)).toEqual({
+      found: ["python3"],
+      missing: ["python", "rg"],
+    });
+  });
+});
+
 describe("codingSystemPrompt", () => {
-  const env = { cwd: "/app", platform: "linux x64", date: "2026-10-07" };
+  const env = { cwd: "/app", platform: "linux x64", date: "2026-10-07", commands: undefined };
   it("asks for concision only when switched on", () => {
     expect(codingSystemPrompt({ ...env, concise: true, images: true })).toContain("Be concise");
     expect(codingSystemPrompt({ ...env, concise: false, images: true })).not.toContain(
@@ -308,5 +331,15 @@ describe("codingSystemPrompt", () => {
       "shows you images"
     );
     expect(codingSystemPrompt({ ...env, concise: true, images: false })).not.toContain("images");
+  });
+  it("names the commands it found and the ones that are missing", () => {
+    const prompt = codingSystemPrompt({
+      ...env,
+      concise: true,
+      images: true,
+      commands: { found: ["python3", "git"], missing: ["python", "rg"] },
+    });
+    expect(prompt).toContain("commands on PATH: python3, git");
+    expect(prompt).toContain("not installed: python, rg");
   });
 });
