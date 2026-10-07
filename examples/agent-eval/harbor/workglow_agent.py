@@ -30,6 +30,8 @@ from harbor.agents.model_connection import ModelConnectionSpec
 from harbor.agents.options import Cli, InstalledAgentOptions
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
+from harbor.models.task.task import Task
+from harbor.models.trial.config import TrialConfig
 
 _REMOTE_DIR = PurePosixPath("/installed-agent")
 _REMOTE_BUNDLE = _REMOTE_DIR / "workglow-agent.mjs"
@@ -90,6 +92,22 @@ class WorkglowOptions(InstalledAgentOptions):
         default=None,
         description="on|off: send the model's reasoning back on later rounds (default on).",
     )
+    max_duration_sec: Annotated[int | None, Cli("--max-duration-sec")] = Field(
+        default=None,
+        ge=1,
+        description="Wall-clock budget; set from the trial's time limit unless given.",
+    )
+    time_budget: str | None = Field(
+        default=None,
+        description="on|off: give the agent the trial's time limit, less a reserve (default on).",
+    )
+    time_left: Annotated[str | None, Cli("--time-left")] = Field(
+        default=None, description="on|off: show the model its remaining time (default on)."
+    )
+    review: Annotated[str | None, Cli("--review")] = Field(
+        default=None,
+        description="on|off: one check against the instructions before finishing (default on).",
+    )
     bundle_path: str | None = Field(
         default=None,
         description="Local path of workglow-agent.mjs (default: ../dist, or $WORKGLOW_AGENT_BUNDLE).",
@@ -114,6 +132,42 @@ class WorkglowAgent(BaseInstalledAgent):
     @override
     def get_version_command(self) -> str | None:
         return f"{_NODE_PREFIX}node {shlex.quote(_REMOTE_BUNDLE.as_posix())} --version"
+
+    def _agent_timeout_sec(self) -> float | None:
+        """The time Harbor gives run(), resolved as the trial resolves it.
+
+        Harbor hands an agent no deadline: it cancels run() when the time is
+        up. The trial's config and task sit next to the logs directory, so the
+        agent can learn its limit and stop cleanly, with its summary written,
+        before that.
+        """
+        try:
+            config = TrialConfig.model_validate_json(
+                (self.logs_dir.parent / "config.json").read_text()
+            )
+            base = config.agent.override_timeout_sec or Task(
+                config.task.get_local_path()
+            ).config.agent.timeout_sec
+        except (OSError, ValueError):
+            return None
+        if base is None:
+            return None
+        seconds = base * (config.agent_timeout_multiplier or config.timeout_multiplier)
+        if config.agent.max_timeout_sec is not None:
+            seconds = min(seconds, config.agent.max_timeout_sec)
+        return seconds
+
+    def _max_duration_sec(self) -> int | None:
+        if self.options.max_duration_sec is not None:
+            return self.options.max_duration_sec
+        if self.options.time_budget == "off":
+            return None
+        limit = self._agent_timeout_sec()
+        if limit is None:
+            return None
+        # The loop stops only between rounds; the reserve covers the round in
+        # flight and writing the summary.
+        return max(1, int(limit - min(120.0, max(30.0, limit * 0.1))))
 
     def _bundle(self) -> Path:
         configured = self.options.bundle_path or os.environ.get("WORKGLOW_AGENT_BUNDLE")
@@ -180,6 +234,10 @@ class WorkglowAgent(BaseInstalledAgent):
 
         logs_dir = self.environment_logs_dir.as_posix()
         flags = self.build_cli_flags()
+        if self.options.max_duration_sec is None:
+            budget = self._max_duration_sec()
+            if budget is not None:
+                flags = f"{flags} --max-duration-sec {budget}".strip()
         await self.exec_as_agent(
             environment,
             command=(

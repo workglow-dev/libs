@@ -113,6 +113,8 @@ describe("runCodingAgent against the mock model", () => {
         maxRoundRetries: undefined,
         systemPromptAppend: undefined,
         concise: true,
+        announceTimeLeft: false,
+        reviewPrompt: undefined,
       },
       signal: new AbortController().signal,
       onEvent: (event) => events.push(event),
@@ -170,10 +172,49 @@ describe("runCodingAgent against the mock model", () => {
         maxRoundRetries: undefined,
         systemPromptAppend: undefined,
         concise: true,
+        announceTimeLeft: false,
+        reviewPrompt: undefined,
       },
       signal: new AbortController().signal,
     });
     expect(result.summary.outcome).toBe("max-rounds");
     expect(result.summary.rounds).toBe(2);
+  });
+
+  it("asks for one review before finishing when given a review prompt", async () => {
+    const result = await runCodingAgent({
+      instruction: "Create hello.txt",
+      modelId: "anthropic/claude-sonnet-5-5",
+      model: resolveAgentModel("anthropic/claude-sonnet-5-5"),
+      tools: {
+        cwd: work,
+        spillDir: join(work, ".spill"),
+        defaultCommandTimeoutSec: 30,
+        images: true,
+      },
+      settings: {
+        maxRounds: 10,
+        maxToolResultChars: 60_000,
+        maxHistoryChars: undefined,
+        toolConcurrency: undefined,
+        maxTokens: undefined,
+        temperature: undefined,
+        maxDurationMs: undefined,
+        roundTimeoutMs: undefined,
+        maxRoundRetries: undefined,
+        systemPromptAppend: undefined,
+        concise: true,
+        announceTimeLeft: false,
+        reviewPrompt: "Check your work.",
+      },
+      signal: new AbortController().signal,
+    });
+    expect(result.summary.outcome).toBe("answered");
+    expect(result.summary.rounds).toBe(5);
+    expect(
+      result.messages.filter(
+        (m) => m.role === "user" && JSON.stringify(m.content).includes("Check your work.")
+      )
+    ).toHaveLength(1);
   });
 });

@@ -112,8 +112,20 @@ so the before and after runs are the same experiment.
 The Workglow kwargs (`--arm workglow:k=v`) are: `effort`, `max_rounds`,
 `max_tool_result_chars`, `max_history_chars`, `tool_concurrency`, `max_tokens`,
 `temperature`, `round_timeout_sec`, `max_round_retries`, `command_timeout_sec`,
-`append_system_prompt`. opencode takes `opencode_config` and `variant`. pi takes `thinking`
-and `max_turns`.
+`append_system_prompt`, `concise`, `images`, `replay_reasoning`, `time_budget`, `time_left`,
+`review`, `max_duration_sec`. opencode takes `opencode_config` and `variant`. pi takes
+`thinking` and `max_turns`.
+
+- `time_budget` (default on): the adapter reads the trial's agent time limit and passes it,
+  less a reserve of 10% (30 s to 120 s), as `--max-duration-sec`. The loop then ends cleanly with
+  `stopReason: "budget"` and writes its summary before Harbor would cancel it. Harbor gives the
+  opencode and pi arms no such signal; this is a harness capability, not a benchmark setting.
+- `time_left` (default on): the model sees `[Time left: 7m 12s]` after each round's tool results.
+- `review` (default on): the first time the model tries to finish, it is asked once to check its
+  work against the instruction's exact requirements.
+- `max_duration_sec`: an explicit budget, overriding `time_budget`.
+
+`bash` now defaults to a 120 s timeout (was 600 s), and never runs past the deadline.
 
 ## Reading the report
 

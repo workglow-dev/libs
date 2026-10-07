@@ -26,6 +26,7 @@ import {
   DEFAULT_BENCH_MAX_TOOL_RESULT_CHARS,
   runCodingAgent,
 } from "../agent/runCodingAgent";
+import { REVIEW_PROMPT } from "../agent/systemPrompt";
 
 const VERSION = "0.1.0";
 
@@ -104,6 +105,13 @@ const program = new Command()
     onOff,
     true
   )
+  .option(
+    "--time-left <on|off>",
+    "show the model its remaining time each round (needs --max-duration-sec)",
+    onOff,
+    true
+  )
+  .option("--review <on|off>", "ask the model to check its work once before finishing", onOff, true)
   .action(async (words: string[], opts) => {
     const instruction = opts.instructionFile
       ? readFileSync(opts.instructionFile, "utf8")
@@ -153,6 +161,8 @@ const program = new Command()
         maxRoundRetries: opts.maxRoundRetries,
         systemPromptAppend: opts.appendSystemPrompt,
         concise: opts.concise,
+        announceTimeLeft: opts.timeLeft,
+        reviewPrompt: opts.review ? REVIEW_PROMPT : undefined,
       },
       signal: controller.signal,
       onEvent: (event) => {

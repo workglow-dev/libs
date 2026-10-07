@@ -14,6 +14,7 @@ import type {
 import { AGENT_APPROVAL_OPT_OUT, AgentTask } from "@workglow/ai";
 import type { StreamEvent } from "@workglow/task-graph";
 import { globalServiceRegistry, ServiceRegistry } from "@workglow/util";
+import { PROBED_COMMANDS, probeCommands } from "./environment";
 import type { AgentRunOutcome, AgentRunSummary } from "./runSummary";
 import { historyChars, summarizeUsage, tallyTools, totalCost } from "./runSummary";
 import { codingSystemPrompt } from "./systemPrompt";
@@ -60,6 +61,10 @@ export interface CodingAgentSettings {
   readonly systemPromptAppend: string | undefined;
   /** Ask for terse replies between tool calls. */
   readonly concise: boolean;
+  /** Show the model its remaining time each round; needs maxDurationMs. */
+  readonly announceTimeLeft: boolean;
+  /** Sent once when the model first tries to finish; undefined sends none. */
+  readonly reviewPrompt: string | undefined;
 }
 
 export interface CodingAgentRun {
@@ -155,7 +160,7 @@ export async function runCodingAgent(run: CodingAgentRun): Promise<CodingAgentRe
         date: new Date().toISOString().slice(0, 10),
         concise: settings.concise,
         images: run.tools.images,
-        commands: undefined,
+        commands: probeCommands(PROBED_COMMANDS, process.env.PATH ?? ""),
       }) + (settings.systemPromptAppend ? `\n\n${settings.systemPromptAppend}` : ""),
     tools: createCodingTools(run.tools),
     maxRounds: settings.maxRounds,
@@ -170,6 +175,10 @@ export async function runCodingAgent(run: CodingAgentRun): Promise<CodingAgentRe
     ...(settings.maxTokens === undefined ? {} : { maxTokens: settings.maxTokens }),
     ...(settings.temperature === undefined ? {} : { temperature: settings.temperature }),
     ...(settings.maxDurationMs === undefined ? {} : { maxDurationMs: settings.maxDurationMs }),
+    ...(settings.announceTimeLeft && settings.maxDurationMs !== undefined
+      ? { announceTimeLeft: true }
+      : {}),
+    ...(settings.reviewPrompt === undefined ? {} : { reviewPrompt: settings.reviewPrompt }),
     ...(settings.roundTimeoutMs === undefined ? {} : { roundTimeoutMs: settings.roundTimeoutMs }),
     ...(settings.maxRoundRetries === undefined
       ? {}
