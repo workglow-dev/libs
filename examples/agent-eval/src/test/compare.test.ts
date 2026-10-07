@@ -222,4 +222,34 @@ describe("loadTrials", () => {
     });
     expect(record!.workglow?.rounds).toBe(3);
   });
+
+  it("adds opencode's reasoning tokens to its output, as the other harnesses report them", () => {
+    dir = mkdtempSync(join(tmpdir(), "agent-eval-jobs-"));
+    const trialDir = join(dir, "job-2", "regex-log__xyz");
+    mkdirSync(join(trialDir, "agent"), { recursive: true });
+    writeFileSync(
+      join(trialDir, "result.json"),
+      JSON.stringify({
+        trial_name: "regex-log__xyz",
+        task_name: "regex-log",
+        agent_info: { name: "opencode", model_info: { name: "m", provider: "deepseek" } },
+        agent_result: { n_input_tokens: 100, n_output_tokens: 40, cost_usd: 0.01 },
+        verifier_result: { rewards: { reward: 1 } },
+        agent_execution: {
+          started_at: "2026-10-07T00:00:00Z",
+          finished_at: "2026-10-07T00:00:05Z",
+        },
+      })
+    );
+    writeFileSync(
+      join(trialDir, "agent", "opencode.txt"),
+      [
+        JSON.stringify({ type: "step_start" }),
+        JSON.stringify({ type: "step_finish", part: { tokens: { output: 10, reasoning: 25 } } }),
+        "not json",
+        JSON.stringify({ type: "step_finish", part: { tokens: { output: 30, reasoning: 5 } } }),
+      ].join("\n")
+    );
+    expect(loadTrials([dir])[0]!.outputTokens).toBe(70);
+  });
 });

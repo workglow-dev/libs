@@ -259,6 +259,34 @@ function findTrialResults(path: string, depth = 0): string[] {
   return found;
 }
 
+/**
+ * Reasoning tokens opencode reported for a trial, from its own step records.
+ *
+ * Harbor's opencode adapter counts `tokens.output` alone, while opencode
+ * reports reasoning beside it as `tokens.reasoning`. Providers bill reasoning
+ * as output, and the other two arms' counts already include it. Without this,
+ * opencode's output column reads a third of what it generated. Its cost is
+ * unaffected: opencode prices both.
+ */
+export function opencodeReasoningTokens(trialDir: string): number | undefined {
+  const path = join(trialDir, "agent", "opencode.txt");
+  if (!existsSync(path)) return undefined;
+  let total = 0;
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (!line.includes('"step_finish"')) continue;
+    try {
+      const event = JSON.parse(line) as {
+        type?: string;
+        part?: { tokens?: { reasoning?: number } };
+      };
+      if (event.type === "step_finish") total += event.part?.tokens?.reasoning ?? 0;
+    } catch {
+      // A line that is not an event.
+    }
+  }
+  return total;
+}
+
 export function loadTrials(paths: readonly string[]): TrialRecord[] {
   const trials: TrialRecord[] = [];
   for (const path of paths) {
@@ -270,7 +298,14 @@ export function loadTrials(paths: readonly string[]): TrialRecord[] {
         continue;
       }
       const record = parseTrial(json, basename(dirname(dirname(file))));
-      if (record) trials.push(record);
+      if (!record) continue;
+      const reasoning =
+        record.agent === "opencode" && record.outputTokens !== undefined
+          ? opencodeReasoningTokens(dirname(file))
+          : undefined;
+      trials.push(
+        reasoning ? { ...record, outputTokens: record.outputTokens! + reasoning } : record
+      );
     }
   }
   return labelArms(trials);
