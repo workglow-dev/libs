@@ -90,6 +90,11 @@ drawn the same way as the other two.
 For any other registry dataset, use `-d name@version` (repeatable). To narrow a run, use
 `--tasks 'glob,glob'` and `-l N`.
 
+To run task folders on disk instead — a downloaded dataset you have patched, or tasks of your
+own — use `--tasks-dir <dir>` (repeatable). A host behind a TLS-intercepting proxy needs this:
+the registry tasks fetch over HTTPS while their images build, before any compose overlay can
+put the proxy's CA in the container, so the CA has to go into each task's Dockerfile.
+
 ### Ablations: testing a change to the loop
 
 An arm is a harness plus agent kwargs. Extra arms run in the same job, on the same tasks:

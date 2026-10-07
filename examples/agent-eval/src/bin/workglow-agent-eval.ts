@@ -7,6 +7,7 @@
  */
 
 import { existsSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { Command, Option } from "commander";
 import { loadTrials } from "../compare/harborJobs";
 import { buildReport, renderMarkdown } from "../compare/report";
@@ -14,6 +15,7 @@ import { startAnthropicMock } from "../mock/anthropicMock";
 import type { ArmSpec, Effort } from "../run/jobConfig";
 import { buildHarborJob, EFFORTS, HARNESSES, parseArm } from "../run/jobConfig";
 import { runHarbor } from "../run/runHarbor";
+import type { JobDataset } from "../run/suites";
 import { getSuite, SUITES } from "../run/suites";
 
 function positiveInteger(value: string): number {
@@ -87,6 +89,11 @@ program
     collect
   )
   .option(
+    "--tasks-dir <dir>",
+    "run the Harbor task folders in this directory instead of a suite (repeatable)",
+    collect
+  )
+  .option(
     "-a, --agents <list>",
     `comma-separated harnesses: ${HARNESSES.join(",")}`,
     HARNESSES.join(",")
@@ -122,14 +129,20 @@ program
   .option("--harbor <bin>", "the harbor executable", "harbor")
   .option("--dry-run", "print the Harbor job config and exit")
   .action(async (opts) => {
-    const suite = opts.dataset ? undefined : getSuite(opts.suite);
-    const suiteDatasets = suite
-      ? suite.datasets
-      : (opts.dataset as string[]).map((spec) => {
-          const at = spec.lastIndexOf("@");
-          if (at <= 0) throw new Error(`dataset must be name@version, got "${spec}"`);
-          return { name: spec.slice(0, at), version: spec.slice(at + 1) };
-        });
+    const custom = opts.dataset !== undefined || opts.tasksDir !== undefined;
+    const suite = custom ? undefined : getSuite(opts.suite);
+    const suiteDatasets: JobDataset[] = suite
+      ? [...suite.datasets]
+      : [
+          ...((opts.dataset as string[] | undefined) ?? []).map((spec) => {
+            const at = spec.lastIndexOf("@");
+            if (at <= 0) throw new Error(`dataset must be name@version, got "${spec}"`);
+            return { name: spec.slice(0, at), version: spec.slice(at + 1) };
+          }),
+          ...((opts.tasksDir as string[] | undefined) ?? []).map((dir) => ({
+            path: resolve(dir),
+          })),
+        ];
     const arms: ArmSpec[] = [
       ...String(opts.agents)
         .split(",")

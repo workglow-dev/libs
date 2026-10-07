@@ -14,6 +14,19 @@ export interface SuiteDataset {
   readonly n_tasks?: number | undefined;
 }
 
+/**
+ * A directory of Harbor task folders on disk — a custom benchmark, or a local
+ * copy of a registry dataset prepared for an environment the registry copy
+ * cannot build in.
+ */
+export interface LocalDataset {
+  readonly path: string;
+  readonly task_names?: readonly string[] | undefined;
+  readonly n_tasks?: number | undefined;
+}
+
+export type JobDataset = SuiteDataset | LocalDataset;
+
 export interface Suite {
   readonly description: string;
   readonly datasets: readonly SuiteDataset[];

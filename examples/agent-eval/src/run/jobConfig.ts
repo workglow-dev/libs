@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { SuiteDataset } from "./suites";
+import type { JobDataset } from "./suites";
 
 export const HARNESSES = ["workglow", "opencode", "pi"] as const;
 export type Harness = (typeof HARNESSES)[number];
@@ -93,7 +93,7 @@ export interface HarborJobOptions {
   readonly jobsDir: string;
   readonly model: string;
   readonly arms: readonly ArmSpec[];
-  readonly datasets: readonly SuiteDataset[];
+  readonly datasets: readonly JobDataset[];
   readonly parity: ParityOptions;
   readonly attempts: number;
   readonly concurrency: number;
