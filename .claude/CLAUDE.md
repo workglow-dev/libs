@@ -257,6 +257,10 @@ A tool is handed the turn's `deadline` on its `ToolExecuteContext` (undefined wi
 it there. `announceTimeLeft` appends the time left to each round's last tool result — the model
 cannot budget time it is never told about, and a long command started in the last minutes is how
 a turn runs past its budget.
+`reviewPrompt` is sent once, the first time the model replies without a tool call, so it checks
+its answer against what it was asked before the turn ends; the model may go back to its tools.
+It is skipped with `outputSchema` (that is `checkSubmission`'s job) and when no round, budget or
+time is left. The turn's `text` then carries both replies.
 
 **The loop and the model call can live in different places.** A host whose tools are closures
 (they draw on a screen, ask a person, read state only that process holds) but whose model is

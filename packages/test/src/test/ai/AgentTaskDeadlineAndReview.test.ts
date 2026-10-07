@@ -147,7 +147,7 @@ describe("AgentTask announceTimeLeft", () => {
       { registry }
     );
     const sent = (seen[1]!.messages as ChatMessage[]).find((m) => m.role === "tool")!;
-    const [first, last] = sent.content as Array<{
+    const [first, last] = sent.content as unknown as Array<{
       content: Array<{ type: string; text?: string }>;
     }>;
     expect(first!.content.map((block) => block.text)).toEqual(["looked"]);
@@ -174,5 +174,70 @@ describe("AgentTask announceTimeLeft", () => {
         { registry }
       )
     ).rejects.toBeInstanceOf(TaskConfigurationError);
+  });
+});
+
+describe("AgentTask reviewPrompt", () => {
+  let registry: ServiceRegistry;
+
+  beforeEach(() => {
+    setAiProviderRegistry(new AiProviderRegistry());
+    getAiProviderRegistry().setDefaultStrategy(new DirectExecutionStrategy());
+    registry = new ServiceRegistry(new Container());
+  });
+
+  afterEach(() => {
+    getAiProviderRegistry().unregisterProvider(PROVIDER);
+  });
+
+  const reviewText = (messages: readonly ChatMessage[]): number =>
+    messages.filter(
+      (m) => m.role === "user" && JSON.stringify(m.content).includes("Check your work.")
+    ).length;
+
+  it("asks once for a review when the model first tries to finish", async () => {
+    const seen = script([{ text: "done" }, { text: "checked" }]);
+    const output = await new AgentTask().run(
+      { model: MODEL, prompt: "?", tools: [], reviewPrompt: "Check your work." },
+      { registry }
+    );
+    expect(seen).toHaveLength(2);
+    expect(reviewText(output.messages)).toBe(1);
+    expect(output.stopReason).toBe("answered");
+  });
+
+  it("lets the model go back to its tools after the review", async () => {
+    let looked = 0;
+    const seen = script([
+      { text: "done" },
+      { calls: [{ id: "c1", name: "look", input: {} }] },
+      { text: "fixed" },
+    ]);
+    const output = await new AgentTask().run(
+      {
+        model: MODEL,
+        prompt: "?",
+        tools: [
+          tool("look", async () => {
+            looked++;
+            return "looked";
+          }),
+        ],
+        reviewPrompt: "Check your work.",
+      },
+      { registry }
+    );
+    expect(seen).toHaveLength(3);
+    expect(looked).toBe(1);
+    expect(reviewText(output.messages)).toBe(1);
+  });
+
+  it("sends no review when no round is left to act on it", async () => {
+    const seen = script([{ text: "done" }]);
+    await new AgentTask().run(
+      { model: MODEL, prompt: "?", tools: [], reviewPrompt: "Check your work.", maxRounds: 1 },
+      { registry }
+    );
+    expect(seen).toHaveLength(1);
   });
 });

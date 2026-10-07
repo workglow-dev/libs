@@ -208,6 +208,13 @@ export const AgentInputSchema = {
         "Append the time left before maxDurationMs to the last tool result of every round, so the model can plan the work it has time for. Needs maxDurationMs",
       "x-ui-group": "Configuration",
     },
+    reviewPrompt: {
+      type: "string",
+      title: "Review Prompt",
+      description:
+        "Sent once, as a user message, the first time the model replies without calling a tool, so it checks its work before the turn ends. Not sent on a turn with outputSchema, or when no round, budget or time is left to act on it",
+      "x-ui-group": "Configuration",
+    },
     approval: {
       type: "string",
       title: "Approval",
@@ -305,6 +312,7 @@ export type AgentTaskInput = {
   readonly maxCostUsd?: number | undefined;
   readonly maxDurationMs?: number | undefined;
   readonly announceTimeLeft?: boolean | undefined;
+  readonly reviewPrompt?: string | undefined;
   readonly approval?: AgentApprovalMode | undefined;
 };
 
@@ -587,6 +595,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     // counts as spending the cap: the turn stops after that round.
     let unmeteredRound = false;
     let reminders = 0;
+    let reviewed = false;
 
     const messages: ChatMessage[] = [...(input.messages ?? []), promptToUserMessage(input.prompt)];
     turnSoFar = () => ({ messages, steps });
@@ -704,6 +713,21 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       }
       if (calls.length === 0) {
         record([]);
+        // A turn with an outputSchema has checkSubmission for this, and a review
+        // sent with no round, budget or time left could never be acted on.
+        if (
+          input.reviewPrompt &&
+          !reviewed &&
+          submitTool === undefined &&
+          round + 1 < maxRounds &&
+          !overBudget() &&
+          (deadline === undefined || Date.now() < deadline)
+        ) {
+          reviewed = true;
+          messages.push({ role: "user", content: [{ type: "text", text: input.reviewPrompt }] });
+          yield transcript();
+          continue;
+        }
         if (submitTool !== undefined && reminders < MAX_SUBMIT_REMINDERS && !overBudget()) {
           reminders++;
           messages.push({ role: "user", content: [{ type: "text", text: SUBMIT_REMINDER }] });
