@@ -77,6 +77,12 @@ export const OpenAiModelSchema = {
             "Override whether the model accepts a pinned temperature with reasoning effort 'none'. Absent means 'decide from the model id'. A wrong `true` is an HTTP 400.",
           "x-ui-hidden": true,
         },
+        replay_reasoning: {
+          type: "boolean",
+          description:
+            "Hand the model its own reasoning back on later rounds (default true); false is the ablation switch.",
+          "x-ui-hidden": true,
+        },
       },
       required: ["model_name"],
       additionalProperties: false,

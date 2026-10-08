@@ -55,6 +55,8 @@ export interface OpenAICompatMessage {
   tool_call_id?: string;
   /** An assistant turn's reasoning, under the name the provider reads it back by. */
   reasoning_content?: string;
+  /** The provider's own output items for this turn, for the Responses converter to replay. */
+  native_items?: unknown[];
 }
 
 export interface OpenAIMessageOptions {
@@ -72,6 +74,11 @@ export interface OpenAIMessageOptions {
    * it they stay inline in the tool message, for APIs that accept that.
    */
   readonly toolImagesInUserMessage?: boolean | undefined;
+  /**
+   * Attach an assistant turn's native items (`native_items`) when its reasoning
+   * block was produced by this provider, for the Responses converter to replay.
+   */
+  readonly nativeTurnProvider?: string | undefined;
 }
 
 /**
@@ -168,6 +175,22 @@ export function toOpenAIMessages(
           .filter((b): b is Extract<ContentBlock, { type: "reasoning" }> => b.type === "reasoning")
           .map((b) => b.text)
           .join("");
+      }
+      if (options.nativeTurnProvider !== undefined) {
+        const own = msg.content.find(
+          (b): b is Extract<ContentBlock, { type: "reasoning" }> =>
+            b.type === "reasoning" &&
+            b.provider === options.nativeTurnProvider &&
+            b.payload !== undefined
+        );
+        if (own) {
+          try {
+            const items = JSON.parse(own.payload!) as unknown;
+            if (Array.isArray(items)) entry.native_items = items;
+          } catch {
+            // A payload this provider cannot read is not replayed; the turn is rebuilt.
+          }
+        }
       }
       messages.push(entry);
     } else if (msg.role === "tool") {

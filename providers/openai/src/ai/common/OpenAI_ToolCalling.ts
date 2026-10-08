@@ -48,6 +48,9 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
   // prefix's so the warmed tool segment (and its prompt_cache_key) is shared.
   const merged = mergeOpenAICheckpointPrefix(sessionContext, input);
   const toolDefinitions = merged?.tools ?? input.tools;
+  const replay =
+    (model?.provider_config as { replay_reasoning?: boolean } | undefined)?.replay_reasoning !==
+    false;
   const tools = buildResponsesTools(toolDefinitions);
   const { input: responsesInput, instructions } = buildResponsesInput({
     messages: toOpenAIMessages(
@@ -58,7 +61,8 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
             systemPrompt: merged.systemPrompt,
             prompt: "",
           } as ToolCallingTaskInput)
-        : input
+        : input,
+      replay ? { nativeTurnProvider: "openai" } : {}
     ),
   });
   const toolChoice = mapResponsesToolChoice(input.toolChoice);
@@ -73,6 +77,12 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
   if (input.maxTokens !== undefined) params.max_output_tokens = input.maxTokens;
   if (input.temperature !== undefined) params.temperature = input.temperature;
   finalizeResponsesRequest(model, params);
+  // A reasoning model starts its thinking over every round unless it is handed
+  // its encrypted reasoning back; the items come back on `nativeTurn`.
+  const reasoning = params.reasoning as { effort?: string } | undefined;
+  if (replay && reasoning !== undefined && reasoning.effort !== "none") {
+    params.include = ["reasoning.encrypted_content"];
+  }
 
   const promptText = promptTextForResponsesUsageEstimate(params);
   createEstimatedOutputUsageReporter(emit).onPrompt(promptText);
@@ -94,7 +104,7 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
       }
       emit(event);
     },
-    { promptText }
+    { promptText, nativeTurnProvider: replay ? "openai" : undefined }
   );
   emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput, usage });
 };

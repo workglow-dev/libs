@@ -43,6 +43,8 @@ export interface OpenAIResponsesMessageSource {
     readonly function?: { readonly name?: string; readonly arguments?: string };
   }[];
   readonly tool_call_id?: string;
+  /** The provider's own output items for this assistant turn, replayed verbatim. */
+  readonly native_items?: readonly unknown[] | undefined;
 }
 
 /** A Responses request `input` item — a role message or a tool item. */
@@ -143,6 +145,14 @@ export function buildResponsesInput(args: {
     }
 
     if (message.role === "assistant") {
+      // The provider's own turn, replayed as it produced it: its reasoning only
+      // continues from items it can decrypt, and only while the calls still
+      // match — a host that renamed or dropped a call gets the rebuilt turn.
+      const native = message.native_items;
+      if (native && sameCallIds(native, message.tool_calls ?? [])) {
+        items.push(...(native as OpenAIResponsesInputItem[]));
+        continue;
+      }
       // Preserve any assistant text, then each tool call as a `function_call`
       // item (Responses represents tool calls as items, not message fields).
       const text = contentToString(message.content);
@@ -169,6 +179,20 @@ export function buildResponsesInput(args: {
     input: items,
     instructions: instructionParts.length > 0 ? instructionParts.join("\n\n") : undefined,
   };
+}
+
+function sameCallIds(
+  native: readonly unknown[],
+  calls: readonly { readonly id?: string }[]
+): boolean {
+  const nativeIds = native
+    .filter(
+      (item): item is { type: string; call_id: string } =>
+        (item as { type?: string } | null)?.type === "function_call"
+    )
+    .map((item) => item.call_id);
+  const ids = calls.map((call) => call.id ?? "");
+  return nativeIds.length === ids.length && nativeIds.every((id, i) => id === ids[i]);
 }
 
 export function buildResponsesTools(tools: readonly ToolDefinition[]): OpenAIResponsesTool[] {
@@ -250,7 +274,10 @@ interface ResponsesToolCallEntry {
 export async function accumulateOpenAIResponsesStream<Output = Record<string, any>>(
   stream: AsyncIterable<any>,
   emit: (event: StreamEvent<Output>) => void,
-  options: { readonly promptText?: string | undefined } = {}
+  options: {
+    readonly promptText?: string | undefined;
+    readonly nativeTurnProvider?: string | undefined;
+  } = {}
 ): Promise<Usage | undefined> {
   // Keyed by the output item's stable id (`item.id` on `output_item.{added,done}`,
   // `item_id` on `function_call_arguments.delta`). Falls back to `output_index`
@@ -258,6 +285,8 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
   // concurrent function calls that share (or lack) the index onto one slot,
   // silently dropping every call but the last.
   const toolCalls = new Map<string, ResponsesToolCallEntry>();
+  // Every finished output item by position, for replay on the next round.
+  const outputItems = new Map<number, unknown>();
   // Responses only reports billed usage on the terminal lifecycle event; when the
   // caller supplies promptText, estimate ↑ before the first delta and ↓ from
   // content / tool-arg deltas so the CLI counter moves during the call. The
@@ -343,6 +372,12 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
 
       case "response.output_item.done": {
         const item = event.item;
+        if (item) {
+          outputItems.set(
+            typeof event.output_index === "number" ? event.output_index : outputItems.size,
+            item
+          );
+        }
         if (item?.type === "function_call") {
           // Same lookup order as delta: id first, then output_index, so an entry
           // registered under either shape by `added` is found.
@@ -387,6 +422,15 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
         // reasoning summaries, and non-function tool events.
         break;
     }
+  }
+
+  if (options.nativeTurnProvider !== undefined && outputItems.size > 0) {
+    const items = [...outputItems.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+    emit({
+      type: "object-delta",
+      port: "nativeTurn",
+      objectDelta: { provider: options.nativeTurnProvider, payload: JSON.stringify(items) },
+    } as StreamEvent<Output>);
   }
 
   provisionalUsage?.flush();

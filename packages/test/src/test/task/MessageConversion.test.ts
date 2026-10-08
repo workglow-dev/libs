@@ -291,6 +291,68 @@ describe("toOpenAIMessages", () => {
       });
     });
   });
+
+  describe("native turn replay", () => {
+    const withBlock = (block: Record<string, unknown>) =>
+      makeInput({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Look" }] },
+          {
+            role: "assistant",
+            content: [block, { type: "tool_use", id: "c1", name: "read", input: {} }],
+          },
+        ],
+      } as never);
+    const items = [{ type: "reasoning", id: "rs_1", encrypted_content: "ENC" }];
+
+    test("attaches the items of a reasoning block this provider produced", () => {
+      const msgs = toOpenAIMessages(
+        withBlock({
+          type: "reasoning",
+          text: "",
+          provider: "openai",
+          payload: JSON.stringify(items),
+        }),
+        { nativeTurnProvider: "openai" }
+      );
+      expect(msgs[1]!.native_items).toEqual(items);
+    });
+
+    test("ignores a block another provider produced", () => {
+      const msgs = toOpenAIMessages(
+        withBlock({
+          type: "reasoning",
+          text: "",
+          provider: "anthropic",
+          payload: JSON.stringify(items),
+        }),
+        { nativeTurnProvider: "openai" }
+      );
+      expect(msgs[1]).not.toHaveProperty("native_items");
+    });
+
+    test("ignores a payload that is not JSON, or not an array", () => {
+      for (const payload of ["{not json", JSON.stringify({ a: 1 })]) {
+        const msgs = toOpenAIMessages(
+          withBlock({ type: "reasoning", text: "", provider: "openai", payload }),
+          { nativeTurnProvider: "openai" }
+        );
+        expect(msgs[1]).not.toHaveProperty("native_items");
+      }
+    });
+
+    test("attaches nothing unless asked", () => {
+      const msgs = toOpenAIMessages(
+        withBlock({
+          type: "reasoning",
+          text: "",
+          provider: "openai",
+          payload: JSON.stringify(items),
+        })
+      );
+      expect(msgs[1]).not.toHaveProperty("native_items");
+    });
+  });
 });
 
 // ========================================================================
