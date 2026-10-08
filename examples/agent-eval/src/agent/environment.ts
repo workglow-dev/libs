@@ -28,6 +28,10 @@ export const PROBED_COMMANDS: readonly string[] = [
   "cargo",
   "go",
   "java",
+  "file",
+  "xxd",
+  "strings",
+  "7zz",
 ];
 
 export interface CommandInventory {

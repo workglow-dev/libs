@@ -42,7 +42,7 @@ export function codingSystemPrompt(env: SystemPromptEnvironment): string {
     "- Read a file before editing it; oldText must match the current file exactly.",
     "- Prefer edit for changes to existing files; use write for new files or full rewrites.",
     "- Each bash call is a fresh shell; chain dependent commands with &&.",
-    "- Verify your work: run the code or its tests before you finish.",
+    "- Verify once the change is complete: run the code or its tests then, not after every edit.",
     "- When the task is complete, reply with a short summary and no tool calls.",
     ...(env.concise
       ? [

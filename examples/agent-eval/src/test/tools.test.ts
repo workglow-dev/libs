@@ -17,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { probeCommands } from "../agent/environment";
+import { PROBED_COMMANDS, probeCommands } from "../agent/environment";
 import { commandTimeoutSec, createBashTool } from "../agent/tools/bash";
 import type { CodingToolContext } from "../agent/tools/context";
 import { applyEdits, createEditTool, normalizeLine } from "../agent/tools/edit";
@@ -348,6 +348,10 @@ describe("imageMimeType", () => {
 });
 
 describe("probeCommands", () => {
+  it("probes the tools coding tasks reach for beyond the language runtimes", () => {
+    expect(PROBED_COMMANDS).toEqual(expect.arrayContaining(["file", "xxd", "strings", "7zz"]));
+  });
+
   it("finds executables on PATH and lists the rest as missing", () => {
     const bin = join(dir, "bin");
     mkdirSync(bin);
@@ -363,6 +367,13 @@ describe("probeCommands", () => {
 
 describe("codingSystemPrompt", () => {
   const env = { cwd: "/app", platform: "linux x64", date: "2026-10-07", commands: undefined };
+  it("asks for verification once the change is complete, not after every edit", () => {
+    const prompt = codingSystemPrompt({ ...env, concise: true, images: true });
+    expect(prompt).toContain(
+      "- Verify once the change is complete: run the code or its tests then, not after every edit."
+    );
+    expect(prompt).not.toContain("Verify your work");
+  });
   it("asks for concision only when switched on", () => {
     expect(codingSystemPrompt({ ...env, concise: true, images: true })).toContain("Be concise");
     expect(codingSystemPrompt({ ...env, concise: false, images: true })).not.toContain(
