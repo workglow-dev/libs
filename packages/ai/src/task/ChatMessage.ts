@@ -45,10 +45,20 @@ export type ContentBlockToolUse = {
  * back (DeepSeek's `reasoning_content` on an assistant turn that called tools),
  * and a model given its own reasoning continues from it rather than working the
  * plan out again each round. A provider that has no use for it skips the block.
+ * `payload` is a provider's whole turn, kept so that provider can resume its own
+ * reasoning, which it returns only in its own encoded form.
  */
 export type ContentBlockReasoning = {
   readonly type: "reasoning";
   readonly text: string;
+  /**
+   * The provider whose assistant turn `payload` is, when the round kept it. That
+   * provider replays the payload verbatim on later rounds; every other provider
+   * reads `text` or skips the block.
+   */
+  readonly provider?: string;
+  /** The provider's own assistant output for this turn, serialized in its wire format and order. */
+  readonly payload?: string;
 };
 
 export type ContentBlockInToolResultBody =
@@ -116,6 +126,8 @@ const ContentBlockReasoningSchema = {
   properties: {
     type: { type: "string", enum: ["reasoning"] },
     text: { type: "string" },
+    provider: { type: "string" },
+    payload: { type: "string" },
   },
   required: ["type", "text"],
   additionalProperties: false,
@@ -214,7 +226,11 @@ export function isContentBlock(value: unknown): value is ContentBlock {
         v.content.every(isContentBlockInToolResultBody)
       );
     case "reasoning":
-      return typeof v.text === "string";
+      return (
+        typeof v.text === "string" &&
+        (v.provider === undefined || typeof v.provider === "string") &&
+        (v.payload === undefined || typeof v.payload === "string")
+      );
     default:
       return false;
   }

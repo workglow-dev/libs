@@ -265,6 +265,19 @@ export const ToolCallingOutputSchema = {
         "What a thinking model reasoned before replying, when its provider returns it as text",
       "x-stream": "append",
     },
+    nativeTurn: {
+      type: "object",
+      title: "Native Turn",
+      description:
+        "The provider's own assistant output for this round, kept so the provider can be handed it back verbatim on the next round",
+      properties: {
+        provider: { type: "string" },
+        payload: { type: "string" },
+      },
+      required: ["provider", "payload"],
+      additionalProperties: false,
+      "x-stream": "object",
+    },
     ...CheckpointOutputProperty,
   },
   required: ["text", "toolCalls"],
@@ -329,6 +342,8 @@ export type ToolCallingTaskOutput = {
   }[];
   /** Present when the provider returned the model's reasoning as text. */
   reasoning?: string | undefined;
+  /** Present when the provider handed back its own turn for replay. */
+  nativeTurn?: { readonly provider: string; readonly payload: string } | undefined;
   checkpoint?: string | undefined;
 };
 export type ToolCallingTaskConfig = TaskConfig<ToolCallingTaskInput>;

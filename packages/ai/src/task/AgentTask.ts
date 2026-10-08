@@ -349,13 +349,23 @@ function isAnswerable(call: ToolCall): boolean {
 function assistantMessage(
   text: string,
   calls: readonly ToolCall[],
-  reasoning: string | undefined
+  reasoning: string | undefined,
+  nativeTurn: { readonly provider: string; readonly payload: string } | undefined
 ): ChatMessage {
   const content: ContentBlock[] = [];
   // Reasoning rides only on a reply that has something else: on its own it is
   // not a reply, and an assistant turn with no text and no call is rejected.
-  if (reasoning && (text.length > 0 || calls.length > 0)) {
-    content.push({ type: "reasoning", text: reasoning });
+  if (text.length > 0 || calls.length > 0) {
+    if (nativeTurn) {
+      content.push({
+        type: "reasoning",
+        text: reasoning ?? "",
+        provider: nativeTurn.provider,
+        payload: nativeTurn.payload,
+      });
+    } else if (reasoning) {
+      content.push({ type: "reasoning", text: reasoning });
+    }
   }
   if (text.length > 0) content.push({ type: "text", text });
   for (const call of calls) {
@@ -712,7 +722,12 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       // A turn with neither text nor a usable call records nothing: an empty
       // assistant message is not a reply, and providers reject a replayed
       // prefix containing one.
-      const reply = assistantMessage(output?.text ?? "", calls, output?.reasoning);
+      const reply = assistantMessage(
+        output?.text ?? "",
+        calls,
+        output?.reasoning,
+        output?.nativeTurn
+      );
       if (reply.content.length > 0) {
         messages.push(reply);
         yield transcript();
