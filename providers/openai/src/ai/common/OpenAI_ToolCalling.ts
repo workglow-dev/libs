@@ -48,6 +48,9 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
   // prefix's so the warmed tool segment (and its prompt_cache_key) is shared.
   const merged = mergeOpenAICheckpointPrefix(sessionContext, input);
   const toolDefinitions = merged?.tools ?? input.tools;
+  // Encrypted reasoning is readable only by the model that produced it, so the
+  // native turn is keyed by model and another model gets the rebuilt turn.
+  const nativeKey = `openai:${modelName}`;
   const replay =
     (model?.provider_config as { replay_reasoning?: boolean } | undefined)?.replay_reasoning !==
     false;
@@ -62,7 +65,7 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
             prompt: "",
           } as ToolCallingTaskInput)
         : input,
-      replay ? { nativeTurnProvider: "openai" } : {}
+      replay ? { nativeTurnProvider: nativeKey } : {}
     ),
   });
   const toolChoice = mapResponsesToolChoice(input.toolChoice);
@@ -104,7 +107,7 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
       }
       emit(event);
     },
-    { promptText, nativeTurnProvider: replay ? "openai" : undefined }
+    { promptText, nativeTurnProvider: replay ? nativeKey : undefined }
   );
   emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput, usage });
 };

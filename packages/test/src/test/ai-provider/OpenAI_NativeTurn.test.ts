@@ -26,7 +26,7 @@ const modelWith = (providerConfig: Record<string, unknown>) =>
     description: "",
     provider: OPENAI,
     provider_config: {
-      model_name: "gpt-5.5",
+      model_name: MODEL_NAME,
       api_key: "test-key",
       reasoning: { effort: "high" },
       ...providerConfig,
@@ -44,7 +44,9 @@ const callItem = {
   arguments: "{}",
 };
 
-const messages = [
+const MODEL_NAME = "gpt-5.5";
+
+const messagesFrom = (provider: string) => [
   { role: "user", content: [{ type: "text", text: "go" }] },
   {
     role: "assistant",
@@ -52,7 +54,7 @@ const messages = [
       {
         type: "reasoning",
         text: "",
-        provider: "openai",
+        provider,
         payload: JSON.stringify([reasoningItem, callItem]),
       },
       { type: "tool_use", id: "c1", name: "look", input: {} },
@@ -70,6 +72,8 @@ const messages = [
     ],
   },
 ];
+
+const messages = messagesFrom(`openai:${MODEL_NAME}`);
 
 describe("OpenAI tool-calling native turn", () => {
   let captured: Record<string, unknown>[];
@@ -99,12 +103,16 @@ describe("OpenAI tool-calling native turn", () => {
     runtimeTestOnly.setOpenAIClientForTests(undefined);
   });
 
-  const run = async (model: never, emitted: unknown[] = []): Promise<Record<string, unknown>> => {
+  const run = async (
+    model: never,
+    emitted: unknown[] = [],
+    history: unknown[] = messages
+  ): Promise<Record<string, unknown>> => {
     await toolCallingRunFn()(
       {
         model,
         prompt: "",
-        messages,
+        messages: history,
         tools: [{ name: "look", description: "", inputSchema: {} }],
       } as never,
       model,
@@ -141,6 +149,16 @@ describe("OpenAI tool-calling native turn", () => {
     ]);
   });
 
+  it("rebuilds a turn another model produced instead of replaying it", async () => {
+    const params = await run(modelWith({}), [], messagesFrom("openai:some-other-model"));
+    expect(params.input).toEqual([
+      { role: "user", content: [{ type: "input_text", text: "go" }] },
+      { type: "function_call", call_id: "c1", name: "look", arguments: "{}" },
+      { type: "function_call_output", call_id: "c1", output: "looked" },
+    ]);
+    expect(JSON.stringify(params.input)).not.toContain("ENC");
+  });
+
   it("emits the turn's items as the native turn", async () => {
     streamEvents = [
       { type: "response.output_item.done", output_index: 0, item: reasoningItem },
@@ -152,7 +170,10 @@ describe("OpenAI tool-calling native turn", () => {
     expect(emitted.find((e) => e.port === "nativeTurn")).toEqual({
       type: "object-delta",
       port: "nativeTurn",
-      objectDelta: { provider: "openai", payload: JSON.stringify([reasoningItem, callItem]) },
+      objectDelta: {
+        provider: `openai:${MODEL_NAME}`,
+        payload: JSON.stringify([reasoningItem, callItem]),
+      },
     });
   });
 
