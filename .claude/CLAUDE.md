@@ -269,16 +269,18 @@ turn's `text` then carries both replies.
 once per round on `ToolCallingTask`'s `nativeTurn` port (`{ provider, payload }`), and `AgentTask`
 keeps it on the assistant message's `reasoning` block (`provider`, `payload`). That provider's
 converter then replays the payload verbatim instead of rebuilding the turn — the OpenAI Responses
-items with their encrypted reasoning (`include: ["reasoning.encrypted_content"]`), Anthropic's
-content blocks with their signed thinking — while the turn's `tool_use` ids still match it; a host
-that renamed or dropped a call gets the rebuilt turn. The `provider` is `openai:<model>` or
+items with their encrypted reasoning (`include: ["reasoning.encrypted_content"]`, sent only for a
+reasoning model, that is when reasoning effort is not `none`), Anthropic's content blocks with their
+signed thinking — and only while the turn's `tool_use` ids still match it (by count and order), so a
+host that changed or dropped a call id gets the rebuilt turn. The `provider` is `openai:<model>` or
 `anthropic:<model>` (the provider name and its API model name), because encrypted reasoning and
 signed thinking are readable only by the model that wrote them, so a turn is replayed only to that
 model and rebuilt after a model switch. A reasoning model handed nothing back starts its thinking
-over every round, which is most of an agent's output bill. Anthropic binds a thinking block's
-signature to the conversation before it, so the replay must be append-only; a request it rejects as
-edited is retried once with every thinking block stripped. `provider_config.replay_reasoning: false`
-turns it off for OpenAI as for DeepSeek.
+over every round, which is a large share of an agent's output bill. Anthropic binds a thinking
+block's signature to the conversation before it, so the replay must be append-only; a request it
+rejects as edited is retried once with every thinking block stripped.
+`provider_config.replay_reasoning: false` turns it off for OpenAI and DeepSeek; Anthropic has no
+such switch.
 
 **The loop and the model call can live in different places.** A host whose tools are closures
 (they draw on a screen, ask a person, read state only that process holds) but whose model is
