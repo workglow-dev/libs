@@ -32,6 +32,7 @@ export const PROBED_COMMANDS: readonly string[] = [
   "xxd",
   "strings",
   "7zz",
+  "7z",
 ];
 
 export interface CommandInventory {

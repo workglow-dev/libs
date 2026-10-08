@@ -349,7 +349,9 @@ describe("imageMimeType", () => {
 
 describe("probeCommands", () => {
   it("probes the tools coding tasks reach for beyond the language runtimes", () => {
-    expect(PROBED_COMMANDS).toEqual(expect.arrayContaining(["file", "xxd", "strings", "7zz"]));
+    expect(PROBED_COMMANDS).toEqual(
+      expect.arrayContaining(["file", "xxd", "strings", "7zz", "7z"])
+    );
   });
 
   it("finds executables on PATH and lists the rest as missing", () => {

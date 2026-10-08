@@ -95,7 +95,12 @@ describe("AgentTask native turn", () => {
       payload: '[{"kind":"reasoning","enc":"xyz"}]',
     });
     const sent = (seen[1]!.messages as ChatMessage[]).find((m) => m.role === "assistant")!;
-    expect(sent.content[0]).toMatchObject({ type: "reasoning", provider: "mock" });
+    expect(sent.content[0]).toEqual({
+      type: "reasoning",
+      text: "",
+      provider: "mock",
+      payload: '[{"kind":"reasoning","enc":"xyz"}]',
+    });
   });
 
   it("carries text reasoning and the native turn on one block", async () => {

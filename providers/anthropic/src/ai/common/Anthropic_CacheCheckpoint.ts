@@ -90,7 +90,7 @@ export function buildAnthropicCheckpointParams(
   // entries, so a non-empty prefix.messages can still convert to [].
   const messages =
     prefix.messages && prefix.messages.length > 0
-      ? buildAnthropicMessages(prefix.messages, "")
+      ? buildAnthropicMessages(prefix.messages, "", undefined)
       : [];
   if (messages.length > 0) {
     annotateLastBlock(messages[messages.length - 1] as { content: unknown });
@@ -140,7 +140,7 @@ export function applyAnthropicPrefixReplay(
   // entries, so a non-empty prefix.messages can still convert to [].
   const prefixMessages =
     prefix.messages && prefix.messages.length > 0
-      ? buildAnthropicMessages(prefix.messages, "")
+      ? buildAnthropicMessages(prefix.messages, "", undefined)
       : [];
   if (prefixMessages.length > 0) {
     annotateLastBlock(prefixMessages[prefixMessages.length - 1] as { content: unknown });

@@ -72,7 +72,7 @@ function parseOwnTurn(payload: string, content: ChatMessage["content"]): any[] |
 export function buildAnthropicMessages(
   messages: ReadonlyArray<ChatMessage> | undefined,
   prompt: unknown,
-  nativeTurnProvider?: string
+  nativeTurnProvider: string | undefined
 ): any[] {
   if (!messages || messages.length === 0) {
     return [{ role: "user", content: prompt }];
@@ -195,29 +195,43 @@ function isThinkingSignatureError(err: unknown): boolean {
   );
 }
 
-/** The messages with every thinking block removed; a message left empty is dropped. */
-function withoutThinking(messages: readonly any[]): any[] {
+/**
+ * The messages with every thinking block removed (a message left empty is
+ * dropped), or `undefined` when there was none to remove — a request without
+ * thinking cannot have been rejected for it, so there is nothing to retry.
+ */
+function withoutThinking(messages: readonly any[]): any[] | undefined {
   const out: any[] = [];
+  let removed = false;
   for (const msg of messages) {
     if (msg?.role !== "assistant" || !Array.isArray(msg.content)) {
       out.push(msg);
       continue;
     }
     const content = msg.content.filter((b: any) => !THINKING_BLOCK_TYPES.has(b?.type));
+    if (content.length !== msg.content.length) removed = true;
     if (content.length > 0) out.push({ ...msg, content });
   }
-  return out;
+  return removed ? out : undefined;
 }
 
 /**
  * The reply's blocks in index order as the API produced them, or `undefined`
- * when there is nothing to replay or a tool input cannot be parsed from its raw
- * JSON (the replay must carry exactly what the model wrote, so a guess is worse
- * than rebuilding the turn).
+ * when there is nothing to replay or the turn cannot be replayed verbatim: a
+ * tool input that cannot be parsed from its raw JSON, a thinking block that
+ * never received its signature, or an empty text block that must be dropped
+ * ahead of a thinking block (the signature binds the blocks before it). The
+ * replay must carry exactly what the model wrote, so a guess is worse than
+ * rebuilding the turn.
  */
 function serializeNativeTurn(native: ReadonlyMap<number, NativeBlock>): string | undefined {
+  const ordered = [...native.entries()].sort((a, b) => a[0] - b[0]).map(([, block]) => block);
+  let lastThinking = -1;
+  ordered.forEach((block, i) => {
+    if (THINKING_BLOCK_TYPES.has(block.type)) lastThinking = i;
+  });
   const blocks: unknown[] = [];
-  for (const [, block] of [...native.entries()].sort((a, b) => a[0] - b[0])) {
+  for (const [i, block] of ordered.entries()) {
     if (block.type === "tool_use") {
       let input: unknown;
       try {
@@ -227,8 +241,12 @@ function serializeNativeTurn(native: ReadonlyMap<number, NativeBlock>): string |
       }
       blocks.push({ type: "tool_use", id: block.id, name: block.name, input });
     } else if (block.type === "text") {
-      // The API rejects an empty text block, so one is never part of a turn to replay.
+      // The API rejects an empty text block, so one is dropped — which is only
+      // faithful when no thinking block follows it.
       if (block.text !== "") blocks.push(block);
+      else if (i < lastThinking) return undefined;
+    } else if (block.type === "thinking" && block.signature === "") {
+      return undefined;
     } else {
       blocks.push(block);
     }
@@ -328,17 +346,17 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
     }
   }
 
-  /**
-   * One request and the consumption of its stream. All streaming state lives
-   * inside, so a retry starts clean; `emitted` records whether anything has
-   * reached the consumer, since a retry after output would repeat it.
-   */
+  /** Whether anything has reached the consumer, since a retry after output would repeat it. */
   let emitted = false;
   const emitTracked: typeof emit = (event) => {
     emitted = true;
     emit(event);
   };
 
+  /**
+   * One request and the consumption of its stream. All streaming state lives
+   * inside, so a retry starts clean.
+   */
   const consume = async (requestParams: any): Promise<void> => {
     const stream = client.messages.stream(requestParams, { signal });
 
@@ -359,6 +377,9 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
      */
     const validatedToolCallsInStreamOrder = (): ToolCall[] =>
       filterValidToolCalls(toolCallsInStreamOrder(), toolDefinitions);
+
+    /** Cleared by any block or delta the replay cannot reproduce exactly. */
+    let verbatim = true;
 
     const usageCollector = createAnthropicUsageCollector();
     const snapshotUsage = createUsageSnapshotEmitter(emitTracked);
@@ -393,6 +414,8 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
           });
         } else if (block.type === "redacted_thinking") {
           native.set(index, { type: "redacted_thinking", data: block.data ?? "" });
+        } else {
+          verbatim = false;
         }
       } else if (event.type === "content_block_delta") {
         const index = event.index as number;
@@ -423,6 +446,8 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
               objectDelta: validatedToolCallsInStreamOrder(),
             });
           }
+        } else {
+          verbatim = false;
         }
       } else if (event.type === "content_block_stop") {
         const index = event.index as number;
@@ -444,7 +469,7 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
       }
     }
 
-    const nativeTurn = serializeNativeTurn(native);
+    const nativeTurn = verbatim ? serializeNativeTurn(native) : undefined;
     if (nativeTurn !== undefined) {
       emitTracked({
         type: "object-delta",
@@ -466,8 +491,9 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
     // A replayed thinking block whose signature no longer matches is a 400
     // decided before any output; the documented recovery is to send the turn
     // without its thinking, once.
-    const stripped = isThinkingSignatureError(err) ? withoutThinking(params.messages) : undefined;
-    if (emitted || stripped === undefined || !Array.isArray(params.messages)) throw err;
+    if (emitted || !isThinkingSignatureError(err) || !Array.isArray(params.messages)) throw err;
+    const stripped = withoutThinking(params.messages);
+    if (stripped === undefined) throw err;
     getLogger().warn("Anthropic rejected replayed thinking; retrying without it.", {
       model: modelName,
     });

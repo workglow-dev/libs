@@ -99,6 +99,32 @@ describe("trimHistoryForModel", () => {
     for (const id of results) expect(uses.has(id)).toBe(true);
   });
 
+  it("does not count a reasoning block's payload against the budget", () => {
+    // The payload is a provider's own turn, replayed verbatim and never shown
+    // to the model as text, so a long one must not push earlier turns out.
+    const build = (payload: string | undefined): ChatMessage[] => {
+      const history: ChatMessage[] = [];
+      for (let i = 0; i < 6; i++) {
+        history.push(user(`ask ${i} ${"q".repeat(200)}`));
+        history.push({
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "", provider: "openai:m", ...(payload ? { payload } : {}) },
+            { type: "text", text: `done ${i} ${"a".repeat(200)}` },
+          ],
+        });
+      }
+      return history;
+    };
+    const budget = 1500;
+    const plain = trimHistoryForModel(build(undefined), budget);
+    expect(plain.length).toBeLessThan(12);
+    expect(plain.length).toBeGreaterThan(0);
+    const withPayload = trimHistoryForModel(build("p".repeat(5000)), budget);
+    expect(withPayload).toHaveLength(plain.length);
+    expect(withPayload[0]).toEqual(plain[0]);
+  });
+
   it("keeps the newest turn even when it alone exceeds the budget", () => {
     // Discarding here is how a conversation gets erased for being too long.
     const history = [user("old"), assistant("old reply"), user("x".repeat(5000))];

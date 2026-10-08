@@ -109,7 +109,10 @@ describe("Anthropic native turn", () => {
           if (next instanceof Error) throw next;
           return {
             async *[Symbol.asyncIterator]() {
-              for (const event of next) yield event;
+              for (const event of next) {
+                if (event instanceof Error) throw event;
+                yield event;
+              }
             },
           };
         },
@@ -178,6 +181,127 @@ describe("Anthropic native turn", () => {
     );
   });
 
+  const textBlock = (index: number, text: string) => [
+    { type: "content_block_start", index, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index, delta: { type: "text_delta", text } },
+    { type: "content_block_stop", index },
+  ];
+
+  const thinkingBlock = (index: number, signature: string | undefined) => [
+    { type: "content_block_start", index, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: "Plan" } },
+    ...(signature === undefined
+      ? []
+      : [{ type: "content_block_delta", index, delta: { type: "signature_delta", signature } }]),
+    { type: "content_block_stop", index },
+  ];
+
+  const toolBlock = (index: number) => [
+    {
+      type: "content_block_start",
+      index,
+      content_block: { type: "tool_use", id: "t1", name: "look", input: {} },
+    },
+    {
+      type: "content_block_delta",
+      index,
+      delta: { type: "input_json_delta", partial_json: '{"a":1}' },
+    },
+    { type: "content_block_stop", index },
+  ];
+
+  const lookTool = [
+    { name: "look", description: "", inputSchema: { type: "object", properties: {} } },
+  ];
+
+  /** Runs one reply and asserts it carries no native turn but its text and call came through. */
+  async function expectNoNativeTurn(
+    reply: readonly unknown[],
+    expectedText: string | undefined
+  ): Promise<void> {
+    script = [reply];
+    const events: Array<Record<string, any>> = [];
+    await toolCallingRunFn()(
+      { model, prompt: "", messages: [], tools: lookTool } as never,
+      model,
+      undefined as never,
+      ((event: Record<string, any>) => events.push(event)) as never
+    );
+    expect(nativeTurns(events)).toHaveLength(0);
+    expect(events.some((e) => e.type === "finish")).toBe(true);
+    const text = events
+      .filter((e) => e.type === "text-delta")
+      .map((e) => e.textDelta)
+      .join("");
+    expect(text).toBe(expectedText ?? "");
+    const lastCalls = events.filter((e) => e.type === "object-delta" && e.port === "toolCalls");
+    expect(lastCalls.at(-1)!.objectDelta).toEqual([{ id: "t1", name: "look", input: { a: 1 } }]);
+  }
+
+  it("emits no native turn when a block of an unknown type arrived", async () => {
+    await expectNoNativeTurn(
+      [
+        ...thinkingBlock(0, "SIG"),
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "server_tool_use", id: "s1", name: "web_search", input: {} },
+        },
+        { type: "content_block_stop", index: 1 },
+        ...textBlock(2, "hello"),
+        ...toolBlock(3),
+      ],
+      "hello"
+    );
+  });
+
+  it("emits no native turn when a delta of an unknown type arrived", async () => {
+    await expectNoNativeTurn(
+      [
+        ...thinkingBlock(0, "SIG"),
+        { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+        {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "citations_delta", citation: { type: "char_location" } },
+        },
+        { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "hello" } },
+        { type: "content_block_stop", index: 1 },
+        ...toolBlock(2),
+      ],
+      "hello"
+    );
+  });
+
+  it("emits no native turn when a thinking block never received its signature", async () => {
+    await expectNoNativeTurn([...thinkingBlock(0, undefined), ...toolBlock(1)], undefined);
+  });
+
+  it("emits no native turn when an empty text block precedes thinking", async () => {
+    await expectNoNativeTurn(
+      [
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_stop", index: 0 },
+        ...thinkingBlock(1, "SIG"),
+        ...toolBlock(2),
+      ],
+      undefined
+    );
+  });
+
+  it("still emits the native turn when the empty text block follows the last thinking", async () => {
+    script = [
+      [
+        ...thinkingBlock(0, "SIG"),
+        { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+        { type: "content_block_stop", index: 1 },
+        ...toolBlock(2),
+      ],
+    ];
+    const events = await run([{ role: "user", content: [{ type: "text", text: "go" }] }]);
+    expect(nativeTurns(events)[0]!.objectDelta.payload).toBe(JSON.stringify(signedBlocks));
+  });
+
   it("replays the captured turn verbatim while the tool calls still match", async () => {
     await run(turnMessages(NATIVE_KEY, "t1"));
     expect(sentAssistant(calls[0]!).content).toEqual(signedBlocks);
@@ -240,5 +364,29 @@ describe("Anthropic native turn", () => {
     script = [Object.assign(new Error("max_tokens too large"), { status: 400 })];
     await expect(run(turnMessages(NATIVE_KEY, "t1"))).rejects.toThrow(/max_tokens/);
     expect(calls).toHaveLength(1);
+  });
+
+  it("rethrows a binding 400 when the request carried no thinking, after one call", async () => {
+    script = [bindingError()];
+    await expect(run([{ role: "user", content: [{ type: "text", text: "go" }] }])).rejects.toThrow(
+      /Invalid `signature`/
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  it("does not retry after output reached the consumer", async () => {
+    script = [[...textBlock(0, "partial"), bindingError()]];
+    const events: Array<Record<string, any>> = [];
+    await expect(
+      toolCallingRunFn()(
+        { model, prompt: "", messages: turnMessages(NATIVE_KEY, "t1"), tools: [] } as never,
+        model,
+        undefined as never,
+        ((event: Record<string, any>) => events.push(event)) as never
+      )
+    ).rejects.toThrow(/Invalid `signature`/);
+    expect(calls).toHaveLength(1);
+    expect(events.filter((e) => e.type === "text-delta")).toHaveLength(1);
+    expect(events.find((e) => e.type === "text-delta")!.textDelta).toBe("partial");
   });
 });

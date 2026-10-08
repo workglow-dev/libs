@@ -183,4 +183,26 @@ describe("OpenAI tool-calling native turn", () => {
     await run(modelWith({ replay_reasoning: false }), emitted);
     expect(emitted.some((e) => e.port === "nativeTurn")).toBe(false);
   });
+
+  it("emits no native turn when the model takes no reasoning", async () => {
+    streamEvents = [
+      { type: "response.output_item.done", output_index: 0, item: reasoningItem },
+      { type: "response.output_item.done", output_index: 1, item: callItem },
+    ];
+    const emitted: Array<{ type: string; port?: string }> = [];
+    const params = await run(modelWith({ model_name: "gpt-4o", reasoning: undefined }), emitted);
+    expect(params).not.toHaveProperty("include");
+    expect(emitted.some((e) => e.port === "nativeTurn")).toBe(false);
+  });
+
+  it("emits no native turn when reasoning effort is none", async () => {
+    streamEvents = [
+      { type: "response.output_item.done", output_index: 0, item: reasoningItem },
+      { type: "response.output_item.done", output_index: 1, item: callItem },
+    ];
+    const emitted: Array<{ type: string; port?: string }> = [];
+    const params = await run(modelWith({ reasoning: { effort: "none" } }), emitted);
+    expect(params).not.toHaveProperty("include");
+    expect(emitted.some((e) => e.port === "nativeTurn")).toBe(false);
+  });
 });

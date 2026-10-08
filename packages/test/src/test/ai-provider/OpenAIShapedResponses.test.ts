@@ -56,6 +56,35 @@ describe("accumulateOpenAIResponsesStream", () => {
     });
   });
 
+  it("emits no native turn when a reasoning item came back without encrypted content", async () => {
+    for (const reasoning of [
+      { type: "reasoning", id: "rs_1", summary: [] },
+      { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "" },
+      { type: "reasoning", id: "rs_1", summary: [], encrypted_content: null },
+    ]) {
+      const out: StreamEvent<Record<string, any>>[] = [];
+      await accumulateOpenAIResponsesStream(
+        events([
+          { type: "response.output_item.done", output_index: 0, item: reasoning },
+          {
+            type: "response.output_item.done",
+            output_index: 1,
+            item: {
+              type: "function_call",
+              id: "fc_1",
+              call_id: "c1",
+              name: "look",
+              arguments: "{}",
+            },
+          },
+        ]),
+        (e) => out.push(e),
+        { nativeTurnProvider: "openai" }
+      );
+      expect(out.some((e) => e.type === "object-delta" && e.port === "nativeTurn")).toBe(false);
+    }
+  });
+
   it("emits no native turn unless asked", async () => {
     const out = await collect([
       { type: "response.output_item.done", output_index: 0, item: { type: "reasoning", id: "r" } },

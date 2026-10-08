@@ -27,7 +27,10 @@ import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
  * Streaming run-fn for `["text.generation", "tool-use"]`. Calls the OpenAI
  * Responses endpoint with `stream: true` and forwards delta events via
  * {@link accumulateOpenAIResponsesStream}, which emits `text-delta` and tool-call
- * `object-delta` events plus a final empty `finish`.
+ * `object-delta` events plus a final empty `finish`. The turn's own output
+ * items go back on the `nativeTurn` port only when the request asked for
+ * encrypted reasoning, since a replayed reasoning item without it is looked up
+ * by id and fails where the response is not stored.
  *
  * Defence-in-depth: each tool-call `object-delta` is filtered against the
  * effective tool declarations (the caller's tools, or the checkpoint prefix's
@@ -83,7 +86,8 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
   // A reasoning model starts its thinking over every round unless it is handed
   // its encrypted reasoning back; the items come back on `nativeTurn`.
   const reasoning = params.reasoning as { effort?: string } | undefined;
-  if (replay && reasoning !== undefined && reasoning.effort !== "none") {
+  const wantsEncryptedReasoning = replay && reasoning !== undefined && reasoning.effort !== "none";
+  if (wantsEncryptedReasoning) {
     params.include = ["reasoning.encrypted_content"];
   }
 
@@ -107,7 +111,7 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
       }
       emit(event);
     },
-    { promptText, nativeTurnProvider: replay ? nativeKey : undefined }
+    { promptText, nativeTurnProvider: wantsEncryptedReasoning ? nativeKey : undefined }
   );
   emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput, usage });
 };

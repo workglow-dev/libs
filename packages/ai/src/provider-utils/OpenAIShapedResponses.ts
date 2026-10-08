@@ -270,6 +270,13 @@ interface ResponsesToolCallEntry {
  *
  * Pass `promptText` to emit a provisional ↑ estimate before the first delta —
  * Responses only attaches billed usage to the terminal lifecycle event.
+ *
+ * Pass `nativeTurnProvider` to also emit the turn's finished output items,
+ * verbatim and in order, as one `nativeTurn` `object-delta` keyed by that
+ * provider, so the next round can replay them. Nothing is emitted when the turn
+ * has no items, or when any reasoning item came back without
+ * `encrypted_content`: replaying that item makes the API look it up by id,
+ * which fails under `store: false`, zero data retention, or once it expired.
  */
 export async function accumulateOpenAIResponsesStream<Output = Record<string, any>>(
   stream: AsyncIterable<any>,
@@ -426,11 +433,19 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
 
   if (options.nativeTurnProvider !== undefined && outputItems.size > 0) {
     const items = [...outputItems.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
-    emit({
-      type: "object-delta",
-      port: "nativeTurn",
-      objectDelta: { provider: options.nativeTurnProvider, payload: JSON.stringify(items) },
-    } as StreamEvent<Output>);
+    const replayable = items.every((item) => {
+      const { type, encrypted_content } = item as { type?: unknown; encrypted_content?: unknown };
+      return (
+        type !== "reasoning" || (typeof encrypted_content === "string" && encrypted_content !== "")
+      );
+    });
+    if (replayable) {
+      emit({
+        type: "object-delta",
+        port: "nativeTurn",
+        objectDelta: { provider: options.nativeTurnProvider, payload: JSON.stringify(items) },
+      } as StreamEvent<Output>);
+    }
   }
 
   provisionalUsage?.flush();

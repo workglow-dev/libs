@@ -65,7 +65,8 @@ export const Anthropic_TextGeneration_Stream: AiProviderRunFn<
     const messages = hasMessages
       ? buildAnthropicMessages(
           unified.messages as Parameters<typeof buildAnthropicMessages>[0],
-          unified.prompt ?? ""
+          unified.prompt ?? "",
+          undefined
         )
       : [{ role: "user" as const, content: input.prompt }];
 

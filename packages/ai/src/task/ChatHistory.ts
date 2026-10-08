@@ -62,9 +62,19 @@ export function normalizeHistoryForModel(history: readonly ChatMessage[]): ChatM
  */
 export const DEFAULT_MAX_HISTORY_CHARS = 120_000;
 
+/**
+ * A message's size as the model reads it. A reasoning block's `payload` is a
+ * provider's own turn kept for replay, not text this budget is protecting the
+ * context window from, so it is measured without it.
+ */
 function messageChars(message: ChatMessage): number {
   try {
-    return JSON.stringify(message).length;
+    const content = message.content.map((block) => {
+      if (block.type !== "reasoning" || block.payload === undefined) return block;
+      const { payload: _payload, ...rest } = block;
+      return rest;
+    });
+    return JSON.stringify({ ...message, content }).length;
   } catch {
     return 0;
   }
