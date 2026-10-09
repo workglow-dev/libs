@@ -462,14 +462,17 @@ Rules for writing a run-fn:
 the llama.cpp server replay `reasoning_content`; Ollama replays `thinking`; HF Transformers
 hands `reasoning_content` to the chat template; node-llama-cpp replays thought segments.
 OpenAI and Anthropic replay a native turn, and OpenRouter carries `reasoning_details` as one
-keyed `openrouter:<model>` — with no call-id guard, unlike those two. **A tool-calling run-fn
-converts `messages` with a converter that keeps tool calls and prefers `messages` over
-`prompt`, never `toTextFlatMessages`:** `AgentTask` sends both every round, and a converter that
-reads `prompt` or flattens to text shows the model its first turn again and never a tool
-result. Tool-result images go in a user message after the tool message (xAI, OpenRouter, HF
-Inference); Gemini 3+ takes them in `functionResponse.parts`, and older models, which reject
-that with HTTP 400, get a user turn of their own — beside the response they leak their thinking
-into the answer.
+keyed `openrouter:<model>`; all three replay it only while the turn's call ids still match, so a
+host that changed or dropped one gets the rebuilt turn, and OpenRouter emits none for Anthropic
+thinking cut off before its signature. **A tool-calling run-fn converts `messages` with a
+converter that keeps tool calls and prefers `messages` over `prompt`:** `AgentTask` sends both
+every round, and a converter that reads `prompt` or flattens to text shows the model its first
+turn again and never a tool result. A history holding tool calls or tool results must never go
+through `toTextFlatMessages`; HF Transformers still uses it, but only on the path where the
+history has no tool messages yet, where it loses nothing. Tool-result images go in a user message
+after the tool message (xAI, OpenRouter, HF Inference); Gemini 3+ takes them in
+`functionResponse.parts`, and older models, which reject that with HTTP 400, get a user turn of
+their own — beside the response they leak their thinking into the answer.
 
 ### `examples/cli` — the CLI and its web console
 
