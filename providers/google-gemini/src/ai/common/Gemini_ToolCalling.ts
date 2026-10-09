@@ -87,17 +87,36 @@ export function buildGeminiContents(
       for (const block of msg.content) {
         if (block.type !== "tool_result") continue;
         const name = toolUseNames.get(block.tool_use_id) ?? "unknown";
-        const textContent = block.content
+        const text = block.content
           .filter((b) => b.type === "text")
           .map((b) => (b as { type: "text"; text: string }).text)
           .join("");
+        const images = block.content.filter(
+          (b): b is Extract<typeof b, { type: "image" }> => b.type === "image"
+        );
         let response: Record<string, unknown>;
-        try {
-          response = JSON.parse(textContent);
-        } catch {
-          response = { result: textContent };
+        if (block.is_error) {
+          response = { error: text };
+        } else {
+          let parsed: unknown = text;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            // Not JSON: sent as the text it is.
+          }
+          // `response` must be an object; a scalar, array or null result is wrapped.
+          response =
+            parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+              ? (parsed as Record<string, unknown>)
+              : { result: parsed };
         }
-        parts.push({ functionResponse: { name, response } });
+        const functionResponse: Record<string, unknown> = { name, response };
+        if (images.length > 0) {
+          functionResponse.parts = images.map((image) => ({
+            inlineData: { mimeType: image.mimeType, data: image.data },
+          }));
+        }
+        parts.push({ functionResponse });
       }
       if (parts.length > 0) contents.push({ role: "user", parts });
     }

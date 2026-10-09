@@ -296,3 +296,64 @@ describe("buildGeminiContents multi-turn", () => {
     expect("thoughtSignature" in fnPart).toBe(false);
   });
 });
+
+describe("buildGeminiContents tool results", () => {
+  const { buildGeminiContents } = _testOnly;
+
+  const call = (id: string, name: string) => ({
+    role: "assistant",
+    content: [{ type: "tool_use", id, name, input: {} }],
+  });
+  const result = (id: string, content: any[], is_error?: boolean) => ({
+    role: "tool",
+    content: [
+      {
+        type: "tool_result",
+        tool_use_id: id,
+        content,
+        ...(is_error ? { is_error } : {}),
+      },
+    ],
+  });
+
+  it.each([
+    ["42", { result: 42 }],
+    ["null", { result: null }],
+    ["[1,2]", { result: [1, 2] }],
+    ['"s"', { result: "s" }],
+    ['{"a":1}', { a: 1 }],
+    ["plain words", { result: "plain words" }],
+  ])("wraps a %s tool result as an object", (text, response) => {
+    const contents = buildGeminiContents(
+      [call("c1", "t"), result("c1", [{ type: "text", text }])] as any,
+      "x"
+    );
+    expect(contents.at(-1).parts[0].functionResponse.response).toEqual(response);
+  });
+
+  it("reports an error result under `error`", () => {
+    const contents = buildGeminiContents(
+      [call("c1", "t"), result("c1", [{ type: "text", text: "boom" }], true)] as any,
+      "x"
+    );
+    expect(contents.at(-1).parts[0].functionResponse.response).toEqual({ error: "boom" });
+  });
+
+  it("returns images in functionResponse.parts", () => {
+    const contents = buildGeminiContents(
+      [
+        call("c1", "t"),
+        result("c1", [
+          { type: "text", text: "here" },
+          { type: "image", mimeType: "image/png", data: "AAAA" },
+        ]),
+      ] as any,
+      "x"
+    );
+    expect(contents.at(-1).parts[0].functionResponse).toEqual({
+      name: "t",
+      response: { result: "here" },
+      parts: [{ inlineData: { mimeType: "image/png", data: "AAAA" } }],
+    });
+  });
+});
