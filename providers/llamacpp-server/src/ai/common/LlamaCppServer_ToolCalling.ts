@@ -23,7 +23,7 @@ import {
   filterValidToolCalls,
   isAllowedToolName,
   sanitizeToolArgs,
-  toTextFlatMessages,
+  toOpenAIMessages,
 } from "@workglow/ai/worker";
 import type { PartialJsonStream } from "@workglow/util/worker";
 import { createPartialJsonStream } from "@workglow/util/worker";
@@ -68,7 +68,11 @@ export function createLlamaCppServerToolCallingStream(
 ): AiProviderRunFn<ToolCallingTaskInput, ToolCallingTaskOutput, LlamaCppServerModelConfig> {
   return async (input, model, signal, emit) => {
     signal?.throwIfAborted?.();
-    const messages = toTextFlatMessages(input);
+    // llama.cpp's server reads `reasoning_content` back on assistant messages.
+    const messages = toOpenAIMessages(input, {
+      replayReasoning: true,
+      toolImagesInUserMessage: true,
+    });
     const tools = input.toolChoice === "none" ? undefined : mapTools(input.tools);
     const body = JSON.stringify({
       model: getLlamaCppServerModelName(model),
@@ -113,6 +117,10 @@ export function createLlamaCppServerToolCallingStream(
       for await (const delta of readChatCompletionDeltas(response, signal)) {
         if (delta.done) break;
         usage = mapOpenAIChatUsage(delta.usage) ?? usage;
+        if (delta.reasoningDelta) {
+          provisionalUsage.onText(delta.reasoningDelta);
+          emit({ type: "text-delta", port: "reasoning", textDelta: delta.reasoningDelta });
+        }
         if (delta.contentDelta) {
           provisionalUsage.onText(delta.contentDelta);
           emit({ type: "text-delta", port: "text", textDelta: delta.contentDelta });

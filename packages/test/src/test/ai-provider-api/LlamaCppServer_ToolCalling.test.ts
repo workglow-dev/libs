@@ -120,4 +120,129 @@ describe("createLlamaCppServerToolCallingStream", () => {
     const body = JSON.parse(asText((fetchSpy.mock.calls[0]![1] as RequestInit).body));
     expect(body.tools).toBeUndefined();
   });
+  describe("conversation and reasoning", () => {
+    async function requestBodyFor(input: object): Promise<any> {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(sseChunks([{ choices: [{ delta: { content: "ok" } }] }]));
+      const fn = createLlamaCppServerToolCallingStream({});
+      await fn(
+        { tools: TOOLS, toolChoice: "auto", ...input } as any,
+        model,
+        undefined as any,
+        () => undefined
+      );
+      return JSON.parse(asText((fetchSpy.mock.calls[0]![1] as RequestInit).body));
+    }
+
+    it("sends the whole conversation, including its own tool calls and their results", async () => {
+      const body = await requestBodyFor({
+        prompt: "p",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "p" }] },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "c1", name: "lookup", input: {} }],
+          },
+          {
+            role: "tool",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "c1",
+                content: [{ type: "text", text: "42" }],
+              },
+            ],
+          },
+        ],
+      });
+      expect(body.messages).toEqual([
+        { role: "user", content: [{ type: "text", text: "p" }] },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            { id: "c1", type: "function", function: { name: "lookup", arguments: "{}" } },
+          ],
+          reasoning_content: "",
+        },
+        { role: "tool", content: "42", tool_call_id: "c1" },
+      ]);
+    });
+
+    it("replays an assistant turn's reasoning as reasoning_content", async () => {
+      const body = await requestBodyFor({
+        prompt: "p",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "p" }] },
+          {
+            role: "assistant",
+            content: [
+              { type: "reasoning", text: "I should look it up" },
+              { type: "tool_use", id: "c1", name: "lookup", input: {} },
+            ],
+          },
+          {
+            role: "tool",
+            content: [
+              { type: "tool_result", tool_use_id: "c1", content: [{ type: "text", text: "42" }] },
+            ],
+          },
+        ],
+      });
+      const assistant = body.messages.find((m: any) => m.role === "assistant");
+      expect(assistant.reasoning_content).toBe("I should look it up");
+    });
+
+    it("sends a tool-result image as a user message after the string tool message", async () => {
+      const body = await requestBodyFor({
+        prompt: "p",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "p" }] },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "c1", name: "shot", input: {} }],
+          },
+          {
+            role: "tool",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "c1",
+                content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+              },
+            ],
+          },
+        ],
+      });
+      const toolIdx = body.messages.findIndex((m: any) => m.role === "tool");
+      expect(typeof body.messages[toolIdx].content).toBe("string");
+      const after = body.messages[toolIdx + 1];
+      expect(after.role).toBe("user");
+      expect(after.content).toContainEqual({
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,AAAA" },
+      });
+    });
+
+    it("emits delta.reasoning_content on the reasoning port, not on text", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        sseChunks([
+          { choices: [{ delta: { reasoning_content: "hmm" } }] },
+          { choices: [{ delta: { content: "answer" } }] },
+        ])
+      );
+      const fn = createLlamaCppServerToolCallingStream({});
+      const events: any[] = [];
+      await fn(
+        { prompt: "p", tools: TOOLS, toolChoice: "auto" } as any,
+        model,
+        undefined as any,
+        (e: any) => events.push(e)
+      );
+      expect(events).toContainEqual({ type: "text-delta", port: "reasoning", textDelta: "hmm" });
+      const textDeltas = events.filter((e) => e.type === "text-delta" && e.port === "text");
+      expect(textDeltas.map((e) => e.textDelta)).toEqual(["answer"]);
+    });
+  });
 });
