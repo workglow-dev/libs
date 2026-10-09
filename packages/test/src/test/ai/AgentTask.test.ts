@@ -43,6 +43,8 @@ const MODEL: ModelConfig = {
 
 interface ScriptedRound {
   readonly text?: string;
+  /** Used by the host-runner script only: handed to `onReasoningDelta`. */
+  readonly reasoning?: string;
   /** Report the text on the finish event only, as a non-streaming provider does. */
   readonly withoutDeltas?: boolean;
   readonly calls?: ReadonlyArray<{
@@ -1133,8 +1135,13 @@ describe("AgentTask", () => {
         inputs.push(input);
         signals.push(context.signal);
         context.onProgress(40, "Loading model");
+        if (round.reasoning) context.onReasoningDelta(round.reasoning);
         if (round.text) context.onTextDelta(round.text);
-        return { text: round.text ?? "", toolCalls: [...(round.calls ?? [])] };
+        return {
+          text: round.text ?? "",
+          toolCalls: [...(round.calls ?? [])],
+          ...(round.reasoning ? { reasoning: round.reasoning } : {}),
+        };
       };
       return { runner, inputs, signals };
     }
@@ -1194,6 +1201,54 @@ describe("AgentTask", () => {
       ]);
       expect(JSON.stringify(inputs[1]!.messages?.[2])).toContain("HI");
       expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+    });
+
+    it("forwards the reasoning a runner reports on the turn's own port, apart from the text", async () => {
+      const { runner } = scriptRunner([
+        {
+          reasoning: "Need the tool.",
+          text: "Looking. ",
+          calls: [{ id: "c1", name: "AgentTest_EchoTask", input: { text: "hi" } }],
+        },
+        { reasoning: "Got it.", text: "It said HI." },
+      ]);
+      registry.registerInstance(AGENT_ROUND_RUNNER, runner);
+      const task = new AgentTask();
+      const events: Array<{ port: string; delta: string }> = [];
+      task.subscribe("stream_chunk", (event) => {
+        if (event.type === "text-delta") {
+          events.push({ port: event.port ?? "text", delta: event.textDelta });
+        }
+      });
+
+      const output = await task.run(
+        { model: MODEL, prompt: "echo hi", tools: [ECHO_TOOL], approval: "never" },
+        { registry }
+      );
+
+      expect(events.filter((e) => e.port === "reasoning").map((e) => e.delta)).toEqual([
+        "Need the tool.",
+        "\n\n",
+        "Got it.",
+      ]);
+      expect(events.filter((e) => e.port === "text").map((e) => e.delta)).toEqual([
+        "Looking. ",
+        "It said HI.",
+      ]);
+      expect(output.reasoning).toBe("Need the tool.\n\nGot it.");
+      expect(output.text).toBe("Looking. It said HI.");
+    });
+
+    it("leaves reasoning off the output when the runner reported none", async () => {
+      const { runner } = scriptRunner([{ text: "Plain." }]);
+      registry.registerInstance(AGENT_ROUND_RUNNER, runner);
+
+      const output = await new AgentTask().run(
+        { model: MODEL, prompt: "hi", tools: [ECHO_TOOL], approval: "never" },
+        { registry }
+      );
+
+      expect("reasoning" in output).toBe(false);
     });
 
     it("still answers every call the model made through the runner", async () => {

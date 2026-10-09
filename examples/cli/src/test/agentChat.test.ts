@@ -99,6 +99,21 @@ describe("agent chat loop", () => {
     expect(out()).toContain("Hello back.");
   });
 
+  it("prints the reply and not the reasoning streamed beside it", async () => {
+    const runFn: AiProviderRunFn = async (_input, _model, _signal, emit) => {
+      emit({ type: "text-delta", port: "reasoning", textDelta: "Pondering quietly." });
+      emit({ type: "text-delta", port: "text", textDelta: "Hello back." });
+      emit({ type: "finish", data: {} });
+    };
+    getAiProviderRegistry().registerRunFn(PROVIDER, { serves: ["tool-use"], runFn });
+    const { io, out } = scriptedIo(["hello", "/exit"]);
+
+    await runAgentChat(baseOptions, io);
+
+    expect(out()).toContain("Hello back.");
+    expect(out()).not.toContain("Pondering");
+  });
+
   it("ends at end of input as well as on /exit", async () => {
     scriptModel(["…"]);
     const { io } = scriptedIo(["hello", undefined as unknown as string]);

@@ -86,6 +86,9 @@ const DEFAULT_MAX_TOOL_RESULT_CHARS = 20_000;
  */
 const DEFAULT_MAX_ROUND_RETRIES = 2;
 
+/** Between two rounds' reasoning, which would otherwise run together into one thought. */
+const REASONING_ROUND_SEPARATOR = "\n\n";
+
 /**
  * Times a turn with an `outputSchema` reminds a model that replied in text to
  * submit instead. Some models narrate a final answer out of habit and submit
@@ -238,6 +241,12 @@ export const AgentOutputSchema = {
         "Everything the assistant said this turn, including what it narrated between tool calls",
       "x-stream": "append",
     },
+    reasoning: {
+      type: "string",
+      title: "Reasoning",
+      description: "The model's reasoning this turn, as the provider streamed it",
+      "x-stream": "append",
+    },
     messages: {
       type: "array",
       items: ChatMessageSchema,
@@ -320,6 +329,12 @@ export type AgentStopReason = "answered" | "submitted" | "budget" | "max-rounds"
 
 export type AgentTaskOutput = {
   text: string;
+  /**
+   * Each round's reasoning, a blank line between rounds that reasoned. Absent
+   * when no round returned any, so a turn against a model that does not think
+   * has the output it always had.
+   */
+  reasoning?: string | undefined;
   messages: ChatMessage[];
   rounds: number;
   stopReason: AgentStopReason;
@@ -632,11 +647,13 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
         data: { messages: [...messages], steps: [...steps] },
       }) as StreamEvent<AgentTaskOutput>;
     let text = "";
+    let reasoning = "";
     let rounds = 0;
     const finish = (stopReason: AgentStopReason): StreamEvent<AgentTaskOutput> => ({
       type: "finish",
       data: {
         text,
+        ...(reasoning.length > 0 ? { reasoning } : {}),
         messages,
         rounds,
         stopReason,
@@ -674,7 +691,8 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
             turnStart,
             maxHistoryChars,
             context,
-            input.roundTimeoutMs
+            input.roundTimeoutMs,
+            reasoning.length > 0
           )) {
             yield event;
           }
@@ -702,6 +720,10 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       // streams nothing, and counting deltas would report an empty answer while
       // `messages` carried the real one.
       text += output?.text ?? "";
+      const roundReasoning = output?.reasoning ?? "";
+      if (roundReasoning.length > 0) {
+        reasoning += (reasoning.length > 0 ? REASONING_ROUND_SEPARATOR : "") + roundReasoning;
+      }
 
       const record = (toolRecords: readonly AgentToolRecord[]): void => {
         steps.push({
@@ -899,7 +921,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
   }
 
   /**
-   * Runs one round's model call and re-yields its text as this task's own.
+   * Runs one round's model call and re-yields its text and reasoning as this task's own.
    *
    * Owned, so the round shows up under this task and inherits the registry,
    * the abort signal and the run's usage accounting. The child's `toolCalls`
@@ -917,7 +939,8 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     turnStart: number,
     maxHistoryChars: number,
     context: IExecuteContext,
-    timeoutMs: number | undefined
+    timeoutMs: number | undefined,
+    reasonedBefore: boolean
   ): AsyncIterable<StreamEvent<AgentTaskOutput>> {
     const roundInput: ToolCallingTaskInput = {
       model: input.model,
@@ -955,6 +978,8 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
           signal: AbortSignal.any([context.signal, roundAbort.signal]),
           onTextDelta: (delta) =>
             queue.push({ type: "text-delta", port: "text", textDelta: delta }),
+          onReasoningDelta: (delta) =>
+            queue.push({ type: "text-delta", port: "reasoning", textDelta: delta }),
           // Progress is advisory: a failed update must not surface as an
           // unhandled rejection, nor fail a round that is otherwise fine.
           onProgress: (progress, message) => {
@@ -967,8 +992,9 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       abandon = () => turn.abort();
       off = turn.subscribe("stream_chunk", (event: StreamEvent) => {
         if (event.type !== "text-delta") return;
-        if ((event.port ?? "text") !== "text") return;
-        queue.push({ type: "text-delta", port: "text", textDelta: event.textDelta });
+        const port = event.port ?? "text";
+        if (port !== "text" && port !== "reasoning") return;
+        queue.push({ type: "text-delta", port, textDelta: event.textDelta });
       });
       runRound = () => turn.run(roundInput);
     }
@@ -998,13 +1024,25 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     // reached the caller.
     run.catch(() => {});
     // Held until the attempt settles: the stream accumulates every delta it is
-    // handed into the task's text port and offers no way to take one back, so
-    // text forwarded from an attempt that then fails and is retried would be
-    // joined to the retry's. A failed attempt throws here and its text is dropped.
+    // handed into the task's text and reasoning ports and offers no way to take
+    // one back, so either forwarded from an attempt that then fails and is
+    // retried would be joined to the retry's. A failed attempt throws here and
+    // its text and reasoning are dropped together.
     const held: StreamEvent<AgentTaskOutput>[] = [];
     for await (const event of queue.iterable) held.push(event);
     await run;
-    for (const event of held) yield event;
+    let separated = !reasonedBefore;
+    for (const event of held) {
+      // Rounds are told apart on the wire exactly as in the settled output, and
+      // only once this round has something to say: a separator ahead of nothing
+      // would leave the streamed reasoning ending differently than the final one.
+      if (!separated && event.type === "text-delta" && event.port === "reasoning") {
+        if (event.textDelta.length === 0) continue;
+        yield { type: "text-delta", port: "reasoning", textDelta: REASONING_ROUND_SEPARATOR };
+        separated = true;
+      }
+      yield event;
+    }
   }
 
   /**

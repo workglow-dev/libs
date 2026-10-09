@@ -66,6 +66,48 @@ describe("projectRunEvents", () => {
   });
 });
 
+const STREAMED_PORTS = {
+  type: "object",
+  properties: {
+    text: { type: "string", "x-stream": "append" },
+    reasoning: { type: "string", "x-stream": "append" },
+  },
+  additionalProperties: false,
+} as const satisfies DataPortSchema;
+
+/** Streams a reply beside its reasoning, as `AgentTask` does. */
+class ThinkingTask extends Task<Record<string, never>, { text: string; reasoning: string }> {
+  static override readonly type = "ThinkingTask";
+  static override readonly title = "Thinking task";
+  static override readonly category = "Test";
+  static override readonly cacheable = false;
+  static override inputSchema(): DataPortSchema {
+    return EMPTY;
+  }
+  static override outputSchema(): DataPortSchema {
+    return STREAMED_PORTS;
+  }
+  async *executeStream() {
+    yield { type: "text-delta" as const, port: "reasoning", textDelta: "Let me think." };
+    yield { type: "text-delta" as const, port: "text", textDelta: "Hello." };
+    yield { type: "finish" as const, data: {} as { text: string; reasoning: string } };
+  }
+}
+
+describe("projectRunEvents streamed text", () => {
+  it("reports a task's text, not the reasoning it streams beside it", async () => {
+    const { events, sink } = collector();
+    const workflow = new Workflow();
+    workflow.pipe(new ThinkingTask() as never);
+    const stop = projectRunEvents(workflow.graph, sink);
+    await workflow.run({});
+    stop();
+
+    const deltas = events.flatMap((e) => (e.k === "text" ? [e.delta] : []));
+    expect(deltas).toEqual(["Hello."]);
+  });
+});
+
 const ITEM_SCHEMA = {
   type: "object",
   properties: { item: { type: "number" } },

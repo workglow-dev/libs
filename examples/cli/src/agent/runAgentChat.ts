@@ -198,7 +198,11 @@ async function runTurn(
 
   let phase: string | undefined;
   const offStream = task.subscribe("stream_chunk", (event: StreamEvent) => {
-    if (event.type === "text-delta") transcript.delta(event.textDelta);
+    // The turn streams its reasoning beside its reply on its own port; printed
+    // here it would read as part of the answer.
+    if (event.type === "text-delta" && (event.port ?? "text") === "text") {
+      transcript.delta(event.textDelta);
+    }
   });
   const offProgress = task.subscribe("progress", (_progress, message) => {
     // Only the tool lines are worth a row: "Thinking" is what the blank space

@@ -119,6 +119,9 @@ export function projectRunEvents(
     });
   const onChunk = (taskId: TaskIdType, event: StreamEvent): void => {
     if (event.type === "text-delta") {
+      // A task's reasoning streams beside its reply on its own port; folded into
+      // the row's text it would read as part of the answer.
+      if ((event.port ?? "text") !== "text") return;
       const delta = (event as { textDelta?: string; text?: string }).textDelta ?? "";
       if (delta) sink.emit({ k: "text", id: String(taskId), delta });
     } else if (event.type === "object-delta" && (event as { port?: string }).port === "messages") {
