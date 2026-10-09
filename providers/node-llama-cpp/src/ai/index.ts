@@ -8,6 +8,7 @@
 
 export * from "./common/LlamaCpp_Constants";
 export * from "./common/LlamaCpp_ModelSchema";
+export { llamaCppEffortPolicy } from "./common/LlamaCpp_EffortPolicy";
 // Mutable runtime state (e.g. llamaCppSessions) is intentionally NOT re-exported
 // here. The `ai-provider` and `ai-runtime` entry points are bundled
 // separately, so re-exporting from both creates two distinct module instances

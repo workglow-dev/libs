@@ -24,6 +24,7 @@ import {
   renderLlamaCppPrefixChatHistory,
   renderLlamaCppPrefixFunctions,
 } from "./LlamaCpp_CacheCheckpoint";
+import { llamaCppThoughtBudget } from "./LlamaCpp_EffortPolicy";
 import type { LlamaCppModelConfig } from "./LlamaCpp_ModelSchema";
 import type { LlamaCppSessionState } from "./LlamaCpp_Runtime";
 import {
@@ -111,7 +112,16 @@ function messagesToPureChatHistory(
       const response: any[] = [];
 
       for (const block of msg.content) {
-        if (block.type === "text" && block.text) {
+        if (block.type === "reasoning") {
+          if (block.text) {
+            response.push({
+              type: "segment",
+              segmentType: "thought",
+              text: block.text,
+              ended: true,
+            });
+          }
+        } else if (block.type === "text" && block.text) {
           response.push(block.text);
         } else if (block.type === "tool_use") {
           // Create functionCall entry — result will be filled by subsequent tool message
@@ -156,12 +166,19 @@ function messagesToPureChatHistory(
             item.result === undefined
         );
         if (fnCall) {
-          // Flatten nested text blocks from tool_result content into a string
-          let resultText = "";
+          // The result is a string, so an image cannot ride along. Say it was
+          // dropped rather than inlining its base64 into the prompt.
+          const lines: string[] = [];
+          const texts = block.content.flatMap((inner) =>
+            inner.type === "text" && inner.text ? [inner.text] : []
+          );
+          if (texts.length > 0) lines.push(texts.join("\n"));
           for (const inner of block.content) {
-            if (inner.type === "text") resultText += inner.text;
+            if (inner.type === "image") {
+              lines.push(`[${inner.mimeType} image returned; this model reads text only]`);
+            }
           }
-          fnCall.result = resultText || JSON.stringify(block.content);
+          fnCall.result = lines.join("\n");
         }
       }
       continue;
@@ -246,6 +263,10 @@ function llamaCppChatGenerateOptions(
   } else if (toolChoiceForcesToolCall(input.toolChoice)) {
     opts.temperature = 0.2;
   }
+  const thoughtTokens = llamaCppThoughtBudget(model);
+  if (thoughtTokens !== undefined) {
+    opts.budgets = { thoughtTokens };
+  }
   return opts;
 }
 
@@ -263,18 +284,41 @@ function extractNativeFunctionCalls(
   }));
 }
 
+interface LlamaResponseChunk {
+  readonly type?: string | undefined;
+  readonly segmentType?: string | undefined;
+  readonly text: string;
+}
+
 /**
- * Drives an async generation call that pushes text chunks via `onTextChunk`,
- * yielding `text-delta` events (and provisional `usage` snapshots) as they
- * arrive. Returns accumulated text and the generation result (if any) once
- * complete.
+ * Decides which output port a streamed chunk belongs to. `onTextChunk` leaves
+ * thought segments out entirely, so a run-fn that wants the model's thinking
+ * has to read `onResponseChunk` and sort the chunks itself: a thought goes to
+ * `reasoning`, the main response to `text`, and any other segment (a comment
+ * the model wrote about its own turn) is not part of the answer at all.
+ */
+export function routeLlamaResponseChunk(
+  chunk: LlamaResponseChunk
+): { readonly port: "text" | "reasoning"; readonly text: string } | undefined {
+  if (chunk.type === undefined) return { port: "text", text: chunk.text };
+  if (chunk.type === "segment" && chunk.segmentType === "thought") {
+    return { port: "reasoning", text: chunk.text };
+  }
+  return undefined;
+}
+
+/**
+ * Drives an async generation call that pushes response chunks via
+ * `onResponseChunk`, yielding `text-delta` events (and provisional `usage`
+ * snapshots) as they arrive. Returns the answer text (thoughts excluded) and
+ * the generation result (if any) once complete.
  */
 async function* streamTextChunks<T>(
-  startGeneration: (onTextChunk: (chunk: string) => void) => Promise<T>,
+  startGeneration: (onResponseChunk: (chunk: LlamaResponseChunk) => void) => Promise<T>,
   signal: AbortSignal,
   options: { readonly promptText?: string | undefined } = {}
 ): AsyncGenerator<StreamEvent<ToolCallingTaskOutput>, { text: string; result: T | undefined }> {
-  const queue: string[] = [];
+  const queue: { readonly port: "text" | "reasoning"; readonly text: string }[] = [];
   const pendingUsage: StreamEvent<ToolCallingTaskOutput>[] = [];
   let isComplete = false;
   let completionError: unknown;
@@ -295,9 +339,11 @@ async function* streamTextChunks<T>(
     provisionalUsage.onPrompt(options.promptText);
   }
 
-  const generationPromise = startGeneration((chunk: string) => {
-    queue.push(chunk);
-    provisionalUsage.onText(chunk);
+  const generationPromise = startGeneration((chunk) => {
+    const routed = routeLlamaResponseChunk(chunk);
+    if (routed === undefined || routed.text === "") return;
+    queue.push(routed);
+    provisionalUsage.onText(routed.text);
     notifyWaiter();
   })
     .then((res) => {
@@ -317,8 +363,8 @@ async function* streamTextChunks<T>(
     }
     while (queue.length > 0) {
       const chunk = queue.shift()!;
-      accumulatedText += chunk;
-      yield { type: "text-delta", port: "text", textDelta: chunk };
+      if (chunk.port === "text") accumulatedText += chunk.text;
+      yield { type: "text-delta", port: chunk.port, textDelta: chunk.text };
     }
   };
 
@@ -377,13 +423,13 @@ async function generateToolResponse(
       .join("\n");
 
     gen = streamTextChunks(
-      (onTextChunk) =>
+      (onResponseChunk) =>
         llamaChat.generateResponse(chatHistory, {
           signal,
           ...llamaCppChatGenerateOptions(input, model),
           functions,
           ...(toolChoiceForcesToolCall(input.toolChoice) && { documentFunctionParams: true }),
-          onTextChunk,
+          onResponseChunk,
         }),
       signal,
       { promptText }

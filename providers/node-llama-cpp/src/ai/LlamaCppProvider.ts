@@ -9,6 +9,7 @@ import type {
   AiProviderRunFnRegistration,
   Capability,
   ModelConfig,
+  ModelEffortPolicy,
   ModelRecord,
 } from "@workglow/ai/worker";
 import { AiProvider } from "@workglow/ai/worker";
@@ -17,6 +18,7 @@ import {
   llamaCppWorkerRunFnSpecs,
 } from "./common/LlamaCpp_Capabilities";
 import { LOCAL_LLAMACPP } from "./common/LlamaCpp_Constants";
+import { llamaCppEffortPolicy } from "./common/LlamaCpp_EffortPolicy";
 import type { LlamaCppModelConfig } from "./common/LlamaCpp_ModelSchema";
 import { deleteLlamaCppSession } from "./common/LlamaCpp_Runtime";
 
@@ -37,6 +39,10 @@ export class LlamaCppProvider extends AiProvider<LlamaCppModelConfig> {
 
   override inferCapabilities(model: ModelRecord): readonly Capability[] {
     return inferLlamaCppCapabilities(model);
+  }
+
+  override effortPolicy(model: LlamaCppModelConfig): ModelEffortPolicy | undefined {
+    return llamaCppEffortPolicy(model);
   }
 
   protected override workerRunFnSpecs(): readonly { serves: readonly Capability[] }[] {

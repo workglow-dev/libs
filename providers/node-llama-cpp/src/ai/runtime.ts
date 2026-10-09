@@ -18,6 +18,7 @@ export {
   renderLlamaCppPrefixChatHistory,
   renderLlamaCppPrefixFunctions,
 } from "./common/LlamaCpp_CacheCheckpoint";
+export { llamaCppEffortPolicy, llamaCppThoughtBudget } from "./common/LlamaCpp_EffortPolicy";
 export { LlamaCpp_SessionDispose } from "./common/LlamaCpp_SessionDispose";
 export * from "./registerLlamaCppInline";
 export * from "./registerLlamaCppWorker";
