@@ -20,7 +20,25 @@ import { filterValidToolCalls, toOpenAIMessages } from "@workglow/ai/worker";
 import { getClient, getModelName } from "./OpenRouter_Client";
 import type { OpenRouterModelConfig } from "./OpenRouter_ModelSchema";
 import { buildOpenRouterExtras } from "./OpenRouter_RequestParams";
+import {
+  createReasoningDetailAccumulator,
+  mergeReasoningDetailDelta,
+  withReasoningDetails,
+} from "./OpenRouter_ReasoningDetails";
+import type { ReasoningDetailAccumulator } from "./OpenRouter_ReasoningDetails";
 import { mapOpenRouterUsage } from "./OpenRouter_Usage";
+
+/** Passes the stream through while collecting each chunk's `reasoning_details`. */
+async function* tapReasoningDetails(
+  stream: AsyncIterable<any>,
+  acc: ReasoningDetailAccumulator
+): AsyncGenerator<any> {
+  for await (const chunk of stream) {
+    const details = chunk?.choices?.[0]?.delta?.reasoning_details;
+    if (Array.isArray(details)) mergeReasoningDetailDelta(acc, details);
+    yield chunk;
+  }
+}
 
 /**
  * Streaming run-fn for `["text.generation", "tool-use"]`. Forwards deltas via
@@ -36,7 +54,12 @@ export const OpenRouter_ToolCalling_Stream: AiProviderRunFn<
   const modelName = getModelName(model);
 
   const tools = buildOpenAITools(input.tools);
-  const messages = toOpenAIMessages(input, { toolImagesInUserMessage: true });
+  // The details are readable only by the model that wrote them, so the native
+  // turn is keyed by model and another model gets the rebuilt turn.
+  const nativeKey = `openrouter:${modelName}`;
+  const messages = withReasoningDetails(
+    toOpenAIMessages(input, { toolImagesInUserMessage: true, nativeTurnProvider: nativeKey })
+  );
   const toolChoice = mapOpenAIToolChoice(input.toolChoice, true);
 
   const stream = await client.chat.completions.create(
@@ -54,8 +77,9 @@ export const OpenRouter_ToolCalling_Stream: AiProviderRunFn<
     { signal }
   );
 
+  const details = createReasoningDetailAccumulator();
   const usage = await accumulateOpenAIChatStream(
-    stream,
+    tapReasoningDetails(stream, details),
     (event) => {
       if (event.type === "object-delta" && event.port === "toolCalls") {
         const validated = filterValidToolCalls(event.objectDelta as ToolCalls, input.tools);
@@ -74,5 +98,13 @@ export const OpenRouter_ToolCalling_Stream: AiProviderRunFn<
         .join("\n"),
     }
   );
+  const items = details.items();
+  if (items !== undefined) {
+    emit({
+      type: "object-delta",
+      port: "nativeTurn",
+      objectDelta: { provider: nativeKey, payload: JSON.stringify(items) },
+    });
+  }
   emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput, usage });
 };
