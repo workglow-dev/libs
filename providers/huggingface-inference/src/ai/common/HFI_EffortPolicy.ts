@@ -20,7 +20,7 @@ const NON_TEXT = [
   /(?:^|\/)(?:bge|gte|e5)-/i,
   /rerank/i,
   /stable-diffusion|flux|sdxl/i,
-  /whisper|tts/i,
+  /(?:^|[/-])(?:whisper|tts)/i,
 ];
 
 /**

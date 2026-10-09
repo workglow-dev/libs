@@ -28,6 +28,15 @@ describe("Hugging Face Inference effort", () => {
     expect(hfiReasoningParams(model("high", "BAAI/bge-small-en-v1.5"))).toEqual({});
   });
 
+  it("excludes whisper and tts ids by name, not by substring", () => {
+    expect(hfiEffortPolicy(model(undefined, "openai/whisper-large-v3")).supported).toEqual([]);
+    expect(hfiEffortPolicy(model(undefined, "hexgrad/tts-1")).supported).toEqual([]);
+    expect(hfiEffortPolicy(model(undefined, "org/matts-chat")).supported).toContain("high");
+    expect(hfiReasoningParams(model("high", "org/matts-chat"))).toEqual({
+      reasoning_effort: "high",
+    });
+  });
+
   it("is what the provider reports for a model", () => {
     const provider = new _testOnly.HfInferenceQueuedProvider() as any;
     expect(provider.effortPolicy(model("high"))?.supported).toContain("high");
