@@ -217,6 +217,19 @@ describe("ollamaThinkParam", () => {
     expect(ollamaThinkParam(model("deepseek-r1:7b", "high"))).toEqual({ think: true });
   });
 
+  it("sends nothing for qwen3 variants that cannot think", () => {
+    expect(ollamaThinkParam(model("qwen3-coder:30b", "high"))).toEqual({});
+    expect(ollamaThinkParam(model("qwen3-embedding:8b", "high"))).toEqual({});
+    expect(ollamaThinkParam(model("qwen3:30b-a3b-instruct-2507", "high"))).toEqual({});
+    expect(ollamaEffortPolicy(model("qwen3-coder:30b")).supported).toEqual([]);
+    expect(ollamaEffortPolicy(model("qwen3:30b-a3b-thinking-2507")).supported).toContain("high");
+    expect(ollamaThinkParam(model("qwen3:8b", "high"))).toEqual({ think: true });
+  });
+
+  it("reads the model name the way the policy does, trimmed", () => {
+    expect(ollamaThinkParam(model("  gpt-oss:20b ", "high"))).toEqual({ think: "high" });
+  });
+
   it("sends nothing for a model that cannot think, or when no effort is set", () => {
     expect(ollamaThinkParam(model("llama3.2", "high"))).toEqual({});
     expect(ollamaThinkParam(model("qwen3:8b"))).toEqual({});

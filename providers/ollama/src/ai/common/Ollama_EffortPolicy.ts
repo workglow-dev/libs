@@ -9,15 +9,26 @@ import {
   EFFORT_POLICY_ALL,
   EFFORT_POLICY_NONE,
   makeEffortPolicy,
+  readModelName,
   resolveEnabledEffort,
 } from "@workglow/ai/worker";
 import type { OllamaModelConfig } from "./Ollama_ModelSchema";
 
 const GPT_OSS = /^gpt-oss/i;
 
+/**
+ * The qwen3 tags that cannot think: the coder and embedding models, and the
+ * `-instruct` releases. Ollama answers `think: true` on them with HTTP 400.
+ */
+const QWEN3_NON_THINKING = /^qwen3(?:-(?:coder|embedding)|.*instruct)/i;
+
+function isThinkingQwen3(id: string): boolean {
+  return /^qwen3/i.test(id) && !QWEN3_NON_THINKING.test(id);
+}
+
 /** Families Ollama marks as thinking-capable; they take `think: true | false`. */
 const THINKING = [
-  /^qwen3/i,
+  isThinkingQwen3,
   /^deepseek-r1/i,
   /^deepseek-v3\.[1-9]/i,
   /^magistral/i,
@@ -68,7 +79,7 @@ export function ollamaThinkParam(model: OllamaModelConfig | undefined): {
 } {
   const effort = resolveEnabledEffort(model, ollamaEffortPolicy(model));
   if (effort === undefined) return {};
-  const name = model?.provider_config?.model_name ?? "";
+  const name = readModelName(model);
   if (GPT_OSS.test(name)) {
     const level = gptOssLevel(effort);
     return level === undefined ? {} : { think: level };
