@@ -163,7 +163,9 @@ export function toOpenAIMessages(
         }));
       const entry: OpenAICompatMessage = {
         role: "assistant",
-        content: textParts.length > 0 ? textParts : null,
+        // A turn with neither text nor calls (the model only reasoned) still needs a
+        // content string: chat-completions APIs reject `null` without `tool_calls`.
+        content: textParts.length > 0 ? textParts : toolCalls.length > 0 ? null : "",
       };
       if (toolCalls.length > 0) {
         entry.tool_calls = toolCalls;
@@ -198,8 +200,11 @@ export function toOpenAIMessages(
       for (const block of msg.content) {
         if (block.type !== "tool_result") continue;
         let content: string | Array<{ type: string; [key: string]: unknown }>;
-        if (block.content.length === 1 && block.content[0].type === "text") {
-          content = block.content[0].text;
+        const onlyText = block.content.every((inner) => inner.type === "text");
+        if (onlyText) {
+          // Several text blocks, or none, still become one string: some chat-completions
+          // APIs reject a parts array in a tool message.
+          content = block.content.map((inner) => (inner as { text: string }).text).join("\n");
         } else if (options.toolImagesInUserMessage) {
           const text = block.content
             .filter((inner) => inner.type === "text")
@@ -302,8 +307,8 @@ export interface TextFlatMessage {
 
 /**
  * Converts ToolCallingTaskInput to a simplified text-only message format.
- * Used by providers that don't natively support structured multi-turn
- * tool calling (Ollama, HuggingFace Transformers).
+ * Used for single-turn prompts by providers whose template takes only role and
+ * text. A tool-calling loop must not use it:
  *
  * NOTE: This format discards tool_use blocks from assistant messages.
  * The LLM will not see what tools it previously called. Multi-turn tool

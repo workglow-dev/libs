@@ -130,7 +130,7 @@ describe("toOpenAIMessages", () => {
     });
   });
 
-  test("should set content to null for empty assistant text", () => {
+  test("should send empty assistant text as an empty string when there are no tool calls", () => {
     const input = makeInput({
       messages: [
         { role: "user", content: [{ type: "text", text: "Go" }] },
@@ -139,7 +139,7 @@ describe("toOpenAIMessages", () => {
     });
     const msgs = toOpenAIMessages(input);
 
-    expect(msgs[1].content).toBeNull();
+    expect(msgs[1].content).toBe("");
   });
 
   test("should convert user message with image content blocks to OpenAI format", () => {
@@ -221,6 +221,51 @@ describe("toOpenAIMessages", () => {
     expect(parts).toHaveLength(2);
     expect(parts[0]).toEqual({ type: "text", text: "Plain text" });
     expect(parts[1].type).toBe("image_url");
+  });
+
+  test("sends an empty tool result as an empty string, not an empty parts array", () => {
+    const out = toOpenAIMessages(
+      makeInput({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "go" }] },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "c1", name: "t", input: {} }],
+          },
+          { role: "tool", content: [{ type: "tool_result", tool_use_id: "c1", content: [] }] },
+        ] as any,
+      })
+    );
+    expect(out.at(-1)).toEqual({ role: "tool", content: "", tool_call_id: "c1" });
+  });
+
+  test("sends a reasoning-only assistant turn with empty-string content", () => {
+    const out = toOpenAIMessages(
+      makeInput({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "go" }] },
+          { role: "assistant", content: [{ type: "reasoning", text: "thinking" }] },
+          { role: "user", content: [{ type: "text", text: "again" }] },
+        ] as any,
+      })
+    );
+    expect(out[1]).toEqual({ role: "assistant", content: "" });
+  });
+
+  test("keeps null content for an assistant turn that only calls tools", () => {
+    const out = toOpenAIMessages(
+      makeInput({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "go" }] },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "c1", name: "t", input: {} }],
+          },
+        ] as any,
+      })
+    );
+    expect(out[1]!.content).toBeNull();
+    expect(out[1]!.tool_calls).toHaveLength(1);
   });
 
   describe("reasoning and tool images", () => {
