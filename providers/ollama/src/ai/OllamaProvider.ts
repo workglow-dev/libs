@@ -5,10 +5,11 @@
  */
 
 import { createCloudProviderClass } from "@workglow/ai/provider-utils";
-import type { Capability, ModelRecord } from "@workglow/ai/worker";
+import type { Capability, ModelEffortPolicy, ModelRecord } from "@workglow/ai/worker";
 import { AiProvider } from "@workglow/ai/worker";
 import { inferOllamaCapabilities, ollamaWorkerRunFnSpecs } from "./common/Ollama_Capabilities";
 import { OLLAMA } from "./common/Ollama_Constants";
+import { ollamaEffortPolicy } from "./common/Ollama_EffortPolicy";
 import type { OllamaModelConfig } from "./common/Ollama_ModelSchema";
 
 /**
@@ -25,6 +26,10 @@ export class OllamaProvider extends createCloudProviderClass<OllamaModelConfig>(
 }) {
   override inferCapabilities(model: ModelRecord): readonly Capability[] {
     return inferOllamaCapabilities(model);
+  }
+
+  override effortPolicy(model: OllamaModelConfig): ModelEffortPolicy | undefined {
+    return ollamaEffortPolicy(model);
   }
 
   protected override workerRunFnSpecs(): readonly { serves: readonly Capability[] }[] {

@@ -5,7 +5,6 @@
  */
 
 import type { AiProviderRunFnRegistration } from "@workglow/ai";
-import { toTextFlatMessages } from "@workglow/ai/worker";
 import {
   OLLAMA_JSON_MODE,
   OLLAMA_MODEL_INFO,
@@ -17,6 +16,7 @@ import {
   OLLAMA_TOOL_USE,
 } from "./Ollama_CapabilitySets";
 import { getClient } from "./Ollama_Client";
+import { toOllamaMessages } from "./Ollama_Messages";
 import { createOllamaModelInfoStream } from "./Ollama_ModelInfo";
 import type { OllamaModelConfig } from "./Ollama_ModelSchema";
 import { createOllamaModelSearchStream } from "./Ollama_ModelSearch";
@@ -32,10 +32,7 @@ export const Ollama_StructuredGeneration_Stream = createOllamaStructuredGenerati
 export const Ollama_TextRewriter_Stream = createOllamaTextRewriterStream(getClient);
 export const Ollama_TextSummary_Stream = createOllamaTextSummaryStream(getClient);
 export const Ollama_TextEmbedding_Stream = createOllamaTextEmbeddingStream(getClient);
-export const Ollama_ToolCalling_Stream = createOllamaToolCallingStream(
-  getClient,
-  toTextFlatMessages
-);
+export const Ollama_ToolCalling_Stream = createOllamaToolCallingStream(getClient, toOllamaMessages);
 export const Ollama_ModelInfo_Stream = createOllamaModelInfoStream(getClient);
 export const Ollama_ModelSearch_Stream = createOllamaModelSearchStream(getClient);
 

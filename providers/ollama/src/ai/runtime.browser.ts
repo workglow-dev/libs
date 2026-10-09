@@ -14,5 +14,6 @@
 // organize-imports-ignore
 
 export * from "./common/Ollama_Client.browser";
+export * from "./common/Ollama_EffortPolicy";
 export * from "./registerOllamaInline.browser";
 export * from "./registerOllamaWorker.browser";
