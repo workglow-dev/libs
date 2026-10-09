@@ -339,7 +339,36 @@ describe("buildGeminiContents tool results", () => {
     expect(contents.at(-1).parts[0].functionResponse.response).toEqual({ error: "boom" });
   });
 
-  it("returns images in functionResponse.parts", () => {
+  it("reports an is_error result whose text is JSON under `error`, unparsed", () => {
+    const contents = buildGeminiContents(
+      [call("c1", "t"), result("c1", [{ type: "text", text: '{"code":1}' }], true)] as any,
+      "x"
+    );
+    expect(contents.at(-1).parts[0].functionResponse.response).toEqual({
+      error: '{"code":1}',
+    });
+  });
+
+  it("returns images in functionResponse.parts when the model takes them there", () => {
+    const contents = buildGeminiContents(
+      [
+        call("c1", "t"),
+        result("c1", [
+          { type: "text", text: "here" },
+          { type: "image", mimeType: "image/png", data: "AAAA" },
+        ]),
+      ] as any,
+      "x",
+      { multimodalFunctionResponses: true }
+    );
+    expect(contents.at(-1).parts[0].functionResponse).toEqual({
+      name: "t",
+      response: { result: "here" },
+      parts: [{ inlineData: { mimeType: "image/png", data: "AAAA" } }],
+    });
+  });
+
+  it("sends images as sibling inlineData parts after the function responses by default", () => {
     const contents = buildGeminiContents(
       [
         call("c1", "t"),
@@ -350,12 +379,56 @@ describe("buildGeminiContents tool results", () => {
       ] as any,
       "x"
     );
-    expect(contents.at(-1).parts[0].functionResponse).toEqual({
-      name: "t",
-      response: { result: "here" },
-      parts: [{ inlineData: { mimeType: "image/png", data: "AAAA" } }],
-    });
+    expect(contents.at(-1).parts).toEqual([
+      { functionResponse: { name: "t", response: { result: "here" } } },
+      { inlineData: { mimeType: "image/png", data: "AAAA" } },
+    ]);
   });
+
+  it("places every image of a tool message after all of its function responses", () => {
+    const toolMessage = {
+      role: "tool",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "c1",
+          content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+        },
+        {
+          type: "tool_result",
+          tool_use_id: "c2",
+          content: [{ type: "text", text: "two" }],
+        },
+      ],
+    };
+    const contents = buildGeminiContents(
+      [call("c1", "a"), call("c2", "b"), toolMessage] as any,
+      "x"
+    );
+    expect(contents.at(-1).parts).toEqual([
+      { functionResponse: { name: "a", response: { result: "" } } },
+      { functionResponse: { name: "b", response: { result: "two" } } },
+      { inlineData: { mimeType: "image/png", data: "AAAA" } },
+    ]);
+  });
+});
+
+describe("geminiSupportsMultimodalFunctionResponses", () => {
+  const { geminiSupportsMultimodalFunctionResponses } = _testOnly;
+
+  it.each(["gemini-3-flash-preview", "gemini-3.5-flash", "gemini-10-pro"])(
+    "accepts multimodal function responses for %s",
+    (name) => {
+      expect(geminiSupportsMultimodalFunctionResponses(name)).toBe(true);
+    }
+  );
+
+  it.each(["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"])(
+    "rejects multimodal function responses for %s",
+    (name) => {
+      expect(geminiSupportsMultimodalFunctionResponses(name)).toBe(false);
+    }
+  );
 });
 
 describe("Gemini tool calling thought summaries", () => {

@@ -118,6 +118,15 @@ export function getModelName(model: GeminiModelConfig | undefined): string {
 }
 
 /**
+ * Whether the model accepts images inside `functionResponse.parts`. Only the
+ * Gemini 3 series and later do; older ids answer such a request with a 400.
+ * Aliases such as `gemini-flash-latest` do not match and take the portable shape.
+ */
+export function geminiSupportsMultimodalFunctionResponses(modelName: string): boolean {
+  return /^gemini-(?:[3-9]|\d{2,})(?:[.-]|$)/i.test(modelName);
+}
+
+/**
  * Reasoning-token budget for thinking models. Native
  * `provider_config.thinking_budget` wins; otherwise map `model.effort`.
  * Returns `undefined` when neither is set so callers can omit thinkingConfig.

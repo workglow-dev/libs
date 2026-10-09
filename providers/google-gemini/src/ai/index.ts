@@ -19,7 +19,11 @@ import {
   generateGeminiStreamWithCacheFallback,
   isGeminiCachedContentNotFoundError,
 } from "./common/Gemini_CachedContentFallback";
-import { _testOnly as clientTestOnly, resolveThinkingConfig } from "./common/Gemini_Client";
+import {
+  _testOnly as clientTestOnly,
+  geminiSupportsMultimodalFunctionResponses,
+  resolveThinkingConfig,
+} from "./common/Gemini_Client";
 import {
   _cacheStoreTestOnly,
   getGeminiCachedContent,
@@ -42,6 +46,7 @@ export const _testOnly = {
   GEMINI_RUN_FN_SPECS,
   GEMINI_RUN_FNS,
   buildGeminiContents,
+  geminiSupportsMultimodalFunctionResponses,
   geminiRefusalCategory,
   emitGeminiRefusal,
   setGeminiClientForTests: clientTestOnly.setGeminiClientForTests,

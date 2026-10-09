@@ -24,6 +24,7 @@ import { generateGeminiStreamWithCacheFallback } from "./Gemini_CachedContentFal
 import { evictIfStaleGeminiCachedContent, getGeminiCachedContent } from "./Gemini_CacheStore";
 import {
   createGeminiClient,
+  geminiSupportsMultimodalFunctionResponses,
   getGeminiSeed,
   getModelName,
   resolveThinkingConfig,
@@ -32,9 +33,19 @@ import type { GeminiModelConfig } from "./Gemini_ModelSchema";
 import { emitGeminiRefusal, geminiRefusalCategory } from "./Gemini_Refusal";
 import { mapGeminiUsage } from "./Gemini_Usage";
 
+export interface IGeminiContentsOptions {
+  /**
+   * Whether the model takes images inside `functionResponse.parts`. When it does
+   * not, a tool result's images follow that tool message's function responses as
+   * sibling `inlineData` parts instead.
+   */
+  readonly multimodalFunctionResponses?: boolean | undefined;
+}
+
 export function buildGeminiContents(
   messages: ReadonlyArray<ChatMessage> | undefined,
-  prompt: unknown
+  prompt: unknown,
+  options: IGeminiContentsOptions = {}
 ): any[] {
   if (!messages || messages.length === 0) {
     return [{ role: "user", parts: [{ text: prompt }] }];
@@ -84,6 +95,7 @@ export function buildGeminiContents(
       if (parts.length > 0) contents.push({ role: "model", parts });
     } else if (msg.role === "tool") {
       const parts: any[] = [];
+      const siblingImageParts: any[] = [];
       for (const block of msg.content) {
         if (block.type !== "tool_result") continue;
         const name = toolUseNames.get(block.tool_use_id) ?? "unknown";
@@ -111,13 +123,19 @@ export function buildGeminiContents(
               : { result: parsed };
         }
         const functionResponse: Record<string, unknown> = { name, response };
-        if (images.length > 0) {
-          functionResponse.parts = images.map((image) => ({
-            inlineData: { mimeType: image.mimeType, data: image.data },
-          }));
+        const imageParts = images.map((image) => ({
+          inlineData: { mimeType: image.mimeType, data: image.data },
+        }));
+        if (imageParts.length > 0) {
+          if (options.multimodalFunctionResponses === true) {
+            functionResponse.parts = imageParts;
+          } else {
+            siblingImageParts.push(...imageParts);
+          }
         }
         parts.push({ functionResponse });
       }
+      parts.push(...siblingImageParts);
       if (parts.length > 0) contents.push({ role: "user", parts });
     }
   }
@@ -152,6 +170,10 @@ export const Gemini_ToolCalling_Stream: AiProviderRunFn<
   GeminiModelConfig
 > = async (input, model, signal, emit, _outputSchema, sessionContext) => {
   const ai = await createGeminiClient(model);
+
+  const contentOptions: IGeminiContentsOptions = {
+    multimodalFunctionResponses: geminiSupportsMultimodalFunctionResponses(getModelName(model)),
+  };
 
   const functionDeclarations = buildGeminiFunctionDeclarations(input.tools);
 
@@ -215,7 +237,7 @@ export const Gemini_ToolCalling_Stream: AiProviderRunFn<
   /** Build the tail-only request that references the CachedContent handle. */
   const buildCachedRequest = (): Record<string, unknown> => ({
     model: getModelName(model),
-    contents: buildGeminiContents(input.messages, input.prompt),
+    contents: buildGeminiContents(input.messages, input.prompt, contentOptions),
     config: {
       abortSignal: signal ?? undefined,
       systemInstruction: undefined,
@@ -230,8 +252,8 @@ export const Gemini_ToolCalling_Stream: AiProviderRunFn<
   /** Build the full inline-replay request (prefix messages + tail + tools). */
   const buildInlineReplayRequest = (): Record<string, unknown> => {
     const contents = prefix
-      ? buildGeminiPrefixedContents(prefix, input.messages, input.prompt)
-      : buildGeminiContents(input.messages, input.prompt);
+      ? buildGeminiPrefixedContents(prefix, input.messages, input.prompt, contentOptions)
+      : buildGeminiContents(input.messages, input.prompt, contentOptions);
     const systemInstruction = input.systemPrompt || (prefix ? prefix.systemPrompt : undefined);
     return {
       model: getModelName(model),
