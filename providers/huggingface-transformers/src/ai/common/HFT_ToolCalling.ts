@@ -16,6 +16,7 @@ import type {
 } from "@workglow/ai";
 import {
   adaptParserResult,
+  createThinkTagFilter,
   createToolCallMarkupFilter,
   forcedToolSelection,
   getAvailableParsers,
@@ -156,7 +157,9 @@ function resolveHFTToolsAndMessages(
  * Unlike `toTextFlatMessages` (which flattens everything to `{role, content}`
  * strings), this preserves tool_calls on assistant messages and the tool name
  * on tool-result messages — both required by HFT chat templates that support
- * tool calling.
+ * tool calling. An assistant turn's reasoning rides as `reasoning_content`,
+ * which Qwen3-style templates read to keep the thinking of the current tool
+ * loop in the rendered history; templates that do not know it ignore it.
  */
 export function buildHFTMessages(
   messages: ReadonlyArray<ChatMessage> | undefined,
@@ -178,6 +181,9 @@ export function buildHFTMessages(
     out.push({ role: "user", content: extractPromptText(prompt) });
     return out;
   }
+  // A tool_result names only the call it answers, so the tool's name is
+  // resolved from the tool_use that raised it (most recent id wins).
+  const toolNames = new Map<string, string>();
   for (const msg of messages) {
     if (msg.role === "user") {
       const text = msg.content
@@ -201,7 +207,13 @@ export function buildHFTMessages(
           };
           return { id: tu.id, name: tu.name, arguments: tu.input };
         });
+      for (const call of toolCalls) toolNames.set(call.id, call.name);
+      const reasoning = msg.content
+        .filter((b) => b.type === "reasoning")
+        .map((b) => (b as { type: "reasoning"; text: string }).text)
+        .join("");
       const entry: Record<string, unknown> = { role: "assistant", content: text };
+      if (reasoning.length > 0) entry.reasoning_content = reasoning;
       if (toolCalls.length > 0) entry.tool_calls = toolCalls;
       out.push(entry);
     } else if (msg.role === "tool") {
@@ -211,10 +223,12 @@ export function buildHFTMessages(
           .filter((inner) => inner.type === "text")
           .map((inner) => (inner as { type: "text"; text: string }).text)
           .join("");
+        const name = toolNames.get(b.tool_use_id);
         out.push({
           role: "tool",
           content: text,
           tool_call_id: b.tool_use_id,
+          ...(name !== undefined ? { name } : {}),
         });
       }
     }
@@ -375,6 +389,52 @@ function buildCheckpointPromptAndPrefix(
 }
 
 // ============================================================================
+// Streamed delta routing
+// ============================================================================
+
+/**
+ * Routes decoded deltas to the ports: `<think>` content goes to `reasoning`,
+ * and what remains goes through the `<tool_call>` markup filter to `text`.
+ * Thinking is separated first, so a tool-call tag quoted inside it is not
+ * mistaken for markup and neither is it recorded as the answer.
+ *
+ * `answerText` is the text-port content before the markup filter — what the
+ * tool-call parser must read, without the model's thinking.
+ */
+export function createHftDeltaRouter(
+  emit: (event: { type: "text-delta"; port: "text" | "reasoning"; textDelta: string }) => void,
+  startInside: boolean
+): {
+  readonly feed: (delta: string) => void;
+  readonly flush: () => void;
+  readonly answerText: () => string;
+} {
+  let answer = "";
+  const markup = createToolCallMarkupFilter((text) => {
+    emit({ type: "text-delta", port: "text", textDelta: text });
+  });
+  const think = createThinkTagFilter({ startInside });
+  const route = (parts: ReturnType<typeof think.push>): void => {
+    for (const part of parts) {
+      if (part.port === "reasoning") {
+        emit({ type: "text-delta", port: "reasoning", textDelta: part.text });
+      } else {
+        answer += part.text;
+        markup.feed(part.text);
+      }
+    }
+  };
+  return {
+    feed: (delta) => route(think.push(delta)),
+    flush: () => {
+      route(think.flush());
+      markup.flush();
+    },
+    answerText: () => answer,
+  };
+}
+
+// ============================================================================
 // Provider run functions
 // ============================================================================
 
@@ -425,12 +485,15 @@ export const HFT_ToolCalling: AiProviderRunFn<
     }
     const { prompt, responsePrefix } = promptParts;
 
-    // Accumulate raw tokens for post-hoc tool-call parsing, and feed each
-    // delta through a markup filter that emits cleaned text-delta events.
+    // Accumulate raw tokens (the KV cache encodes them verbatim), and route
+    // each delta: thinking to `reasoning`, the rest through the tool-call
+    // markup filter to `text`. A template that opens `<think>` in the prompt
+    // leaves the generation starting inside the block.
     let fullText = "";
-    const filter = createToolCallMarkupFilter((text) => {
-      emit({ type: "text-delta", port: "text", textDelta: text });
-    });
+    const filter = createHftDeltaRouter(
+      (event) => emit(event),
+      prompt.trimEnd().endsWith("<think>")
+    );
 
     const streamer = createStreamingTextStreamer(
       generateText.tokenizer,
@@ -517,7 +580,9 @@ export const HFT_ToolCalling: AiProviderRunFn<
     // Parse the accumulated text for tool calls using the model-family-aware parser.
     // For models that use a generation prefix, prepend it so the parser sees the
     // full markup pattern.
-    const parseableFullText = responsePrefix ? `${responsePrefix}${fullText}` : fullText;
+    // Thinking is left out: a call quoted inside it was never made.
+    const answerText = filter.answerText();
+    const parseableFullText = responsePrefix ? `${responsePrefix}${answerText}` : answerText;
     // Only the calls are taken: the parser's cleaned text is the same text the
     // markup filter already streamed, and the stream is the one copy.
     const { toolCalls } = adaptParserResult(
