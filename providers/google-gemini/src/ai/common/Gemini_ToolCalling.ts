@@ -36,8 +36,9 @@ import { mapGeminiUsage } from "./Gemini_Usage";
 export interface IGeminiContentsOptions {
   /**
    * Whether the model takes images inside `functionResponse.parts`. When it does
-   * not, a tool result's images follow that tool message's function responses as
-   * sibling `inlineData` parts instead.
+   * not, a tool message's images go in their own user turn after its function
+   * responses, behind a label. Images beside the response in the same turn made
+   * gemini-2.5-flash write its thinking into the answer text.
    */
   readonly multimodalFunctionResponses?: boolean | undefined;
 }
@@ -95,7 +96,7 @@ export function buildGeminiContents(
       if (parts.length > 0) contents.push({ role: "model", parts });
     } else if (msg.role === "tool") {
       const parts: any[] = [];
-      const siblingImageParts: any[] = [];
+      const separateImageParts: any[] = [];
       for (const block of msg.content) {
         if (block.type !== "tool_result") continue;
         const name = toolUseNames.get(block.tool_use_id) ?? "unknown";
@@ -130,13 +131,18 @@ export function buildGeminiContents(
           if (options.multimodalFunctionResponses === true) {
             functionResponse.parts = imageParts;
           } else {
-            siblingImageParts.push(...imageParts);
+            separateImageParts.push(...imageParts);
           }
         }
         parts.push({ functionResponse });
       }
-      parts.push(...siblingImageParts);
       if (parts.length > 0) contents.push({ role: "user", parts });
+      if (separateImageParts.length > 0) {
+        contents.push({
+          role: "user",
+          parts: [{ text: "Images returned by the tool calls above:" }, ...separateImageParts],
+        });
+      }
     }
   }
   return contents;

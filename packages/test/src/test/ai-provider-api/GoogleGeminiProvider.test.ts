@@ -368,7 +368,7 @@ describe("buildGeminiContents tool results", () => {
     });
   });
 
-  it("sends images as sibling inlineData parts after the function responses by default", () => {
+  it("sends images in a separate user turn after the function responses by default", () => {
     const contents = buildGeminiContents(
       [
         call("c1", "t"),
@@ -379,13 +379,20 @@ describe("buildGeminiContents tool results", () => {
       ] as any,
       "x"
     );
-    expect(contents.at(-1).parts).toEqual([
+    expect(contents).toHaveLength(3);
+    expect(contents[1].parts).toEqual([
       { functionResponse: { name: "t", response: { result: "here" } } },
-      { inlineData: { mimeType: "image/png", data: "AAAA" } },
     ]);
+    expect(contents[2]).toEqual({
+      role: "user",
+      parts: [
+        { text: "Images returned by the tool calls above:" },
+        { inlineData: { mimeType: "image/png", data: "AAAA" } },
+      ],
+    });
   });
 
-  it("places every image of a tool message after all of its function responses", () => {
+  it("puts every image of a tool message in one labelled turn after all of its function responses", () => {
     const toolMessage = {
       role: "tool",
       content: [
@@ -405,9 +412,13 @@ describe("buildGeminiContents tool results", () => {
       [call("c1", "a"), call("c2", "b"), toolMessage] as any,
       "x"
     );
-    expect(contents.at(-1).parts).toEqual([
+    const [responses, images] = contents.slice(-2);
+    expect(responses.parts).toEqual([
       { functionResponse: { name: "a", response: { result: "" } } },
       { functionResponse: { name: "b", response: { result: "two" } } },
+    ]);
+    expect(images.parts).toEqual([
+      { text: "Images returned by the tool calls above:" },
       { inlineData: { mimeType: "image/png", data: "AAAA" } },
     ]);
   });
