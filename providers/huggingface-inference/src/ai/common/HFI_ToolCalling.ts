@@ -14,6 +14,7 @@ import {
 } from "@workglow/ai/provider-utils";
 import { toOpenAIMessages } from "@workglow/ai/worker";
 import { getClient, getModelName, getProvider } from "./HFI_Client";
+import { hfiReasoningParams } from "./HFI_EffortPolicy";
 import type { HfInferenceModelConfig } from "./HFI_ModelSchema";
 
 export const HFI_ToolCalling_Stream: AiProviderRunFn<
@@ -26,7 +27,7 @@ export const HFI_ToolCalling_Stream: AiProviderRunFn<
   const provider = getProvider(model);
 
   const tools = buildOpenAITools(input.tools);
-  const messages = toOpenAIMessages(input);
+  const messages = toOpenAIMessages(input, { toolImagesInUserMessage: true });
   const toolChoice = mapOpenAIToolChoice(input.toolChoice, false);
   const promptText = messages
     .map((m) => (typeof m.content === "string" ? m.content : ""))
@@ -40,6 +41,7 @@ export const HFI_ToolCalling_Stream: AiProviderRunFn<
     temperature: input.temperature,
     provider,
     stream: true,
+    ...hfiReasoningParams(model),
   };
   if (toolChoice !== "none") {
     params.tools = tools;

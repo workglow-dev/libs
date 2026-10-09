@@ -36,7 +36,7 @@ export const OpenRouter_ToolCalling_Stream: AiProviderRunFn<
   const modelName = getModelName(model);
 
   const tools = buildOpenAITools(input.tools);
-  const messages = toOpenAIMessages(input);
+  const messages = toOpenAIMessages(input, { toolImagesInUserMessage: true });
   const toolChoice = mapOpenAIToolChoice(input.toolChoice, true);
 
   const stream = await client.chat.completions.create(
