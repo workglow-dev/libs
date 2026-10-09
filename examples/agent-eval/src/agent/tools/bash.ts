@@ -20,6 +20,8 @@ const MAX_CAPTURE_BYTES = 16 * 1024 * 1024;
 const KILL_GRACE_MS = 2000;
 /** Wait after the shell exits for output still in the pipes. */
 const DRAIN_MS = 250;
+/** The longest delay a Node timer holds; a longer one fires at once. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 export interface CommandResult {
   readonly output: string;
@@ -59,7 +61,6 @@ export function runCommand(
     child.stderr.on("data", take);
 
     let timedOut = false;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
     const stop = (): void => {
       if (child.pid === undefined) return;
       try {
@@ -67,18 +68,25 @@ export function runCommand(
       } catch {
         // Already gone.
       }
-      killTimer = setTimeout(() => {
+      // Left to fire after the shell exits: the shell dying on SIGTERM says
+      // nothing of a process it started that ignores it. Unref'd so it never
+      // holds the process open.
+      const killTimer = setTimeout(() => {
         try {
           process.kill(-child.pid!, "SIGKILL");
         } catch {
           // Already gone.
         }
       }, KILL_GRACE_MS);
+      killTimer.unref();
     };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      stop();
-    }, timeoutMs);
+    const timer = setTimeout(
+      () => {
+        timedOut = true;
+        stop();
+      },
+      Math.min(timeoutMs, MAX_TIMER_MS)
+    );
     const onAbort = (): void => stop();
     signal.addEventListener("abort", onAbort, { once: true });
 
@@ -87,7 +95,6 @@ export function runCommand(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (killTimer !== undefined) clearTimeout(killTimer);
       signal.removeEventListener("abort", onAbort);
       child.stdout.destroy();
       child.stderr.destroy();
@@ -173,7 +180,8 @@ export function createBashTool(context: CodingToolContext): ToolDefinition {
         const lost =
           result.droppedBytes > 0 ? `, ${result.droppedBytes} bytes beyond that discarded` : "";
         text =
-          `[Output truncated: showing the last ${tail.keptLines} of ${tail.totalLines} lines. ` +
+          `[Output truncated: showing the last ${tail.keptLines} of ${tail.totalLines} lines` +
+          `${tail.partialLine ? ", the first of them only its end" : ""}. ` +
           `Full output (first ${result.output.length} characters${lost}) saved to ${spill}]\n` +
           text;
       }

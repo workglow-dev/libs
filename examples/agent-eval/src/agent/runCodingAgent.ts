@@ -11,15 +11,15 @@ import type {
   ChatMessage,
   ModelConfig,
 } from "@workglow/ai";
-import { AGENT_APPROVAL_OPT_OUT, AgentTask } from "@workglow/ai";
+import { AGENT_APPROVAL_OPT_OUT, AgentTask, measureHistoryForModel } from "@workglow/ai";
 import type { StreamEvent } from "@workglow/task-graph";
 import { globalServiceRegistry, ServiceRegistry } from "@workglow/util";
 import { PROBED_COMMANDS, probeCommands } from "./environment";
 import type { AgentRunOutcome, AgentRunSummary } from "./runSummary";
-import { historyChars, summarizeUsage, tallyTools, totalCost } from "./runSummary";
+import { summarizeUsage, tallyTools, totalCost } from "./runSummary";
 import { codingSystemPrompt } from "./systemPrompt";
 import type { CodingToolContext } from "./tools/context";
-import { createCodingTools } from "./tools/index";
+import { createCodingTools } from "./tools/codingTools";
 
 /**
  * Rounds a benchmark run gets unless told otherwise. AgentTask's own default
@@ -219,7 +219,7 @@ export async function runCodingAgent(run: CodingAgentRun): Promise<CodingAgentRe
     usage: summarizeUsage(steps),
     costUsd: totalCost(steps),
     tools: tallyTools(steps),
-    finalHistoryChars: historyChars(messages),
+    finalHistoryChars: measureHistoryForModel(messages),
     finalText,
     settings: { ...settings },
   };

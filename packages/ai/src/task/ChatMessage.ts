@@ -33,13 +33,6 @@ export type ContentBlockToolUse = {
 };
 
 /**
- * Blocks that may appear in a `tool_result`'s `content` array. Provider payloads
- * typically use text, image, and tool_use; nested `tool_result` is not modeled
- * here so the JSON schema can be embedded in parent task schemas without a
- * recursive `$ref` (which fails to resolve when `ContentBlockSchema` is nested
- * under a larger document such as `ToolCallingInputSchema`).
- */
-/**
  * What a thinking model reasoned before the rest of its reply, kept so it can
  * be handed back on later rounds of the same turn. Some providers ask for it
  * back (DeepSeek's `reasoning_content` on an assistant turn that called tools),
@@ -61,6 +54,13 @@ export type ContentBlockReasoning = {
   readonly payload?: string;
 };
 
+/**
+ * Blocks that may appear in a `tool_result`'s `content` array. Provider payloads
+ * typically use text, image, and tool_use; nested `tool_result` is not modeled
+ * here so the JSON schema can be embedded in parent task schemas without a
+ * recursive `$ref` (which fails to resolve when `ContentBlockSchema` is nested
+ * under a larger document such as `ToolCallingInputSchema`).
+ */
 export type ContentBlockInToolResultBody =
   | ContentBlockText
   | ContentBlockImage

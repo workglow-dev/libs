@@ -7,6 +7,7 @@
 import type { ChatMessage } from "@workglow/ai";
 import {
   DEFAULT_MAX_HISTORY_CHARS,
+  measureHistoryForModel,
   normalizeHistoryForModel,
   trimHistoryForModel,
 } from "@workglow/ai";
@@ -177,6 +178,36 @@ describe("trimHistoryForModel", () => {
     ];
     const trimmed = trimHistoryForModel(history, 500);
     expect(trimmed.map((m) => m.role)).toEqual(["system", "system", "user"]);
+  });
+
+  it("never cuts past keepFrom", () => {
+    // A turn's own reminder is a user message; cutting there would keep the
+    // reminder and drop the question it is about.
+    const history = [
+      user("old".repeat(200)),
+      assistant("old reply"),
+      user("the question"),
+      assistant("x".repeat(1000)),
+      user("check your work"),
+    ];
+    expect(trimHistoryForModel(history, 500)).toEqual([history[4]]);
+    expect(trimHistoryForModel(history, 500, 2)).toEqual(history.slice(2));
+  });
+
+  it("measures history as the trim does, payload left out", () => {
+    const plain: ChatMessage[] = [user("a"), assistant("b")];
+    const withPayload: ChatMessage[] = [
+      user("a"),
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "", provider: "openai:m", payload: "p".repeat(5000) },
+          { type: "text", text: "b" },
+        ],
+      },
+    ];
+    expect(measureHistoryForModel(plain)).toBeGreaterThan(0);
+    expect(measureHistoryForModel(withPayload)).toBeLessThan(5000);
   });
 
   it("exposes a default budget callers can reason about", () => {

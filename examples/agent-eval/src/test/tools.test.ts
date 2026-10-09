@@ -63,6 +63,20 @@ describe("truncate", () => {
     const text = ["aaaa", "bbbb", "cccc"].join("\n");
     expect(truncateHead(text, 100, 10).keptLines).toBe(2);
   });
+
+  it("keeps the end of a last line longer than the whole budget", () => {
+    const tail = truncateTail(`${"x".repeat(100)}ERROR\n`, 100, 21);
+    expect(tail.text).toBe(`${"x".repeat(14)}ERROR\n`);
+    expect(tail.truncated).toBe(true);
+    expect(tail.partialLine).toBe(true);
+  });
+
+  it("cuts a long last line on a character boundary", () => {
+    // Each "é" is two bytes: an odd budget lands mid-character.
+    const tail = truncateTail("é".repeat(50), 100, 10);
+    expect(tail.text).toBe("é".repeat(4));
+    expect(tail.partialLine).toBe(true);
+  });
 });
 
 describe("edit", () => {

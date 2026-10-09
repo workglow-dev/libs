@@ -80,6 +80,11 @@ function messageChars(message: ChatMessage): number {
   }
 }
 
+/** `history`'s size as {@link trimHistoryForModel} measures it against its budget. */
+export function measureHistoryForModel(history: readonly ChatMessage[]): number {
+  return history.reduce((sum, message) => sum + messageChars(message), 0);
+}
+
 /**
  * Caps `history` at `max` characters by dropping whole turns from the front.
  *
@@ -96,10 +101,15 @@ function messageChars(message: ChatMessage): number {
  * carries the instructions every later turn is answered under, and dropping it
  * for being old changes how the model behaves with nothing to show for it. Its
  * size still counts against the budget, so the turns cut to fit around it.
+ *
+ * `keepFrom` holds everything from that index on, for a caller whose newest
+ * turn holds user messages of its own (a reminder, a review prompt): cutting at
+ * one of those would keep the prompt and drop the question it is about.
  */
 export function trimHistoryForModel(
   history: readonly ChatMessage[],
-  max: number = DEFAULT_MAX_HISTORY_CHARS
+  max: number = DEFAULT_MAX_HISTORY_CHARS,
+  keepFrom: number = history.length
 ): ChatMessage[] {
   const sizes = history.map(messageChars);
   let total = sizes.reduce((sum, n) => sum + n, 0);
@@ -115,6 +125,7 @@ export function trimHistoryForModel(
 
   let cut = prefixEnd;
   for (const start of turnStarts.slice(1)) {
+    if (start > keepFrom) break;
     for (let i = cut; i < start; i++) total -= sizes[i] ?? 0;
     cut = start;
     if (total <= max) break;

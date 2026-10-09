@@ -119,7 +119,8 @@ const program = new Command()
     if (instruction.trim() === "") throw new Error("no instruction given");
 
     const resolved = resolveAgentModel(opts.model, { effort: parseEffort(opts.effort) });
-    // An ablation switch for the provider's reasoning replay; only DeepSeek reads it today.
+    // An ablation switch for the provider's reasoning replay; DeepSeek and OpenAI read it,
+    // and Anthropic has no such switch.
     const model = opts.replayReasoning
       ? resolved
       : ({

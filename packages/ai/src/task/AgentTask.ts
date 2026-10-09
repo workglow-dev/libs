@@ -401,8 +401,12 @@ function toolResult(
   maxChars: number,
   images: ReadonlyArray<ContentBlockImage> = []
 ): ContentBlockToolResult {
+  // A result of images alone carries no text block: an empty one is not a
+  // block Anthropic accepts, and there is nothing in it for the model to read.
   const body: ContentBlockInToolResultBody[] = [
-    { type: "text", text: clampToolText(text, maxChars) },
+    ...(text.length > 0 || images.length === 0
+      ? [{ type: "text" as const, text: clampToolText(text, maxChars) }]
+      : []),
     ...images,
   ];
   return {
@@ -608,6 +612,8 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     let reviewed = false;
 
     const messages: ChatMessage[] = [...(input.messages ?? []), promptToUserMessage(input.prompt)];
+    // Where this turn's own messages begin: the prompt, after the prior conversation.
+    const turnStart = input.messages?.length ?? 0;
     turnSoFar = () => ({ messages, steps });
     /**
      * The transcript so far, for a host drawing one while the turn is still
@@ -665,6 +671,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
             captured,
             roundTurn,
             messages,
+            turnStart,
             maxHistoryChars,
             context,
             input.roundTimeoutMs
@@ -907,6 +914,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     captured: { output: ToolCallingTaskOutput | undefined },
     input: AgentTaskInput,
     messages: readonly ChatMessage[],
+    turnStart: number,
     maxHistoryChars: number,
     context: IExecuteContext,
     timeoutMs: number | undefined
@@ -915,7 +923,11 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       model: input.model,
       prompt: input.prompt,
       systemPrompt: input.systemPrompt,
-      messages: normalizeHistoryForModel(trimHistoryForModel(messages, maxHistoryChars)),
+      // The current turn is held whole: a reminder or review prompt is a user
+      // message, and a cut there would drop the prompt the model is asked to
+      // check its answer against and every tool result it gathered. Earlier
+      // turns are still cut to fit.
+      messages: normalizeHistoryForModel(trimHistoryForModel(messages, maxHistoryChars, turnStart)),
       tools: input.tools,
       temperature: input.temperature,
       maxTokens: input.maxTokens,

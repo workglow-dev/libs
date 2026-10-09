@@ -292,7 +292,8 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
   // concurrent function calls that share (or lack) the index onto one slot,
   // silently dropping every call but the last.
   const toolCalls = new Map<string, ResponsesToolCallEntry>();
-  // Every finished output item by position, for replay on the next round.
+  // Every finished output item by position, for replay on the next round; kept
+  // only when the caller asked for a native turn.
   const outputItems = new Map<number, unknown>();
   // Responses only reports billed usage on the terminal lifecycle event; when the
   // caller supplies promptText, estimate ↑ before the first delta and ↓ from
@@ -379,7 +380,7 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
 
       case "response.output_item.done": {
         const item = event.item;
-        if (item) {
+        if (item && options.nativeTurnProvider !== undefined) {
           outputItems.set(
             typeof event.output_index === "number" ? event.output_index : outputItems.size,
             item

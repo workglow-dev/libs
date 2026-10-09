@@ -271,4 +271,29 @@ describe("AgentTask reviewPrompt", () => {
     );
     expect(seen).toHaveLength(1);
   });
+
+  it("keeps the turn's prompt and work in the review round when history is over budget", async () => {
+    const seen = script([{ calls: [{ id: "c1", name: "look", input: {} }] }, { text: "done" }]);
+    await new AgentTask().run(
+      {
+        model: MODEL,
+        prompt: "Write the report.",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "an earlier question" }] },
+          { role: "assistant", content: [{ type: "text", text: "an earlier answer" }] },
+        ],
+        tools: [tool("look", async () => "x".repeat(2_000))],
+        reviewPrompt: "Check your work.",
+        maxHistoryChars: 500,
+      },
+      { registry }
+    );
+    expect(seen).toHaveLength(3);
+    const review = seen[2]!.messages!;
+    // The earlier turn is cut to fit; the review is not a turn of its own.
+    expect(JSON.stringify(review)).not.toContain("an earlier question");
+    expect(JSON.stringify(review)).toContain("Write the report.");
+    expect(review.some((m) => m.role === "tool")).toBe(true);
+    expect(reviewText(review)).toBe(1);
+  });
 });

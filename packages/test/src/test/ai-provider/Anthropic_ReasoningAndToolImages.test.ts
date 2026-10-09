@@ -107,4 +107,46 @@ describe("Anthropic tool-calling request with reasoning and tool images", () => 
       source: { type: "base64", media_type: "image/png", data: "AAAA" },
     });
   });
+
+  it("sends no empty text block inside a tool result", async () => {
+    const results = [
+      {
+        type: "tool_result",
+        tool_use_id: "c1",
+        content: [
+          { type: "text", text: "" },
+          { type: "image", mimeType: "image/png", data: "AAAA" },
+        ],
+      },
+      { type: "tool_result", tool_use_id: "c2", content: [{ type: "text", text: "" }] },
+    ];
+    const history = [
+      messages[0],
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "c1", name: "read", input: { path: "board.png" } },
+          { type: "tool_use", id: "c2", name: "touch", input: { path: "x" } },
+        ],
+      },
+      { role: "tool", content: results },
+    ];
+    await toolCallingRunFn()(
+      { model, prompt: "", messages: history, tools: [] } as never,
+      model,
+      undefined as never,
+      (() => {}) as never
+    );
+    const sent = captured[0]!.messages as Array<{ role: string; content: unknown[] }>;
+    expect(sent.at(-1)!.content).toEqual([
+      {
+        type: "tool_result",
+        tool_use_id: "c1",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
+        ],
+      },
+      { type: "tool_result", tool_use_id: "c2" },
+    ]);
+  });
 });

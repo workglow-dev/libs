@@ -19,6 +19,8 @@ export interface Truncated {
   readonly totalLines: number;
   /** Lines kept. */
   readonly keptLines: number;
+  /** The first kept line is only the end of a line too long for the budget. */
+  readonly partialLine: boolean;
 }
 
 function byteLength(text: string): number {
@@ -48,12 +50,26 @@ export function truncateHead(
     truncated: kept.length < lines.length,
     totalLines: lines.length,
     keptLines: kept.length,
+    partialLine: false,
   };
+}
+
+/** The end of `line` within `maxBytes` of UTF-8, cut on a character boundary. */
+function tailWithinBytes(line: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const buffer = Buffer.from(line, "utf8");
+  if (buffer.length <= maxBytes) return line;
+  let start = buffer.length - maxBytes;
+  // A UTF-8 continuation byte is 10xxxxxx; start on the next character instead.
+  while (start < buffer.length && (buffer[start]! & 0xc0) === 0x80) start++;
+  return buffer.subarray(start).toString("utf8");
 }
 
 /**
  * The last lines of `text` that fit both limits. A command wants the tail:
- * the error, the test summary and the exit status are at the end.
+ * the error, the test summary and the exit status are at the end. A last line
+ * longer than the whole budget (minified JSON, a progress bar redrawn with
+ * carriage returns) keeps its end, rather than leaving nothing to show.
  */
 export function truncateTail(
   text: string,
@@ -63,17 +79,26 @@ export function truncateTail(
   const lines = text.split("\n");
   const kept: string[] = [];
   let bytes = 0;
+  let partial = false;
   for (let i = lines.length - 1; i >= 0; i--) {
+    if (kept.length >= maxLines) break;
     const size = byteLength(lines[i]!) + 1;
-    if (kept.length >= maxLines || bytes + size > maxBytes) break;
+    if (bytes + size > maxBytes) {
+      if (kept.every((line) => line.length === 0)) {
+        kept.push(tailWithinBytes(lines[i]!, maxBytes - bytes - 1));
+        partial = true;
+      }
+      break;
+    }
     kept.push(lines[i]!);
     bytes += size;
   }
   kept.reverse();
   return {
     text: kept.join("\n"),
-    truncated: kept.length < lines.length,
+    truncated: partial || kept.length < lines.length,
     totalLines: lines.length,
     keptLines: kept.length,
+    partialLine: partial,
   };
 }

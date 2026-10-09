@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { AgentStep, ChatMessage } from "@workglow/ai";
+import type { AgentStep } from "@workglow/ai";
 
 /** How a run ended: the loop's own stop reason, or the error that ended it. */
 export type AgentRunOutcome =
@@ -52,7 +52,11 @@ export interface AgentRunSummary {
   /** Undefined when any round could not be priced. */
   readonly costUsd: number | undefined;
   readonly tools: AgentToolTally;
-  /** Size of the transcript the last round sent, in characters. */
+  /**
+   * Size of the transcript, in characters, as AgentTask's history budget
+   * measures it: a reasoning block's replay `payload` is left out, so the
+   * figure compares with `maxHistoryChars` rather than with encrypted reasoning.
+   */
   readonly finalHistoryChars: number;
   readonly finalText: string;
   readonly settings: Readonly<Record<string, unknown>>;
@@ -111,12 +115,4 @@ export function totalCost(steps: readonly AgentStep[]): number | undefined {
     total += step.costUsd;
   }
   return steps.length > 0 ? total : undefined;
-}
-
-export function historyChars(messages: readonly ChatMessage[]): number {
-  try {
-    return JSON.stringify(messages).length;
-  } catch {
-    return 0;
-  }
 }

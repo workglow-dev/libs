@@ -135,20 +135,24 @@ export function buildAnthropicMessages(
             b.type === "tool_result"
         )
         .map((b) => {
-          const content = b.content.map((inner) => {
-            if (inner.type === "text") return { type: "text", text: inner.text };
-            if (inner.type === "image") {
-              return {
-                type: "image",
-                source: { type: "base64", media_type: inner.mimeType, data: inner.data },
-              };
-            }
-            return inner;
-          });
+          const content = b.content
+            .map((inner) => {
+              if (inner.type === "text") return { type: "text", text: inner.text };
+              if (inner.type === "image") {
+                return {
+                  type: "image",
+                  source: { type: "base64", media_type: inner.mimeType, data: inner.data },
+                };
+              }
+              return inner;
+            })
+            .filter((inner) => !isEmptyTextBlock(inner));
+          // A tool that returned nothing still answers its call: `content` is
+          // optional on a tool_result, where an empty text block is a 400.
           return {
             type: "tool_result",
             tool_use_id: b.tool_use_id,
-            content,
+            ...(content.length > 0 ? { content } : {}),
             ...(b.is_error ? { is_error: true } : {}),
           };
         });
