@@ -158,15 +158,27 @@ export function getGeminiSeed(model: GeminiModelConfig | undefined): number | un
 export function resolveThinkingConfig(
   model: GeminiModelConfig | undefined,
   maxTokens: number | undefined,
-  defaultBudget?: number
+  defaultBudget?: number,
+  options?: { readonly includeThoughts?: boolean | undefined }
 ): {
-  thinkingConfig: { thinkingBudget: number } | undefined;
+  thinkingConfig: { thinkingBudget?: number; includeThoughts?: boolean } | undefined;
   maxOutputTokens: number | undefined;
 } {
   const budget = getThinkingBudget(model) ?? defaultBudget;
-  if (budget === undefined) {
+  // Thought summaries exist only when the model thinks: a zero budget turns
+  // thinking off, and the models outside the text families reject the config.
+  const thinks = budget !== 0 && geminiEffortPolicy(model).supported.length > 0;
+  const includeThoughts = options?.includeThoughts === true && thinks;
+  if (budget === undefined && !includeThoughts) {
     return { thinkingConfig: undefined, maxOutputTokens: maxTokens };
   }
-  const maxOutputTokens = maxTokens !== undefined && budget > 0 ? maxTokens + budget : maxTokens;
-  return { thinkingConfig: { thinkingBudget: budget }, maxOutputTokens };
+  const maxOutputTokens =
+    maxTokens !== undefined && budget !== undefined && budget > 0 ? maxTokens + budget : maxTokens;
+  return {
+    thinkingConfig: {
+      ...(budget !== undefined ? { thinkingBudget: budget } : {}),
+      ...(includeThoughts ? { includeThoughts: true } : {}),
+    },
+    maxOutputTokens,
+  };
 }

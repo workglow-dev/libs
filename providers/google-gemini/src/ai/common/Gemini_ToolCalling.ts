@@ -205,7 +205,12 @@ export const Gemini_ToolCalling_Stream: AiProviderRunFn<
   // Thinking is opt-in here (no default budget): the model uses its own default
   // reasoning unless `provider_config.thinking_budget` is set, in which case the
   // output cap is padded so reasoning can't starve the tool call / answer.
-  const { thinkingConfig, maxOutputTokens } = resolveThinkingConfig(model, input.maxTokens);
+  const { thinkingConfig, maxOutputTokens } = resolveThinkingConfig(
+    model,
+    input.maxTokens,
+    undefined,
+    { includeThoughts: true }
+  );
 
   /** Build the tail-only request that references the CachedContent handle. */
   const buildCachedRequest = (): Record<string, unknown> => ({
@@ -265,7 +270,9 @@ export const Gemini_ToolCalling_Stream: AiProviderRunFn<
     refusalCategory = refusalCategory ?? geminiRefusalCategory(chunk);
     const parts = chunk.candidates?.[0]?.content?.parts ?? [];
     for (const part of parts) {
-      if (part.text && !part.thought) {
+      if (part.text && part.thought) {
+        emit({ type: "text-delta", port: "reasoning", textDelta: part.text });
+      } else if (part.text) {
         emit({ type: "text-delta", port: "text", textDelta: part.text });
       }
       if (part.functionCall) {

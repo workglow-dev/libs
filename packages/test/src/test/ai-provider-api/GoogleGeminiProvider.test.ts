@@ -6,7 +6,7 @@
 
 import type { ChatMessage, ModelRecord } from "@workglow/ai";
 import { GEMINI_FALLBACK_MODELS, _testOnly } from "@workglow/google-gemini/ai";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const { GoogleGeminiQueuedProvider, GEMINI_RUN_FN_SPECS, GEMINI_RUN_FNS } = _testOnly;
 
@@ -355,5 +355,57 @@ describe("buildGeminiContents tool results", () => {
       response: { result: "here" },
       parts: [{ inlineData: { mimeType: "image/png", data: "AAAA" } }],
     });
+  });
+});
+
+describe("Gemini tool calling thought summaries", () => {
+  afterEach(() => {
+    _testOnly.setGeminiClientForTests(undefined);
+  });
+
+  const run = async (model_name: string, parts: readonly Record<string, unknown>[]) => {
+    const requests: Array<Record<string, any>> = [];
+    _testOnly.setGeminiClientForTests({
+      models: {
+        generateContentStream: async (request: Record<string, any>) => {
+          requests.push(request);
+          return {
+            async *[Symbol.asyncIterator]() {
+              yield { candidates: [{ content: { parts } }] };
+            },
+          };
+        },
+      },
+    } as never);
+    const registration = GEMINI_RUN_FNS.find(({ serves }) =>
+      (serves as readonly string[]).includes("tool-use")
+    );
+    const events: any[] = [];
+    await (registration!.runFn as any)(
+      { prompt: "hi", tools: [] },
+      { provider: "GOOGLE_GEMINI", provider_config: { api_key: "k", model_name } },
+      undefined,
+      (event: unknown) => events.push(event),
+      undefined
+    );
+    return { requests, events };
+  };
+
+  it("emits thought parts on reasoning and the rest on text", async () => {
+    const { requests, events } = await run("gemini-2.5-flash", [
+      { text: "pondering", thought: true },
+      { text: "answer" },
+    ]);
+    const deltas = events.filter((e) => e.type === "text-delta");
+    expect(deltas).toEqual([
+      { type: "text-delta", port: "reasoning", textDelta: "pondering" },
+      { type: "text-delta", port: "text", textDelta: "answer" },
+    ]);
+    expect(requests[0].config.thinkingConfig.includeThoughts).toBe(true);
+  });
+
+  it("sends no thinkingConfig to a model that does not think", async () => {
+    const { requests } = await run("gemini-embedding-001", [{ text: "answer" }]);
+    expect(requests[0].config.thinkingConfig).toBeUndefined();
   });
 });
