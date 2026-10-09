@@ -22,6 +22,7 @@ import type { OpenRouterModelConfig } from "./OpenRouter_ModelSchema";
 import { buildOpenRouterExtras } from "./OpenRouter_RequestParams";
 import {
   createReasoningDetailAccumulator,
+  encodeReasoningTurn,
   mergeReasoningDetailDelta,
   withReasoningDetails,
 } from "./OpenRouter_ReasoningDetails";
@@ -58,7 +59,9 @@ export const OpenRouter_ToolCalling_Stream: AiProviderRunFn<
   // turn is keyed by model and another model gets the rebuilt turn.
   const nativeKey = `openrouter:${modelName}`;
   const messages = withReasoningDetails(
-    toOpenAIMessages(input, { toolImagesInUserMessage: true, nativeTurnProvider: nativeKey })
+    toOpenAIMessages(input, { toolImagesInUserMessage: true }),
+    input.messages,
+    nativeKey
   );
   const toolChoice = mapOpenAIToolChoice(input.toolChoice, true);
 
@@ -78,12 +81,16 @@ export const OpenRouter_ToolCalling_Stream: AiProviderRunFn<
   );
 
   const details = createReasoningDetailAccumulator();
+  // The ids of the calls this round actually emitted, in order: the replay is
+  // valid only beside the same calls.
+  const emittedCallIds = new Set<string>();
   const usage = await accumulateOpenAIChatStream(
     tapReasoningDetails(stream, details),
     (event) => {
       if (event.type === "object-delta" && event.port === "toolCalls") {
         const validated = filterValidToolCalls(event.objectDelta as ToolCalls, input.tools);
         if (validated.length > 0) {
+          for (const call of validated) emittedCallIds.add(call.id);
           emit({ type: "object-delta", port: "toolCalls", objectDelta: validated });
         }
         return;
@@ -99,11 +106,12 @@ export const OpenRouter_ToolCalling_Stream: AiProviderRunFn<
     }
   );
   const items = details.items();
-  if (items !== undefined) {
+  const payload = items === undefined ? undefined : encodeReasoningTurn([...emittedCallIds], items);
+  if (payload !== undefined) {
     emit({
       type: "object-delta",
       port: "nativeTurn",
-      objectDelta: { provider: nativeKey, payload: JSON.stringify(items) },
+      objectDelta: { provider: nativeKey, payload },
     });
   }
   emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput, usage });
