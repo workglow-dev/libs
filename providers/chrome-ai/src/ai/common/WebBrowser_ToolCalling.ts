@@ -197,7 +197,7 @@ export const WebBrowser_ToolCalling: AiProviderRunFn<
     if (validated.length > 0) {
       emit({ type: "object-delta", port: "toolCalls", objectDelta: validated });
     }
-    emit({ type: "finish", data: {} as ToolCallingTaskOutput });
+    emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput });
   } finally {
     try {
       session.destroy();

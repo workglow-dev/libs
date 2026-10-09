@@ -273,9 +273,9 @@ describe("Cactus_ToolCalling v3 reasoning on the text port", () => {
     expect(text).toContain("Paris is sunny.");
   });
 
-  it("releases an unterminated <think> rather than swallowing the generation", async () => {
-    // Cut off at the token limit: there is no closing tag, and the parser
-    // deliberately leaves such a block alone, so the stream must too.
+  it("keeps an unterminated <think> off the text port", async () => {
+    // Cut off at the token limit: there is no closing tag, and what follows the
+    // opening one is still reasoning, so it goes to the reasoning port.
     const { text } = await runToolCalling({
       run: () => "unused",
       run_stream: async (_q, _t, cb) => {
@@ -283,7 +283,7 @@ describe("Cactus_ToolCalling v3 reasoning on the text port", () => {
         return "<think>reasoning that never closes";
       },
     });
-    expect(text).toBe("<think>reasoning that never closes");
+    expect(text).toBe("");
   });
 
   it("does not hold back text that merely starts like a tag", async () => {
@@ -578,5 +578,116 @@ describe("Cactus_ToolCalling tool-call markup on the text port", () => {
       },
     });
     expect(text).toBe("ends mid-tag <tool_ca");
+  });
+});
+
+describe("Cactus_ToolCalling answers the latest user turn", () => {
+  const toolUse = {
+    role: "assistant",
+    content: [{ type: "tool_use", id: "c1", name: "lookup_weather", input: { city: "Paris" } }],
+  };
+  const toolResult = {
+    role: "tool",
+    content: [
+      {
+        type: "tool_result",
+        tool_use_id: "c1",
+        content: [{ type: "text", text: "sunny" }],
+      },
+    ],
+  };
+  const user = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
+
+  async function queryFor(extra: Record<string, unknown>): Promise<string> {
+    let seen = "";
+    cactusEngines.set("needle-26m", {
+      run: (q: string) => {
+        seen = q;
+        return "[]";
+      },
+    } as never);
+    await Cactus_ToolCalling(
+      { prompt: "first", tools, toolChoice: "auto", ...extra } as never,
+      model as never,
+      new AbortController().signal,
+      () => {}
+    );
+    return seen;
+  }
+
+  it("sends the most recent user message, not the original prompt", async () => {
+    const query = await queryFor({
+      messages: [user("first"), toolUse, toolResult, user("second")],
+    });
+    expect(query).toBe("second");
+  });
+
+  it("uses the prompt when there are no messages", async () => {
+    expect(await queryFor({})).toBe("first");
+    expect(await queryFor({ messages: [] })).toBe("first");
+  });
+
+  it("prepends the system prompt and a blank line", async () => {
+    const query = await queryFor({
+      systemPrompt: "rules",
+      messages: [user("first"), toolUse, toolResult, user("second")],
+    });
+    expect(query).toBe("rules\n\nsecond");
+    expect(await queryFor({ systemPrompt: "rules" })).toBe("rules\n\nfirst");
+  });
+});
+
+describe("Cactus_ToolCalling emits <think> text on the reasoning port", () => {
+  const reasoningOf = (events: StreamEvent<never>[]): string =>
+    events
+      .filter((e) => e.type === "text-delta" && e.port === "reasoning")
+      .map((e) => (e as { textDelta: string }).textDelta)
+      .join("");
+
+  it("sends the think contents of a one-shot generation to reasoning", async () => {
+    const { names, events, text } = await runToolCalling({
+      run: () =>
+        `<think>pick weather</think>` +
+        `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`,
+    });
+    expect(names).toEqual(["lookup_weather"]);
+    expect(events).toContainEqual({
+      type: "text-delta",
+      port: "reasoning",
+      textDelta: "pick weather",
+    });
+    expect(text).toBe("");
+  });
+
+  it("streams think contents as they arrive, whatever the tag boundaries", async () => {
+    const { events, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        for (const piece of ["<thi", "nk>pick ", "wea", "ther</thi", "nk>Done."]) cb(piece);
+        return "<think>pick weather</think>Done.";
+      },
+    });
+    expect(reasoningOf(events)).toBe("pick weather");
+    expect(text).toBe("Done.");
+  });
+
+  it("sends an unterminated think block to reasoning, not text", async () => {
+    const { events, text } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb("<think>reasoning that never ");
+        cb("closes</thi");
+        return "<think>reasoning that never closes</thi";
+      },
+    });
+    expect(reasoningOf(events)).toBe("reasoning that never closes</thi");
+    expect(text).toBe("");
+  });
+
+  it("emits no reasoning when the generation has none", async () => {
+    const { events } = await runToolCalling({
+      run: () => `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`,
+    });
+    expect(events.some((e) => e.type === "text-delta" && e.port === "reasoning")).toBe(false);
   });
 });

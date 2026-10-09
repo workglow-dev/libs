@@ -55,21 +55,32 @@ function danglingPrefixLength(text: string, tag: string): number {
  * would leave a host rendering the chain of thought beside the tool cards, and
  * a host logging `text` persisting it.
  *
+ * What the filter drops is handed to `onReasoning` as it arrives, so the
+ * caller can put it on the `reasoning` port instead of losing it. The tags
+ * themselves are not part of it.
+ *
  * Streaming makes this more than a `replace`: a tag can straddle a delta
  * boundary, so the filter holds back any trailing run that could still turn
- * into `<think>` and releases it once it cannot.
+ * into `<think>` (or `</think>`, inside a block) and releases it once it
+ * cannot.
  *
  * `flush` exists for the case the fence never closes. A generation cut short
- * at the token limit has no `</think>`, and `stripNeedleReasoning` deliberately
- * leaves such a block alone — so the filter releases what it held rather than
- * swallowing the whole generation.
+ * at the token limit has no `</think>`: everything after the opening tag is
+ * still reasoning, so it goes to `onReasoning` — including a partial closing
+ * tag held back at the end — and none of it reaches the visible text.
  */
-export function createNeedleReasoningFilter(): NeedleTextFilter {
+export function createNeedleReasoningFilter(
+  onReasoning?: (text: string) => void
+): NeedleTextFilter {
   const OPEN = "<think>";
   const CLOSE = "</think>";
-  /** Text not yet classifiable: a partial tag, or a fence still open. */
+  /** Text not yet classifiable: a partial tag. */
   let held = "";
   let inside = false;
+
+  const think = (text: string): void => {
+    if (text.length > 0) onReasoning?.(text);
+  };
 
   return {
     push(delta: string): string {
@@ -78,8 +89,13 @@ export function createNeedleReasoningFilter(): NeedleTextFilter {
       for (;;) {
         if (inside) {
           const close = held.indexOf(CLOSE);
-          // No closing tag yet: keep holding, in case the stream ends here.
-          if (close === -1) return visible;
+          if (close === -1) {
+            const dangling = danglingPrefixLength(held, CLOSE);
+            think(held.slice(0, held.length - dangling));
+            held = held.slice(held.length - dangling);
+            return visible;
+          }
+          think(held.slice(0, close));
           held = held.slice(close + CLOSE.length);
           inside = false;
           continue;
@@ -92,15 +108,18 @@ export function createNeedleReasoningFilter(): NeedleTextFilter {
           return visible;
         }
         visible += held.slice(0, open);
-        // Keep the opening tag, so an unterminated block flushes intact.
-        held = held.slice(open);
+        held = held.slice(open + OPEN.length);
         inside = true;
       }
     },
     flush(): string {
       const rest = held;
       held = "";
-      inside = false;
+      if (inside) {
+        inside = false;
+        think(rest);
+        return "";
+      }
       return rest;
     },
   };
@@ -136,8 +155,9 @@ function isBareToolCallPayload(text: string): boolean {
  *
  * Three stages, in the order the parser reads the generation:
  *
- * 1. {@link createNeedleReasoningFilter} drops `<think>` blocks, so a fence the
- *    model only talked about counts for nothing below.
+ * 1. {@link createNeedleReasoningFilter} drops `<think>` blocks, handing them to
+ *    `onReasoning`, so a fence the model only talked about counts for nothing
+ *    below.
  * 2. {@link createToolCallMarkupFilter} drops each `<tool_call>` block, holding
  *    back a partial opening tag until it is disambiguated and suppressing an
  *    unclosed block to the end — the parser recovers that tail as a payload.
@@ -151,8 +171,10 @@ function isBareToolCallPayload(text: string): boolean {
  * Output that is nothing but whitespace is dropped at the end too: it is the
  * newline between `</think>` and `<tool_call>`, not an answer.
  */
-export function createNeedleVisibleTextFilter(): NeedleTextFilter {
-  const reasoning = createNeedleReasoningFilter();
+export function createNeedleVisibleTextFilter(
+  onReasoning?: (text: string) => void
+): NeedleTextFilter {
+  const reasoning = createNeedleReasoningFilter(onReasoning);
   /** A `<tool_call>` opened outside reasoning, so no bare payload is read. */
   let sawFence = false;
   /** The end of the last routed delta, for an opening tag split across two. */

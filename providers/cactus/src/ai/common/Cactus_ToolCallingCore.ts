@@ -31,12 +31,28 @@ function buildToolsJson(tools: ReadonlyArray<ToolDefinition>): string {
   );
 }
 
+/**
+ * What the engine is asked this round. Needle answers one query with no
+ * conversation of its own, and each round's input carries the whole history
+ * beside the original prompt, so the question is the latest user turn: sending
+ * the prompt every round would repeat the first question after a tool result.
+ */
 function promptText(input: ToolCallingTaskInput): string {
+  const query = latestUserText(input);
+  return input.systemPrompt ? `${input.systemPrompt}\n\n${query}` : query;
+}
+
+function latestUserText(input: ToolCallingTaskInput): string {
+  const messages = input.messages;
+  if (messages && messages.length > 0) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user") return extractMessageText(messages[i].content);
+    }
+  }
   if (typeof input.prompt === "string") return input.prompt;
   if (input.prompt) return extractMessageText(input.prompt);
-  if (input.messages && input.messages.length > 0) {
-    const last = input.messages[input.messages.length - 1];
-    return extractMessageText(last.content);
+  if (messages && messages.length > 0) {
+    return extractMessageText(messages[messages.length - 1].content);
   }
   return "";
 }
@@ -76,7 +92,9 @@ export function createCactusToolCalling(
 
     // One definition of "what the caller sees as text", so the streamed and
     // one-shot paths cannot disagree about it.
-    const visible = createNeedleVisibleTextFilter();
+    const visible = createNeedleVisibleTextFilter((chunk) => {
+      emit({ type: "text-delta", port: "reasoning", textDelta: chunk });
+    });
     const emitVisible = (chunk: string): void => {
       if (chunk.length > 0) emit({ type: "text-delta", port: "text", textDelta: chunk });
     };
