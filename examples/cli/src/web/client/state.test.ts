@@ -61,6 +61,17 @@ describe("reduceRunEvent", () => {
     expect(state.rows.get("t1")!.streamText).toBe("Hello");
   });
 
+  it("keeps a row's reasoning apart from its streamed text", () => {
+    const state = apply([
+      added("t1"),
+      { k: "reasoning", id: "t1", delta: "Let me " },
+      { k: "reasoning", id: "t1", delta: "think." },
+      { k: "text", id: "t1", delta: "Hello" },
+    ]);
+    expect(state.rows.get("t1")!.reasoningText).toBe("Let me think.");
+    expect(state.rows.get("t1")!.streamText).toBe("Hello");
+  });
+
   it("drops a row the run released", () => {
     const state = apply([added("t1"), { k: "task_removed", id: "t1" }]);
     expect(state.rows.has("t1")).toBe(false);

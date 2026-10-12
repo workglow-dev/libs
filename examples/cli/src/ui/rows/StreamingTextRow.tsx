@@ -7,25 +7,22 @@
 import { Box, Text } from "ink";
 import React from "react";
 import { TaskErrorDetail } from "../components/TaskErrorDetail";
+import { StreamedReasoning } from "../components/StreamedReasoning";
 import { TaskStatusProgressRow } from "../components/TaskStatusProgressRow";
+import { STREAM_PANEL_MAX_LINES, tailLines, visibleReasoning } from "../model/streamedText";
 import type { TaskRowProps } from "./pickRenderer";
 import { settledTaskDurationMs } from "./taskDuration";
 import { useTaskStreamText } from "./useTaskStreamText";
 import { useTaskUsageLine } from "./useTaskUsageLine";
 
-const MAX_LINES = 8;
-
-function tailLines(text: string, n: number): string {
-  const lines = text.split("\n");
-  if (lines.length <= n) return text;
-  return lines.slice(lines.length - n).join("\n");
-}
-
 export function StreamingTextRow({ task, line }: TaskRowProps): React.ReactElement {
-  const streamText = useTaskStreamText(task);
+  const streamed = useTaskStreamText(task);
+  const reasoning = visibleReasoning(streamed);
   const usageLine = useTaskUsageLine(task);
-  const isActive = line.status === "PROCESSING";
-  const showPanel = isActive && streamText.length > 0;
+  // The first text-delta flips a task to STREAMING, so PROCESSING alone would
+  // hide the panel for exactly the tasks that have something to show in it.
+  const isActive = line.status === "PROCESSING" || line.status === "STREAMING";
+  const showPanel = isActive && (streamed.text.length > 0 || reasoning.length > 0);
 
   return (
     <Box flexDirection="column">
@@ -47,7 +44,11 @@ export function StreamingTextRow({ task, line }: TaskRowProps): React.ReactEleme
           borderColor="gray"
           paddingX={1}
         >
-          <Text dimColor>{tailLines(streamText, MAX_LINES)}</Text>
+          {streamed.text.length > 0 ? (
+            <Text dimColor>{tailLines(streamed.text, STREAM_PANEL_MAX_LINES)}</Text>
+          ) : (
+            <StreamedReasoning reasoning={reasoning} maxLines={STREAM_PANEL_MAX_LINES} />
+          )}
         </Box>
       )}
     </Box>

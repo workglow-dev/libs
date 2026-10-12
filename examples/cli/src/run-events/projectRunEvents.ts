@@ -5,6 +5,7 @@
  */
 
 import type { ITask, StreamEvent, TaskGraph, TaskIdType, Usage } from "@workglow/task-graph";
+import { classifyTextDelta } from "../ui/model/streamedText";
 import { cliTaskLabel } from "../ui/taskGraphCliSubscriptions";
 import { projectTaskSubtree } from "./projectSubtrees";
 import type { RunEventSink } from "./runEventChannel";
@@ -119,8 +120,16 @@ export function projectRunEvents(
     });
   const onChunk = (taskId: TaskIdType, event: StreamEvent): void => {
     if (event.type === "text-delta") {
-      const delta = (event as { textDelta?: string; text?: string }).textDelta ?? "";
-      if (delta) sink.emit({ k: "text", id: String(taskId), delta });
+      // A task's reasoning streams beside its reply on its own port; folded into
+      // the row's text it would read as part of the answer, so it is its own kind.
+      const classified = classifyTextDelta(event);
+      if (classified) {
+        sink.emit({
+          k: classified.port === "text" ? "text" : "reasoning",
+          id: String(taskId),
+          delta: classified.delta,
+        });
+      }
     } else if (event.type === "object-delta" && (event as { port?: string }).port === "messages") {
       const task = graph.getTask(taskId);
       sink.emit({

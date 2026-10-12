@@ -49,6 +49,8 @@ export function TaskNode(props: NodeProps<Node<TaskNodeData, string>>) {
   const [streamingText, setStreamingText] = useState<string>("");
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const streamingTextRef = useRef<string>("");
+  const [reasoningText, setReasoningText] = useState<string>("");
+  const reasoningTextRef = useRef<string>("");
   const task = data.task;
   const [trackedTask, setTrackedTask] = useState(task);
   if (trackedTask !== task) {
@@ -58,10 +60,17 @@ export function TaskNode(props: NodeProps<Node<TaskNodeData, string>>) {
     setProgressMessage(undefined);
     setSubTasks(task.hasChildren() ? task.subGraph.getTasks() : []);
     setIsExpandable(task.hasChildren());
+    // What the previous task streamed is not this one's, and this one may have
+    // started streaming before the effect below subscribes to it.
+    setIsStreaming(false);
+    setStreamingText("");
+    setReasoningText("");
   }
 
   useEffect(() => {
     const unsubscribes: (() => void)[] = [];
+    streamingTextRef.current = "";
+    reasoningTextRef.current = "";
 
     // Helper to update consolidated progress
     const updateConsolidatedProgress = () => {
@@ -93,14 +102,23 @@ export function TaskNode(props: NodeProps<Node<TaskNodeData, string>>) {
         setIsStreaming(true);
         setStreamingText("");
         streamingTextRef.current = "";
+        setReasoningText("");
+        reasoningTextRef.current = "";
       })
     );
 
     unsubscribes.push(
       task.subscribe("stream_chunk", (event: StreamEvent) => {
         if (event.type === "text-delta") {
-          streamingTextRef.current += event.textDelta;
-          setStreamingText(streamingTextRef.current);
+          // A model's thinking streams beside its answer on its own port; every
+          // other port, a missing one included, is what the task is saying.
+          if (event.port === "reasoning") {
+            reasoningTextRef.current += event.textDelta;
+            setReasoningText(reasoningTextRef.current);
+          } else {
+            streamingTextRef.current += event.textDelta;
+            setStreamingText(streamingTextRef.current);
+          }
         } else if (event.type === "snapshot") {
           const text = typeof event.data === "string" ? event.data : JSON.stringify(event.data);
           streamingTextRef.current = text;
@@ -203,12 +221,20 @@ export function TaskNode(props: NodeProps<Node<TaskNodeData, string>>) {
           message={progressMessage}
         />
 
-        {(isStreaming || (status === TaskStatus.STREAMING && streamingText)) && (
+        {(isStreaming || (status === TaskStatus.STREAMING && (streamingText || reasoningText))) && (
           <div className="mt-2 p-2 bg-[rgba(28,35,50,0.6)] rounded-sm text-xs font-mono max-h-24 overflow-y-auto">
             <div className="flex items-center gap-1 mb-1">
               <span className="inline-block w-2 h-2 rounded-full bg-blue-500 animate-streaming-pulse" />
               <span className="text-blue-400 text-[10px]">Streaming</span>
             </div>
+            {reasoningText && (
+              <details className="task-node-reasoning mb-1 text-gray-500 italic">
+                <summary className="cursor-pointer text-[10px] select-none">Thinking</summary>
+                <pre className="whitespace-pre-wrap break-words text-[11px] max-h-16 overflow-y-auto">
+                  {reasoningText}
+                </pre>
+              </details>
+            )}
             <pre className="whitespace-pre-wrap text-gray-300 break-words">{streamingText}</pre>
           </div>
         )}

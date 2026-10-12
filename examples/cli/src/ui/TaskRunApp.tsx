@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { IRunConfig, ITask } from "@workglow/task-graph";
+import type { IRunConfig, ITask, StreamEvent } from "@workglow/task-graph";
 import { Box, Static, Text, useWindowSize } from "ink";
 import path from "node:path";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -15,11 +15,18 @@ import { ProgressBar } from "./components/ProgressBar";
 import { deriveRunState, RunStatusBar } from "./components/RunStatusBar";
 import { RunViewportProvider } from "./components/RunViewport";
 import { ScrollRegion } from "./components/ScrollRegion";
+import { StreamedReasoning } from "./components/StreamedReasoning";
 import { StreamOutput } from "./components/StreamOutput";
 import { TaskErrorDetail } from "./components/TaskErrorDetail";
 import { TaskStatusProgressRow } from "./components/TaskStatusProgressRow";
 import { HumanInteractionHost } from "./HumanInteractionHost";
 import { planRunViewport } from "./model/runViewport";
+import {
+  EMPTY_STREAMED_TEXT,
+  foldTextDelta,
+  visibleReasoning,
+  type StreamedText,
+} from "./model/streamedText";
 import { isRedundantSubgraph, SubtaskRows } from "./rows/SubtaskRows";
 import { settledTaskDurationMs } from "./rows/taskDuration";
 import { useSubtaskRows } from "./rows/useSubtaskRows";
@@ -99,7 +106,7 @@ export function TaskRunApp({
     message: undefined,
   });
   const [downloadFiles, setDownloadFiles] = useState<TaskFileProgressRow[]>([]);
-  const [streamText, setStreamText] = useState("");
+  const [streamed, setStreamed] = useState<StreamedText>(EMPTY_STREAMED_TEXT);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const runUsageLine = useGraphUsageLine(task.subGraph);
   const subtasks = useSubtaskRows(task);
@@ -152,21 +159,18 @@ export function TaskRunApp({
       if (msg) progressRef.current.msg = msg;
     });
 
-    // `textDelta`, not `text`: that is the field name on StreamTextDelta, and
-    // the loose local type here is why reading the wrong one showed as an
-    // empty panel rather than as a compile error.
-    task.events.on("stream_chunk", (event: { type: string; textDelta?: string }) => {
-      if (event.type === "text-delta" && event.textDelta) {
-        setStreamText((prev) => prev + event.textDelta);
-      }
+    task.events.on("stream_chunk", (event: StreamEvent) => {
+      setStreamed((prev) => foldTextDelta(prev, event));
     });
 
+    // Only the answer is kept in the scrollback; the thinking behind it is
+    // shown while it streams and then dropped.
     task.events.on("stream_end", () => {
-      setStreamText((prev) => {
-        if (prev) {
-          setLogs((logs) => [...logs, { id: logCounter++, text: prev }]);
+      setStreamed((prev) => {
+        if (prev.text) {
+          setLogs((logs) => [...logs, { id: logCounter++, text: prev.text }]);
         }
-        return "";
+        return EMPTY_STREAMED_TEXT;
       });
     });
 
@@ -188,6 +192,7 @@ export function TaskRunApp({
   }, [onComplete, onError, task, taskType, overrides, runConfig]);
 
   /** Job queue may register multiple subgraph tasks of the same type (mirrors); hide when all match the parent. */
+  const reasoning = visibleReasoning(streamed);
   const subgraphIsAllSameTypeMirror =
     isModelDownloadTask &&
     subtasks.rows.length > 1 &&
@@ -242,7 +247,8 @@ export function TaskRunApp({
                     ))}
                   </Box>
                 )}
-                {streamText && <StreamOutput text={streamText} />}
+                {streamed.text && <StreamOutput text={streamed.text} />}
+                {reasoning && <StreamedReasoning reasoning={reasoning} />}
                 {showSubtasksSection && (
                   <SubtaskRows
                     listKey={`/${String(task.id)}`}

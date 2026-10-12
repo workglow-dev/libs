@@ -6,27 +6,25 @@
 
 import type { ITask, StreamEvent } from "@workglow/task-graph";
 import { useEffect, useState } from "react";
+import { EMPTY_STREAMED_TEXT, foldTextDelta, type StreamedText } from "../model/streamedText";
 
 /**
  * Subscribes to `stream_chunk` text-delta events on a task and returns the
- * accumulated text. Clears on `stream_end` or when the task status transitions
- * to COMPLETED.
+ * accumulated answer and reasoning, kept apart by port. Clears on `stream_end`
+ * or when the task status transitions to COMPLETED.
  */
-export function useTaskStreamText(task: ITask): string {
-  const [text, setText] = useState("");
+export function useTaskStreamText(task: ITask): StreamedText {
+  const [text, setText] = useState<StreamedText>(EMPTY_STREAMED_TEXT);
 
   useEffect(() => {
     const onChunk = (event: StreamEvent): void => {
-      if (event.type !== "text-delta") return;
-      const delta = event.textDelta ?? "";
-      if (!delta) return;
-      setText((prev) => prev + delta);
+      setText((prev) => foldTextDelta(prev, event));
     };
     const onEnd = (): void => {
-      setText("");
+      setText(EMPTY_STREAMED_TEXT);
     };
     const onStatus = (status: string): void => {
-      if (status === "COMPLETED") setText("");
+      if (status === "COMPLETED") setText(EMPTY_STREAMED_TEXT);
     };
 
     task.events.on("stream_chunk", onChunk);

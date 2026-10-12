@@ -1303,6 +1303,20 @@ details.adv > summary:hover {
 .bubble .txt {
   color: var(--scr-fg);
 }
+.bubble.thinking {
+  border-left-color: var(--scr-faint);
+  background: none;
+}
+.bubble.thinking .r {
+  margin-right: 8px;
+  font-style: italic;
+  font-weight: 400;
+  color: var(--scr-faint);
+}
+.bubble.thinking .txt {
+  color: var(--scr-dim);
+  font-style: italic;
+}
 .bubble .caret {
   display: inline-block;
   width: 7px;

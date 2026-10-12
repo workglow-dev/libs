@@ -26,6 +26,7 @@ export interface RunRow {
   readonly progress: number | undefined;
   readonly message: string | undefined;
   readonly streamText: string;
+  readonly reasoningText: string;
   readonly messages: unknown;
   readonly usage: { input: number; output: number; cached: number } | undefined;
   readonly startedAt: number | undefined;
@@ -192,6 +193,7 @@ export function reduceRunEvent(
         progress: undefined,
         message: undefined,
         streamText: "",
+        reasoningText: "",
         messages: undefined,
         usage: undefined,
         startedAt: undefined,
@@ -221,6 +223,11 @@ export function reduceRunEvent(
       const row = state.rows.get(event.id);
       if (!row) return state;
       return withRow(state, event.id, { streamText: row.streamText + event.delta });
+    }
+    case "reasoning": {
+      const row = state.rows.get(event.id);
+      if (!row) return state;
+      return withRow(state, event.id, { reasoningText: row.reasoningText + event.delta });
     }
     case "messages":
       return withRow(state, event.id, { messages: event.messages });

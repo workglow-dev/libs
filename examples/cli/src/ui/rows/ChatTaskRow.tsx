@@ -9,7 +9,14 @@ import type { ITask, StreamEvent } from "@workglow/task-graph";
 import { Box, Text } from "ink";
 import React, { useEffect, useState, useSyncExternalStore } from "react";
 import { TaskErrorDetail } from "../components/TaskErrorDetail";
+import { StreamedReasoning } from "../components/StreamedReasoning";
 import { TaskStatusProgressRow } from "../components/TaskStatusProgressRow";
+import {
+  EMPTY_STREAMED_TEXT,
+  foldTextDelta,
+  visibleReasoning,
+  type StreamedText,
+} from "../model/streamedText";
 import type { TaskRowProps } from "./pickRenderer";
 import { settledTaskDurationMs } from "./taskDuration";
 import { useTaskUsageLine } from "./useTaskUsageLine";
@@ -39,6 +46,9 @@ function blockToText(block: ContentBlock): string {
       return `[tool_use: ${block.name}]`;
     case "tool_result":
       return "[tool_result]";
+    case "reasoning":
+      // Kept for the model, not shown as part of the reply.
+      return "";
   }
 }
 
@@ -72,25 +82,24 @@ export function ChatTaskRow({ task, line }: TaskRowProps): React.ReactElement {
     () => messagesFromTask(task),
     () => messagesFromTask(task)
   );
-  // `streamText` is the in-progress assistant text for the *current* turn.
-  // Appends on every text-delta; resets whenever history grows (meaning the
-  // previous turn's assistant message just landed, or a new user turn has
-  // started), and on stream_end.
-  const [streamText, setStreamText] = useState("");
+  // `streamed` is the in-progress assistant text (and thinking, kept apart by
+  // port) for the *current* turn. Appends on every text-delta; resets whenever
+  // history grows (meaning the previous turn's assistant message just landed,
+  // or a new user turn has started), and on stream_end.
+  const [streamed, setStreamed] = useState<StreamedText>(EMPTY_STREAMED_TEXT);
   const usageLine = useTaskUsageLine(task);
 
   useEffect(() => {
     const onChunk = (event: StreamEvent): void => {
       if (event.type === "text-delta") {
-        const delta = (event as { textDelta?: string; text?: string }).textDelta ?? "";
-        if (delta) setStreamText((prev) => prev + delta);
+        setStreamed((prev) => foldTextDelta(prev, event));
       } else if (event.type === "object-delta" && event.port === "messages") {
         // Each object-delta marks a turn boundary — clear the per-turn
         // streaming buffer so the next turn's text-deltas start fresh.
-        setStreamText("");
+        setStreamed(EMPTY_STREAMED_TEXT);
       }
     };
-    const onEnd = (): void => setStreamText("");
+    const onEnd = (): void => setStreamed(EMPTY_STREAMED_TEXT);
     task.events.on("stream_chunk", onChunk);
     task.events.on("stream_end", onEnd);
     return () => {
@@ -148,7 +157,8 @@ export function ChatTaskRow({ task, line }: TaskRowProps): React.ReactElement {
 
   // PROCESSING
   const tail = messages.slice(Math.max(0, messages.length - HISTORY_TAIL));
-  const showStreamingBubble = streamText.length > 0;
+  const showStreamingBubble = streamed.text.length > 0;
+  const reasoning = visibleReasoning(streamed);
 
   return (
     <Box flexDirection="column">
@@ -179,7 +189,15 @@ export function ChatTaskRow({ task, line }: TaskRowProps): React.ReactElement {
             <Text color="magenta" bold>
               assistant:{" "}
             </Text>
-            <Text dimColor>{streamText}</Text>
+            <Text dimColor>{streamed.text}</Text>
+          </Box>
+        )}
+        {reasoning.length > 0 && (
+          <Box flexDirection="row">
+            <Text color="magenta" bold>
+              assistant:{" "}
+            </Text>
+            <StreamedReasoning reasoning={reasoning} />
           </Box>
         )}
       </Box>

@@ -21,6 +21,9 @@ import { MapView } from "./MapView";
 /** Braille frames, the same family the terminal spins. */
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
+/** The most of a model's thinking a row keeps on screen; older text scrolls off. */
+const REASONING_TAIL_CHARS = 600;
+
 const RUNNING = new Set(["PROCESSING", "STREAMING", "ABORTING"]);
 
 function durationOf(row: RunRow): number | undefined {
@@ -51,7 +54,10 @@ function TaskRow({
   const iteration = state.iterations.get(row.id);
   const detail = taskDetailText(row.progress, durationOf(row), running);
   const showBar = running && row.progress !== undefined;
-  const indeterminate = running && row.progress === undefined && row.streamText.length > 0;
+  const indeterminate =
+    running &&
+    row.progress === undefined &&
+    (row.streamText.length > 0 || row.reasoningText.length > 0);
 
   return (
     <div>
@@ -84,6 +90,15 @@ function TaskRow({
         </div>
       ) : null}
       {iteration ? <MapView taskId={row.id} map={iteration} tick={tick} view={mapView} /> : null}
+      {row.reasoningText && !row.streamText && running ? (
+        <div className={`bubble thinking d${Math.min(row.depth, 1)}`}>
+          <div className="turn">
+            <span className="r">thinking</span>
+            <span className="txt">{row.reasoningText.slice(-REASONING_TAIL_CHARS)}</span>
+            <span className="caret" />
+          </div>
+        </div>
+      ) : null}
       {row.streamText && running ? (
         <div className={`bubble d${Math.min(row.depth, 1)}`}>
           <div className="turn">

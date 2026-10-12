@@ -57,8 +57,15 @@ afterEach(() => {
   container.remove();
 });
 
-function renderTaskNode(usageValue: Usage | undefined): void {
-  const task = new NoopTask();
+function renderTaskNode(usageValue: Usage | undefined, task: Task = new NoopTask()): void {
+  act(() => {
+    root = createRoot(container);
+  });
+  rerenderTaskNode(usageValue, task);
+}
+
+/** Renders into the existing root, as ReactFlow does when it reuses a node for another task. */
+function rerenderTaskNode(usageValue: Usage | undefined, task: Task): void {
   const nodeProps = {
     id: String(task.id),
     type: "task",
@@ -79,7 +86,6 @@ function renderTaskNode(usageValue: Usage | undefined): void {
   };
 
   act(() => {
-    root = createRoot(container);
     root.render(
       createElement(ReactFlowProvider, null, createElement(TaskNode, nodeProps as never))
     );
@@ -96,5 +102,68 @@ describe("TaskNode per-node usage badge (the node actually rendered on the graph
   it("renders no usage badge when the node has reported nothing", () => {
     renderTaskNode(undefined);
     expect(container.querySelector(".task-node-usage")).toBeNull();
+  });
+});
+
+describe("TaskNode streaming panel", () => {
+  const delta = (port: string | undefined, textDelta: string) =>
+    port === undefined
+      ? { type: "text-delta" as const, textDelta }
+      : { type: "text-delta" as const, port, textDelta };
+
+  it("shows reasoning in its own subdued block, above the answer", () => {
+    const task = new NoopTask();
+    renderTaskNode(undefined, task);
+    act(() => {
+      task.emit("stream_start");
+      task.emit("stream_chunk", delta("reasoning", "Weighing it.") as never);
+      task.emit("stream_chunk", delta("text", "The answer.") as never);
+    });
+
+    const reasoning = container.querySelector("details.task-node-reasoning");
+    expect(reasoning?.textContent).toContain("Weighing it.");
+    expect(reasoning?.textContent).not.toContain("The answer.");
+
+    const answer = [...container.querySelectorAll("pre")].find((pre) => !reasoning?.contains(pre));
+    expect(answer?.textContent).toBe("The answer.");
+    expect(
+      reasoning!.compareDocumentPosition(answer!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("drops the previous task's stream when the node is reused for another task", () => {
+    const first = new NoopTask();
+    renderTaskNode(undefined, first);
+    act(() => {
+      first.emit("stream_start");
+      first.emit("stream_chunk", delta("reasoning", "First task's thinking.") as never);
+      first.emit("stream_chunk", delta("text", "First answer.") as never);
+    });
+    expect(container.textContent).toContain("First task's thinking.");
+
+    rerenderTaskNode(undefined, new NoopTask());
+    expect(container.textContent).not.toContain("First task's thinking.");
+    expect(container.textContent).not.toContain("First answer.");
+  });
+
+  it("treats a delta with no port as the answer", () => {
+    const task = new NoopTask();
+    renderTaskNode(undefined, task);
+    act(() => {
+      task.emit("stream_start");
+      task.emit("stream_chunk", delta(undefined, "plain") as never);
+    });
+    expect(container.querySelector("details.task-node-reasoning")).toBeNull();
+    expect(container.querySelector("pre")?.textContent).toBe("plain");
+  });
+
+  it("draws no reasoning block for a task that sends none", () => {
+    const task = new NoopTask();
+    renderTaskNode(undefined, task);
+    act(() => {
+      task.emit("stream_start");
+      task.emit("stream_chunk", delta("text", "only answer") as never);
+    });
+    expect(container.querySelector("details.task-node-reasoning")).toBeNull();
   });
 });

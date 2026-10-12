@@ -59,6 +59,8 @@ export type RunEvent =
       readonly message?: string;
     }
   | { readonly k: "text"; readonly id: string; readonly delta: string }
+  /** A model's thinking, streamed beside its answer; never folded into `text`. */
+  | { readonly k: "reasoning"; readonly id: string; readonly delta: string }
   | { readonly k: "messages"; readonly id: string; readonly messages: unknown }
   | {
       readonly k: "human_request";
