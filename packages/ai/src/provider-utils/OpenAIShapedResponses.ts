@@ -43,6 +43,8 @@ export interface OpenAIResponsesMessageSource {
     readonly function?: { readonly name?: string; readonly arguments?: string };
   }[];
   readonly tool_call_id?: string;
+  /** The provider's own output items for this assistant turn, replayed verbatim. */
+  readonly native_items?: readonly unknown[] | undefined;
 }
 
 /** A Responses request `input` item — a role message or a tool item. */
@@ -143,6 +145,18 @@ export function buildResponsesInput(args: {
     }
 
     if (message.role === "assistant") {
+      // The provider's own turn, replayed as it produced it: its reasoning only
+      // continues from items it can decrypt, and only while the calls still
+      // match — a host that renamed or dropped a call gets the rebuilt turn.
+      const native = message.native_items;
+      if (
+        native &&
+        sameCalls(native, message.tool_calls ?? []) &&
+        nativeText(native) === contentToString(message.content)
+      ) {
+        items.push(...(native as OpenAIResponsesInputItem[]));
+        continue;
+      }
       // Preserve any assistant text, then each tool call as a `function_call`
       // item (Responses represents tool calls as items, not message fields).
       const text = contentToString(message.content);
@@ -169,6 +183,66 @@ export function buildResponsesInput(args: {
     input: items,
     instructions: instructionParts.length > 0 ? instructionParts.join("\n\n") : undefined,
   };
+}
+
+/**
+ * The text the native items said, run together as the turn records it: an
+ * edited or removed reply means the items are no longer the turn, so it is
+ * rebuilt rather than replayed.
+ */
+function nativeText(native: readonly unknown[]): string {
+  return native
+    .filter((item) => (item as { type?: unknown } | null)?.type === "message")
+    .flatMap((item) => {
+      const content = (item as { content?: unknown }).content;
+      return Array.isArray(content) ? content : [];
+    })
+    .map((part) => {
+      const p = part as { type?: unknown; text?: unknown };
+      return p?.type === "output_text" && typeof p.text === "string" ? p.text : "";
+    })
+    .join("");
+}
+
+/** A call's arguments as one canonical string: the API's own spacing is not part of it. */
+function canonicalArguments(args: unknown): string | undefined {
+  if (typeof args !== "string") return undefined;
+  try {
+    return JSON.stringify(JSON.parse(args === "" ? "{}" : args));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether the native items' calls are the message's calls exactly: the same
+ * ids, names and arguments, in order. A host that changed any of them gets the
+ * rebuilt turn, since replaying the items would send the call it replaced.
+ */
+function sameCalls(
+  native: readonly unknown[],
+  calls: readonly {
+    readonly id?: string;
+    readonly function?: { readonly name?: string; readonly arguments?: string };
+  }[]
+): boolean {
+  const nativeCalls = native.filter(
+    (item): item is { type: string; call_id: string; name?: unknown; arguments?: unknown } =>
+      (item as { type?: string } | null)?.type === "function_call"
+  );
+  return (
+    nativeCalls.length === calls.length &&
+    nativeCalls.every((item, i) => {
+      const call = calls[i]!;
+      const args = canonicalArguments(item.arguments);
+      return (
+        item.call_id === (call.id ?? "") &&
+        item.name === call.function?.name &&
+        args !== undefined &&
+        args === canonicalArguments(call.function?.arguments ?? "")
+      );
+    })
+  );
 }
 
 export function buildResponsesTools(tools: readonly ToolDefinition[]): OpenAIResponsesTool[] {
@@ -246,11 +320,21 @@ interface ResponsesToolCallEntry {
  *
  * Pass `promptText` to emit a provisional ↑ estimate before the first delta —
  * Responses only attaches billed usage to the terminal lifecycle event.
+ *
+ * Pass `nativeTurnProvider` to also emit the turn's finished output items,
+ * verbatim and in order, as one `nativeTurn` `object-delta` keyed by that
+ * provider, so the next round can replay them. Nothing is emitted when the turn
+ * has no items, or when any reasoning item came back without
+ * `encrypted_content`: replaying that item makes the API look it up by id,
+ * which fails under `store: false`, zero data retention, or once it expired.
  */
 export async function accumulateOpenAIResponsesStream<Output = Record<string, any>>(
   stream: AsyncIterable<any>,
   emit: (event: StreamEvent<Output>) => void,
-  options: { readonly promptText?: string | undefined } = {}
+  options: {
+    readonly promptText?: string | undefined;
+    readonly nativeTurnProvider?: string | undefined;
+  } = {}
 ): Promise<Usage | undefined> {
   // Keyed by the output item's stable id (`item.id` on `output_item.{added,done}`,
   // `item_id` on `function_call_arguments.delta`). Falls back to `output_index`
@@ -258,6 +342,9 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
   // concurrent function calls that share (or lack) the index onto one slot,
   // silently dropping every call but the last.
   const toolCalls = new Map<string, ResponsesToolCallEntry>();
+  // Every finished output item by position, for replay on the next round; kept
+  // only when the caller asked for a native turn.
+  const outputItems = new Map<number, unknown>();
   // Responses only reports billed usage on the terminal lifecycle event; when the
   // caller supplies promptText, estimate ↑ before the first delta and ↓ from
   // content / tool-arg deltas so the CLI counter moves during the call. The
@@ -343,6 +430,12 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
 
       case "response.output_item.done": {
         const item = event.item;
+        if (item && options.nativeTurnProvider !== undefined) {
+          outputItems.set(
+            typeof event.output_index === "number" ? event.output_index : outputItems.size,
+            item
+          );
+        }
         if (item?.type === "function_call") {
           // Same lookup order as delta: id first, then output_index, so an entry
           // registered under either shape by `added` is found.
@@ -386,6 +479,23 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
         // Ignore the remaining lifecycle events (created/in_progress),
         // reasoning summaries, and non-function tool events.
         break;
+    }
+  }
+
+  if (options.nativeTurnProvider !== undefined && outputItems.size > 0) {
+    const items = [...outputItems.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+    const replayable = items.every((item) => {
+      const { type, encrypted_content } = item as { type?: unknown; encrypted_content?: unknown };
+      return (
+        type !== "reasoning" || (typeof encrypted_content === "string" && encrypted_content !== "")
+      );
+    });
+    if (replayable) {
+      emit({
+        type: "object-delta",
+        port: "nativeTurn",
+        objectDelta: { provider: options.nativeTurnProvider, payload: JSON.stringify(items) },
+      } as StreamEvent<Output>);
     }
   }
 

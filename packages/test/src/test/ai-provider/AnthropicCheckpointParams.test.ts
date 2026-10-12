@@ -102,6 +102,44 @@ describe("applyAnthropicPrefixReplay", () => {
     expect((params.system as any[])[0].text).toBe("sys");
   });
 
+  it("replays a prefix turn's signed thinking for the model that wrote it", () => {
+    const thinking = { type: "thinking", thinking: "plan", signature: "SIG" };
+    const turn = (provider: string) => ({
+      ...prefix,
+      messages: [
+        prefix.messages[0]!,
+        {
+          role: "assistant" as const,
+          content: [
+            {
+              type: "reasoning" as const,
+              text: "plan",
+              provider,
+              payload: JSON.stringify([thinking, { type: "text", text: "hi" }]),
+            },
+            { type: "text" as const, text: "hi" },
+          ],
+        },
+      ],
+    });
+    const replay = (provider: string): any[] => {
+      const params: Record<string, unknown> = {
+        model: "claude-x",
+        messages: [{ role: "user", content: [{ type: "text", text: "tail" }] }],
+      };
+      applyAnthropicPrefixReplay(params, { sessionId: "ckpt", prefix: turn(provider) });
+      return (params.messages as any[])[1].content;
+    };
+    expect(replay("anthropic:claude-x")[0]).toEqual(thinking);
+    expect(replay("anthropic:other")[0]).toEqual({
+      type: "text",
+      text: "hi",
+      cache_control: { type: "ephemeral" },
+    });
+    const warm = buildAnthropicCheckpointParams(turn("anthropic:claude-x") as any, "claude-x");
+    expect((warm.messages as any[])[1].content[0]).toEqual(thinking);
+  });
+
   it("annotates the final turn when emitting a chained checkpoint", () => {
     const session: AiSessionContext = { sessionId: "ckpt", emitCheckpointId: "next", prefix };
     const params: Record<string, unknown> = {

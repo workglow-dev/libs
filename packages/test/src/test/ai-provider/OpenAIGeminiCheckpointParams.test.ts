@@ -217,6 +217,121 @@ describe("OpenAI checkpoint prompt_cache_key parity", () => {
     expect(consumerRequest.tool_choice).toBeUndefined();
   });
 
+  it.each([
+    ["a reasoning model replays", "gpt-5", true],
+    ["a model without reasoning rebuilds", "gpt-4.1", false],
+  ])(
+    "writes a native turn and a tool image the same way in warm-up and tool calling: %s it",
+    async (_label, modelName, replays) => {
+      const model = { provider_config: { model_name: modelName } } as never;
+      const nativeItems = [
+        { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "ENC" },
+        { type: "function_call", call_id: "c1", name: "a", arguments: "{}" },
+      ];
+      const replayPrefix = {
+        systemPrompt: "sys",
+        tools: prefix.tools,
+        messages: [
+          { role: "user" as const, content: [{ type: "text" as const, text: "look" }] },
+          {
+            role: "assistant" as const,
+            content: [
+              {
+                type: "reasoning" as const,
+                text: "",
+                provider: `openai:${modelName}`,
+                payload: JSON.stringify(nativeItems),
+              },
+              { type: "tool_use" as const, id: "c1", name: "a", input: {} },
+            ],
+          },
+          {
+            role: "tool" as const,
+            content: [
+              {
+                type: "tool_result" as const,
+                tool_use_id: "c1",
+                content: [{ type: "image" as const, mimeType: "image/png", data: "AAAA" }],
+              },
+            ],
+          },
+        ],
+      };
+      const session = { sessionId: `ckpt-${modelName}`, prefix: replayPrefix } as AiSessionContext;
+      await findOpenAiRunFn("cache.checkpoint")(
+        { model: modelName } as CacheCheckpointTaskInput,
+        model,
+        new AbortController().signal,
+        () => {},
+        undefined,
+        session
+      );
+      await findOpenAiRunFn("tool-use")(
+        { model: modelName, prompt: "tail", tools: [] } as never,
+        model,
+        new AbortController().signal,
+        () => {},
+        undefined,
+        session
+      );
+
+      expect(openAiRequests).toHaveLength(2);
+      const [warmUpRequest, consumerRequest] = openAiRequests;
+      const warmed = warmUpRequest.input as unknown[];
+      const sent = consumerRequest.input as unknown[];
+      expect(sent.slice(0, warmed.length)).toEqual(warmed);
+      expect(sent.length).toBeGreaterThan(warmed.length);
+      if (replays) expect(warmed).toContainEqual(nativeItems[0]);
+      else expect(warmed).not.toContainEqual(nativeItems[0]);
+    }
+  );
+
+  it("writes a tool image the same way in warm-up and text generation", async () => {
+    const model = { provider_config: { model_name: "gpt-4.1" } } as never;
+    const imagePrefix = {
+      systemPrompt: "sys",
+      messages: [
+        { role: "user" as const, content: [{ type: "text" as const, text: "look" }] },
+        {
+          role: "assistant" as const,
+          content: [{ type: "tool_use" as const, id: "c1", name: "a", input: {} }],
+        },
+        {
+          role: "tool" as const,
+          content: [
+            {
+              type: "tool_result" as const,
+              tool_use_id: "c1",
+              content: [{ type: "image" as const, mimeType: "image/png", data: "AAAA" }],
+            },
+          ],
+        },
+      ],
+    };
+    const session = { sessionId: "ckpt-text-image", prefix: imagePrefix } as AiSessionContext;
+    await findOpenAiRunFn("cache.checkpoint")(
+      { model: "gpt-4.1" } as CacheCheckpointTaskInput,
+      model,
+      new AbortController().signal,
+      () => {},
+      undefined,
+      session
+    );
+    await findOpenAiRunFn("text.generation")(
+      { model: "gpt-4.1", prompt: "tail" } as TextGenerationTaskInput,
+      model,
+      new AbortController().signal,
+      () => {},
+      undefined,
+      session
+    );
+    const [warmUpRequest, consumerRequest] = openAiRequests;
+    const warmed = warmUpRequest!.input as unknown[];
+    const sent = consumerRequest!.input as unknown[];
+    expect(sent.slice(0, warmed.length)).toEqual(warmed);
+    expect(JSON.stringify(warmed)).toContain("data:image/png;base64,AAAA");
+  });
+
   it("an empty-string system prompt keeps the warmed instructions and cache key", async () => {
     const session: AiSessionContext = { sessionId: "ckpt-oai-2", prefix };
     await runWarmUp(session);

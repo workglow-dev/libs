@@ -49,12 +49,17 @@ function buildResponsesParams(
 ): Record<string, unknown> {
   const hasMessages = Array.isArray(input.messages) && input.messages.length > 0;
   const messages = hasMessages
-    ? toOpenAIMessages({
-        messages: input.messages,
-        systemPrompt: input.systemPrompt,
-        prompt: "",
-        tools: [],
-      } as never)
+    ? toOpenAIMessages(
+        {
+          messages: input.messages,
+          systemPrompt: input.systemPrompt,
+          prompt: "",
+          tools: [],
+        } as never,
+        // A function_call_output carries text only: images a tool returned go on a
+        // user turn after the results, as the checkpoint warm-up writes them.
+        { toolImagesInUserMessage: true }
+      )
     : undefined;
 
   const { input: responsesInput, instructions } = buildResponsesInput({

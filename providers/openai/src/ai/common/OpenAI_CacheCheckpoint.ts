@@ -22,6 +22,34 @@ import { finalizeResponsesRequest, getClient, getModelName } from "./OpenAI_Clie
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
 
 /**
+ * How a conversation is turned into chat messages for a finalized Responses
+ * request. Warming a checkpoint and sending a turn over it must agree, or the
+ * request diverges from the warmed prefix at the first turn they write
+ * differently and the prompt cache stops matching there.
+ *
+ * A native turn is replayed only into a request that asks for encrypted
+ * reasoning back: with reasoning off its items would be looked up by id and
+ * fail where nothing is stored, so the turn is rebuilt instead. It is keyed by
+ * model, because encrypted reasoning is readable only by the model that wrote it.
+ */
+export function openAIConversationOptions(
+  model: OpenAiModelConfig | undefined,
+  params: Record<string, unknown>
+): { readonly toolImagesInUserMessage: true; readonly nativeTurnProvider?: string | undefined } {
+  const replay =
+    (model?.provider_config as { replay_reasoning?: boolean } | undefined)?.replay_reasoning !==
+    false;
+  const reasoning = params.reasoning as { effort?: string } | undefined;
+  const wantsEncryptedReasoning = replay && reasoning !== undefined && reasoning.effort !== "none";
+  return {
+    // A function_call_output carries text only, so images a tool returned go on
+    // a user turn after the results.
+    toolImagesInUserMessage: true,
+    ...(wantsEncryptedReasoning ? { nativeTurnProvider: `openai:${getModelName(model)}` } : {}),
+  };
+}
+
+/**
  * Merges a checkpoint prefix into the unified generation input: the prefix's
  * messages come first, the caller's tail follows (its `messages`, or its
  * `prompt` lifted into a user message — the shared message builders only fall
@@ -89,13 +117,15 @@ export const OpenAI_CacheCheckpoint_Stream: AiProviderRunFn<
   // The "." prompt is a throwaway user turn used only when the prefix has no
   // messages of its own (toOpenAIMessages ignores it otherwise); the cached
   // value is the system/tools region ahead of it.
-  const messages = toOpenAIMessages({
+  const conversation = {
     messages: prefix.messages ?? [],
     systemPrompt: prefix.systemPrompt,
     prompt: ".",
     tools: [],
-  } as never);
-  const { input: responsesInput, instructions } = buildResponsesInput({ messages });
+  } as never;
+  const { input: responsesInput, instructions } = buildResponsesInput({
+    messages: toOpenAIMessages(conversation, { toolImagesInUserMessage: true }),
+  });
 
   const params: Record<string, unknown> = {
     model: getModelName(model),
@@ -107,6 +137,11 @@ export const OpenAI_CacheCheckpoint_Stream: AiProviderRunFn<
     params.tools = buildResponsesTools(prefix.tools);
   }
   finalizeResponsesRequest(model, params);
+  // Written the way a turn over this checkpoint writes it, now that the
+  // request's reasoning is settled.
+  params.input = buildResponsesInput({
+    messages: toOpenAIMessages(conversation, openAIConversationOptions(model, params)),
+  }).input;
 
   const response = await (client.responses.create as (p: unknown, o: unknown) => Promise<unknown>)(
     params,

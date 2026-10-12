@@ -29,6 +29,69 @@ async function collect(list: readonly unknown[]): Promise<any[]> {
 }
 
 describe("accumulateOpenAIResponsesStream", () => {
+  it("hands back every output item in order when asked for the native turn", async () => {
+    const out: StreamEvent<Record<string, any>>[] = [];
+    const reasoning = { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "ENC" };
+    const call = {
+      type: "function_call",
+      id: "fc_1",
+      call_id: "c1",
+      name: "look",
+      arguments: "{}",
+    };
+    await accumulateOpenAIResponsesStream(
+      events([
+        { type: "response.output_item.done", output_index: 1, item: call },
+        { type: "response.output_item.done", output_index: 0, item: reasoning },
+        { type: "response.completed", response: { usage: undefined } },
+      ]),
+      (e) => out.push(e),
+      { nativeTurnProvider: "openai" }
+    );
+    const native = out.find((e) => e.type === "object-delta" && e.port === "nativeTurn");
+    expect(native).toEqual({
+      type: "object-delta",
+      port: "nativeTurn",
+      objectDelta: { provider: "openai", payload: JSON.stringify([reasoning, call]) },
+    });
+  });
+
+  it("emits no native turn when a reasoning item came back without encrypted content", async () => {
+    for (const reasoning of [
+      { type: "reasoning", id: "rs_1", summary: [] },
+      { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "" },
+      { type: "reasoning", id: "rs_1", summary: [], encrypted_content: null },
+    ]) {
+      const out: StreamEvent<Record<string, any>>[] = [];
+      await accumulateOpenAIResponsesStream(
+        events([
+          { type: "response.output_item.done", output_index: 0, item: reasoning },
+          {
+            type: "response.output_item.done",
+            output_index: 1,
+            item: {
+              type: "function_call",
+              id: "fc_1",
+              call_id: "c1",
+              name: "look",
+              arguments: "{}",
+            },
+          },
+        ]),
+        (e) => out.push(e),
+        { nativeTurnProvider: "openai" }
+      );
+      expect(out.some((e) => e.type === "object-delta" && e.port === "nativeTurn")).toBe(false);
+    }
+  });
+
+  it("emits no native turn unless asked", async () => {
+    const out = await collect([
+      { type: "response.output_item.done", output_index: 0, item: { type: "reasoning", id: "r" } },
+    ]);
+    expect(out.some((e) => e.type === "object-delta" && e.port === "nativeTurn")).toBe(false);
+  });
+
   it("maps output_text deltas to text-delta events on the text port", async () => {
     const out = await collect([
       { type: "response.created" },
@@ -340,6 +403,84 @@ describe("mapResponsesToolChoice", () => {
 });
 
 describe("buildResponsesInput", () => {
+  it("replays an assistant turn's native items verbatim instead of rebuilding it", () => {
+    const items = [
+      { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "ENC" },
+      { type: "function_call", id: "fc_1", call_id: "c1", name: "look", arguments: "{}" },
+    ];
+    const { input } = buildResponsesInput({
+      messages: [
+        { role: "user", content: "go" },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "c1", type: "function", function: { name: "look", arguments: "{}" } }],
+          native_items: items,
+        },
+        { role: "tool", tool_call_id: "c1", content: "looked" },
+      ] as never,
+    });
+    expect(input).toEqual([
+      { role: "user", content: "go" },
+      ...items,
+      { type: "function_call_output", call_id: "c1", output: "looked" },
+    ]);
+  });
+
+  it("rebuilds the turn when its calls no longer match the native items", () => {
+    const { input } = buildResponsesInput({
+      messages: [
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            { id: "c1-2", type: "function", function: { name: "look", arguments: "{}" } },
+          ],
+          native_items: [{ type: "function_call", call_id: "c1", name: "look", arguments: "{}" }],
+        },
+      ] as never,
+    });
+    expect(input).toEqual([
+      { type: "function_call", call_id: "c1-2", name: "look", arguments: "{}" },
+    ]);
+  });
+
+  it("replays despite the API's spacing, and rebuilds when a call's arguments changed", () => {
+    const turn = (args: string) =>
+      buildResponsesInput({
+        messages: [
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              { id: "c1", type: "function", function: { name: "look", arguments: args } },
+            ],
+            native_items: [
+              { type: "function_call", call_id: "c1", name: "look", arguments: '{"a": 1}' },
+            ],
+          },
+        ] as never,
+      }).input;
+    expect(turn('{"a":1}')).toEqual([
+      { type: "function_call", call_id: "c1", name: "look", arguments: '{"a": 1}' },
+    ]);
+    expect(turn('{"a":2}')).toEqual([
+      { type: "function_call", call_id: "c1", name: "look", arguments: '{"a":2}' },
+    ]);
+  });
+
+  it("rebuilds the turn when its text no longer matches the native items", () => {
+    const items = [
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "Hi" }] },
+    ];
+    const turn = (content: string) =>
+      buildResponsesInput({
+        messages: [{ role: "assistant", content, native_items: items }] as never,
+      }).input;
+    expect(turn("Hi")).toEqual(items);
+    expect(turn("Edited")).toEqual([{ role: "assistant", content: "Edited" }]);
+  });
+
   it("uses the prompt string as input when there are no messages", () => {
     expect(buildResponsesInput({ prompt: "hello" })).toEqual({
       input: "hello",

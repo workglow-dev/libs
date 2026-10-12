@@ -90,7 +90,7 @@ export function buildAnthropicCheckpointParams(
   // entries, so a non-empty prefix.messages can still convert to [].
   const messages =
     prefix.messages && prefix.messages.length > 0
-      ? buildAnthropicMessages(prefix.messages, "")
+      ? buildAnthropicMessages(prefix.messages, "", `anthropic:${modelName}`)
       : [];
   if (messages.length > 0) {
     annotateLastBlock(messages[messages.length - 1] as { content: unknown });
@@ -138,9 +138,12 @@ export function applyAnthropicPrefixReplay(
 
   // Guard on the CONVERTED array: buildAnthropicMessages skips system-role
   // entries, so a non-empty prefix.messages can still convert to [].
+  // The prefix's own turns replay with their signed thinking, keyed as tool
+  // calling keys them, so a checkpointed turn reaches the model as it wrote it.
+  const nativeKey = typeof params.model === "string" ? `anthropic:${params.model}` : undefined;
   const prefixMessages =
     prefix.messages && prefix.messages.length > 0
-      ? buildAnthropicMessages(prefix.messages, "")
+      ? buildAnthropicMessages(prefix.messages, "", nativeKey)
       : [];
   if (prefixMessages.length > 0) {
     annotateLastBlock(prefixMessages[prefixMessages.length - 1] as { content: unknown });

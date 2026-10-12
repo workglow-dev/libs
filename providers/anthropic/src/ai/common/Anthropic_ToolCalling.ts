@@ -43,9 +43,91 @@ function isEmptyTextBlock(block: { type?: unknown; text?: unknown }): boolean {
   return block.type === "text" && (block.text === undefined || block.text === "");
 }
 
+/**
+ * Whether a stored block is one of the kinds this provider captures, with the
+ * fields Anthropic requires of it. An empty text block is refused outright, and
+ * one cannot be dropped from a signed turn, so a payload holding one (never
+ * emitted here) is rebuilt instead; so is a tool_use without an input object.
+ */
+function isReplayableBlock(block: unknown): boolean {
+  if (block === null || typeof block !== "object" || Array.isArray(block)) return false;
+  const b = block as Record<string, unknown>;
+  switch (b.type) {
+    case "text":
+      return typeof b.text === "string" && !isEmptyTextBlock(b);
+    case "thinking":
+      return (
+        typeof b.thinking === "string" && typeof b.signature === "string" && b.signature !== ""
+      );
+    case "redacted_thinking":
+      return typeof b.data === "string" && b.data !== "";
+    case "tool_use":
+      return (
+        typeof b.id === "string" &&
+        typeof b.name === "string" &&
+        b.input !== null &&
+        typeof b.input === "object" &&
+        !Array.isArray(b.input)
+      );
+    default:
+      return false;
+  }
+}
+
+/**
+ * The turn a model produced, as the blocks the API returned in the order it
+ * returned them — or `undefined` when the payload is unusable or the host
+ * changed the turn's tool calls (an id, a name or an input) or its text, in
+ * which case it is rebuilt from the message.
+ */
+function parseOwnTurn(payload: string, content: ChatMessage["content"]): any[] | undefined {
+  let blocks: unknown;
+  try {
+    blocks = JSON.parse(payload);
+  } catch {
+    return undefined;
+  }
+  // Every block must be one this provider writes, carrying what Anthropic
+  // requires of it; anything else would be a 400 rather than a rebuilt turn.
+  if (!Array.isArray(blocks) || !blocks.every(isReplayableBlock)) return undefined;
+  // The payload's calls must be the message's calls exactly — id, name and
+  // input — or the replay would send a call the host has since changed.
+  const sent = blocks.filter((b) => b?.type === "tool_use") as Array<{
+    id?: unknown;
+    name?: unknown;
+    input?: unknown;
+  }>;
+  const calls = content.filter((b) => b.type === "tool_use");
+  if (sent.length !== calls.length) return undefined;
+  const same = sent.every(
+    (block, i) =>
+      block.id === calls[i]!.id &&
+      block.name === calls[i]!.name &&
+      JSON.stringify(block.input) === JSON.stringify(calls[i]!.input ?? {})
+  );
+  if (!same) return undefined;
+  // And its text must be the message's text: the turn's text arrives as its
+  // text blocks run together, so an edited reply rebuilds rather than replays.
+  const sentText = blocks
+    .filter((b) => b?.type === "text" && typeof b.text === "string")
+    .map((b) => (b as { text: string }).text)
+    .join("");
+  const messageText = content
+    .filter((b) => b.type === "text")
+    .map((b) => (b as { text: string }).text)
+    .join("");
+  if (sentText !== messageText) return undefined;
+  return blocks.length > 0 ? blocks : undefined;
+}
+
+/**
+ * `nativeTurnProvider` is the key a reasoning block must carry to be replayed;
+ * without it every assistant turn is rebuilt from its text and tool calls.
+ */
 export function buildAnthropicMessages(
   messages: ReadonlyArray<ChatMessage> | undefined,
-  prompt: unknown
+  prompt: unknown,
+  nativeTurnProvider: string | undefined
 ): any[] {
   if (!messages || messages.length === 0) {
     return [{ role: "user", content: prompt }];
@@ -54,6 +136,7 @@ export function buildAnthropicMessages(
   for (const msg of messages) {
     if (msg.role === "user") {
       const blocks = msg.content
+        .filter((b) => b.type !== "reasoning")
         .map((b) => {
           if (b.type === "text") return { type: "text", text: b.text };
           if (b.type === "image") {
@@ -68,7 +151,28 @@ export function buildAnthropicMessages(
       if (blocks.length === 0) continue;
       out.push({ role: "user", content: blocks });
     } else if (msg.role === "assistant") {
+      // The model's own turn, replayed exactly as it produced it: a thinking
+      // block's signature binds it to the conversation before it, so its text,
+      // the tool inputs and the block order are sent unchanged — and only while
+      // the calls still match, since a host that renamed one changed the turn.
+      const own =
+        nativeTurnProvider === undefined
+          ? undefined
+          : msg.content.find(
+              (b): b is Extract<ChatMessage["content"][number], { type: "reasoning" }> =>
+                b.type === "reasoning" &&
+                b.provider === nativeTurnProvider &&
+                b.payload !== undefined
+            );
+      const replayed = own ? parseOwnTurn(own.payload!, msg.content) : undefined;
+      if (replayed) {
+        out.push({ role: "assistant", content: replayed });
+        continue;
+      }
+      // Reasoning another provider streamed as text has no Anthropic form (its
+      // thinking blocks are signed), and an unknown block is a 400.
       const blocks = msg.content
+        .filter((b) => b.type !== "reasoning")
         .map((b) => {
           if (b.type === "text") return { type: "text", text: b.text };
           if (b.type === "tool_use") {
@@ -86,20 +190,24 @@ export function buildAnthropicMessages(
             b.type === "tool_result"
         )
         .map((b) => {
-          const content = b.content.map((inner) => {
-            if (inner.type === "text") return { type: "text", text: inner.text };
-            if (inner.type === "image") {
-              return {
-                type: "image",
-                source: { type: "base64", media_type: inner.mimeType, data: inner.data },
-              };
-            }
-            return inner;
-          });
+          const content = b.content
+            .map((inner) => {
+              if (inner.type === "text") return { type: "text", text: inner.text };
+              if (inner.type === "image") {
+                return {
+                  type: "image",
+                  source: { type: "base64", media_type: inner.mimeType, data: inner.data },
+                };
+              }
+              return inner;
+            })
+            .filter((inner) => !isEmptyTextBlock(inner));
+          // A tool that returned nothing still answers its call: `content` is
+          // optional on a tool_result, where an empty text block is a 400.
           return {
             type: "tool_result",
             tool_use_id: b.tool_use_id,
-            content,
+            ...(content.length > 0 ? { content } : {}),
             ...(b.is_error ? { is_error: true } : {}),
           };
         });
@@ -126,6 +234,84 @@ type AnthropicBlockMeta =
       readonly json: PartialJsonStream;
     }
   | { readonly type: "text" };
+
+/** A content block as the API produced it, accumulated for replay. */
+type NativeBlock =
+  | { type: "thinking"; thinking: string; signature: string }
+  | { type: "redacted_thinking"; data: string }
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; raw: string };
+
+const THINKING_BLOCK_TYPES: ReadonlySet<string> = new Set(["thinking", "redacted_thinking"]);
+
+/** Anthropic's 400 for a replayed thinking block whose signature no longer matches. */
+function isThinkingSignatureError(err: unknown): boolean {
+  const e = err as { status?: unknown; message?: unknown } | undefined;
+  return (
+    e?.status === 400 &&
+    typeof e.message === "string" &&
+    e.message.includes("Invalid `signature` in `thinking` block")
+  );
+}
+
+/**
+ * The messages with every thinking block removed (a message left empty is
+ * dropped), or `undefined` when there was none to remove — a request without
+ * thinking cannot have been rejected for it, so there is nothing to retry.
+ */
+function withoutThinking(messages: readonly any[]): any[] | undefined {
+  const out: any[] = [];
+  let removed = false;
+  for (const msg of messages) {
+    if (msg?.role !== "assistant" || !Array.isArray(msg.content)) {
+      out.push(msg);
+      continue;
+    }
+    const content = msg.content.filter((b: any) => !THINKING_BLOCK_TYPES.has(b?.type));
+    if (content.length !== msg.content.length) removed = true;
+    if (content.length > 0) out.push({ ...msg, content });
+  }
+  return removed ? out : undefined;
+}
+
+/**
+ * The reply's blocks in index order as the API produced them, or `undefined`
+ * when there is nothing to replay or the turn cannot be replayed verbatim: a
+ * tool input that cannot be parsed from its raw JSON, a thinking block that
+ * never received its signature, or an empty text block that must be dropped
+ * ahead of a thinking block (the signature binds the blocks before it). The
+ * replay must carry exactly what the model wrote, so a guess is worse than
+ * rebuilding the turn.
+ */
+function serializeNativeTurn(native: ReadonlyMap<number, NativeBlock>): string | undefined {
+  const ordered = [...native.entries()].sort((a, b) => a[0] - b[0]).map(([, block]) => block);
+  let lastThinking = -1;
+  ordered.forEach((block, i) => {
+    if (THINKING_BLOCK_TYPES.has(block.type)) lastThinking = i;
+  });
+  const blocks: unknown[] = [];
+  for (const [i, block] of ordered.entries()) {
+    if (block.type === "tool_use") {
+      let input: unknown;
+      try {
+        input = block.raw ? JSON.parse(block.raw) : {};
+      } catch {
+        return undefined;
+      }
+      blocks.push({ type: "tool_use", id: block.id, name: block.name, input });
+    } else if (block.type === "text") {
+      // The API rejects an empty text block, so one is dropped — which is only
+      // faithful when no thinking block follows it.
+      if (block.text !== "") blocks.push(block);
+      else if (i < lastThinking) return undefined;
+    } else if (block.type === "thinking" && block.signature === "") {
+      return undefined;
+    } else {
+      blocks.push(block);
+    }
+  }
+  return blocks.length > 0 ? JSON.stringify(blocks) : undefined;
+}
 
 function mapAnthropicToolChoice(
   toolChoice: string | undefined
@@ -165,7 +351,10 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
     toolChoice = { type: "auto" };
   }
 
-  const messages = buildAnthropicMessages(input.messages, input.prompt);
+  // Thinking blocks are bound to the model that produced them, so the native
+  // turn is keyed by model and another model gets the rebuilt turn.
+  const nativeKey = `anthropic:${modelName}`;
+  const messages = buildAnthropicMessages(input.messages, input.prompt, nativeKey);
 
   const params: any = {
     model: modelName,
@@ -216,90 +405,160 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
     }
   }
 
-  const stream = client.messages.stream(params, { signal });
-
-  const blockMeta = new Map<number, AnthropicBlockMeta>();
-  /** Keyed by Anthropic content block index — avoids collisions when `id` is missing during early deltas. */
-  const toolCallsByBlockIndex = new Map<number, ToolCall>();
-
-  const toolCallsInStreamOrder = (): ToolCall[] =>
-    [...toolCallsByBlockIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, tc]) => tc);
+  /** Whether anything has reached the consumer, since a retry after output would repeat it. */
+  let emitted = false;
+  const emitTracked: typeof emit = (event) => {
+    emitted = true;
+    emit(event);
+  };
 
   /**
-   * Defence-in-depth: drop tool calls whose name isn't in the effective
-   * declared tool set (the caller's tools, or the prefix's on fallback)
-   * before yielding to the consumer. Anthropic's tool API normally respects
-   * the declarations, but a stray response from a model that hallucinates a
-   * function name would otherwise propagate to dispatch.
+   * One request and the consumption of its stream. All streaming state lives
+   * inside, so a retry starts clean.
    */
-  const validatedToolCallsInStreamOrder = (): ToolCall[] =>
-    filterValidToolCalls(toolCallsInStreamOrder(), toolDefinitions);
+  const consume = async (requestParams: any): Promise<void> => {
+    const stream = client.messages.stream(requestParams, { signal });
 
-  const usageCollector = createAnthropicUsageCollector();
-  const snapshotUsage = createUsageSnapshotEmitter(emit);
-  for await (const event of stream) {
-    usageCollector.observe(event);
-    snapshotUsage(usageCollector.result());
-    maybeEmitAnthropicRefusal(event, emit);
-    if (event.type === "content_block_start") {
-      const block = event.content_block;
-      const index = event.index as number;
-      if (block.type === "tool_use") {
-        blockMeta.set(index, {
-          type: "tool_use",
-          id: block.id ?? "",
-          name: block.name ?? "",
-          json: createPartialJsonStream(),
-        });
-      } else if (block.type === "text") {
-        blockMeta.set(index, { type: "text" });
-      }
-    } else if (event.type === "content_block_delta") {
-      const index = event.index as number;
-      const delta = event.delta as any;
-      if (delta.type === "text_delta") {
-        emit({ type: "text-delta", port: "text", textDelta: delta.text });
-      } else if (delta.type === "input_json_delta") {
+    const blockMeta = new Map<number, AnthropicBlockMeta>();
+    const native = new Map<number, NativeBlock>();
+    /** Keyed by Anthropic content block index — avoids collisions when `id` is missing during early deltas. */
+    const toolCallsByBlockIndex = new Map<number, ToolCall>();
+
+    const toolCallsInStreamOrder = (): ToolCall[] =>
+      [...toolCallsByBlockIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, tc]) => tc);
+
+    /**
+     * Defence-in-depth: drop tool calls whose name isn't in the effective
+     * declared tool set (the caller's tools, or the prefix's on fallback)
+     * before yielding to the consumer. Anthropic's tool API normally respects
+     * the declarations, but a stray response from a model that hallucinates a
+     * function name would otherwise propagate to dispatch.
+     */
+    const validatedToolCallsInStreamOrder = (): ToolCall[] =>
+      filterValidToolCalls(toolCallsInStreamOrder(), toolDefinitions);
+
+    /** Cleared by any block or delta the replay cannot reproduce exactly. */
+    let verbatim = true;
+
+    const usageCollector = createAnthropicUsageCollector();
+    const snapshotUsage = createUsageSnapshotEmitter(emitTracked);
+    for await (const event of stream) {
+      usageCollector.observe(event);
+      snapshotUsage(usageCollector.result());
+      maybeEmitAnthropicRefusal(event, emitTracked);
+      if (event.type === "content_block_start") {
+        const block = event.content_block;
+        const index = event.index as number;
+        if (block.type === "tool_use") {
+          blockMeta.set(index, {
+            type: "tool_use",
+            id: block.id ?? "",
+            name: block.name ?? "",
+            json: createPartialJsonStream(),
+          });
+          native.set(index, {
+            type: "tool_use",
+            id: block.id ?? "",
+            name: block.name ?? "",
+            raw: "",
+          });
+        } else if (block.type === "text") {
+          blockMeta.set(index, { type: "text" });
+          native.set(index, { type: "text", text: "" });
+        } else if (block.type === "thinking") {
+          native.set(index, {
+            type: "thinking",
+            thinking: block.thinking ?? "",
+            signature: block.signature ?? "",
+          });
+        } else if (block.type === "redacted_thinking") {
+          native.set(index, { type: "redacted_thinking", data: block.data ?? "" });
+        } else {
+          verbatim = false;
+        }
+      } else if (event.type === "content_block_delta") {
+        const index = event.index as number;
+        const delta = event.delta as any;
+        const nativeBlock = native.get(index);
+        if (delta.type === "text_delta") {
+          if (nativeBlock?.type === "text") nativeBlock.text += delta.text ?? "";
+          emitTracked({ type: "text-delta", port: "text", textDelta: delta.text });
+        } else if (delta.type === "thinking_delta") {
+          if (nativeBlock?.type === "thinking") nativeBlock.thinking += delta.thinking ?? "";
+          if (delta.thinking) {
+            emitTracked({ type: "text-delta", port: "reasoning", textDelta: delta.thinking });
+          }
+        } else if (delta.type === "signature_delta") {
+          if (nativeBlock?.type === "thinking") nativeBlock.signature += delta.signature ?? "";
+        } else if (delta.type === "input_json_delta") {
+          if (nativeBlock?.type === "tool_use") nativeBlock.raw += delta.partial_json ?? "";
+          const meta = blockMeta.get(index);
+          if (meta?.type === "tool_use") {
+            // `push` returns the parser's live root; `sanitizeToolArgs` copies it,
+            // so the emitted call is detached from later mutations.
+            const parsedInput = meta.json.push(delta.partial_json ?? "") ?? {};
+            toolCallsByBlockIndex.set(index, {
+              id: meta.id,
+              name: meta.name,
+              input: sanitizeToolArgs(parsedInput) as Record<string, unknown>,
+            });
+            emitTracked({
+              type: "object-delta",
+              port: "toolCalls",
+              objectDelta: validatedToolCallsInStreamOrder(),
+            });
+          }
+        } else {
+          verbatim = false;
+        }
+      } else if (event.type === "content_block_stop") {
+        const index = event.index as number;
         const meta = blockMeta.get(index);
         if (meta?.type === "tool_use") {
-          // `push` returns the parser's live root; `sanitizeToolArgs` copies it,
-          // so the emitted call is detached from later mutations.
-          const parsedInput = meta.json.push(delta.partial_json ?? "") ?? {};
+          const finalInput = meta.json.finishObject();
           toolCallsByBlockIndex.set(index, {
             id: meta.id,
             name: meta.name,
-            input: sanitizeToolArgs(parsedInput) as Record<string, unknown>,
+            input: sanitizeToolArgs(finalInput) as Record<string, unknown>,
           });
-          emit({
+          emitTracked({
             type: "object-delta",
             port: "toolCalls",
             objectDelta: validatedToolCallsInStreamOrder(),
           });
         }
+        blockMeta.delete(index);
       }
-    } else if (event.type === "content_block_stop") {
-      const index = event.index as number;
-      const meta = blockMeta.get(index);
-      if (meta?.type === "tool_use") {
-        const finalInput = meta.json.finishObject();
-        toolCallsByBlockIndex.set(index, {
-          id: meta.id,
-          name: meta.name,
-          input: sanitizeToolArgs(finalInput) as Record<string, unknown>,
-        });
-        emit({
-          type: "object-delta",
-          port: "toolCalls",
-          objectDelta: validatedToolCallsInStreamOrder(),
-        });
-      }
-      blockMeta.delete(index);
     }
-  }
 
-  emit({
-    type: "finish",
-    data: { text: "", toolCalls: [] } as ToolCallingTaskOutput,
-    usage: usageCollector.result(),
-  });
+    const nativeTurn = verbatim ? serializeNativeTurn(native) : undefined;
+    if (nativeTurn !== undefined) {
+      emitTracked({
+        type: "object-delta",
+        port: "nativeTurn",
+        objectDelta: { provider: nativeKey, payload: nativeTurn },
+      });
+    }
+
+    emitTracked({
+      type: "finish",
+      data: { text: "", toolCalls: [] } as ToolCallingTaskOutput,
+      usage: usageCollector.result(),
+    });
+  };
+
+  try {
+    await consume(params);
+  } catch (err) {
+    // A replayed thinking block whose signature no longer matches is a 400
+    // decided before any output; the documented recovery is to send the turn
+    // without its thinking, once.
+    if (emitted || !isThinkingSignatureError(err) || !Array.isArray(params.messages)) throw err;
+    const stripped = withoutThinking(params.messages);
+    if (stripped === undefined) throw err;
+    getLogger().warn("Anthropic rejected replayed thinking; retrying without it.", {
+      model: modelName,
+    });
+    await consume({ ...params, messages: stripped });
+  }
 };

@@ -19,7 +19,7 @@ import {
   promptTextForResponsesUsageEstimate,
 } from "@workglow/ai/provider-utils";
 import { filterValidToolCalls, toOpenAIMessages } from "@workglow/ai/worker";
-import { mergeOpenAICheckpointPrefix } from "./OpenAI_CacheCheckpoint";
+import { mergeOpenAICheckpointPrefix, openAIConversationOptions } from "./OpenAI_CacheCheckpoint";
 import { finalizeResponsesRequest, getClient, getModelName } from "./OpenAI_Client";
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
 
@@ -27,7 +27,10 @@ import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
  * Streaming run-fn for `["text.generation", "tool-use"]`. Calls the OpenAI
  * Responses endpoint with `stream: true` and forwards delta events via
  * {@link accumulateOpenAIResponsesStream}, which emits `text-delta` and tool-call
- * `object-delta` events plus a final empty `finish`.
+ * `object-delta` events plus a final empty `finish`. The turn's own output
+ * items go back on the `nativeTurn` port only when the request asked for
+ * encrypted reasoning, since a replayed reasoning item without it is looked up
+ * by id and fails where the response is not stored.
  *
  * Defence-in-depth: each tool-call `object-delta` is filtered against the
  * effective tool declarations (the caller's tools, or the checkpoint prefix's
@@ -49,17 +52,16 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
   const merged = mergeOpenAICheckpointPrefix(sessionContext, input);
   const toolDefinitions = merged?.tools ?? input.tools;
   const tools = buildResponsesTools(toolDefinitions);
+  const conversation = merged
+    ? ({
+        ...input,
+        messages: merged.messages,
+        systemPrompt: merged.systemPrompt,
+        prompt: "",
+      } as ToolCallingTaskInput)
+    : input;
   const { input: responsesInput, instructions } = buildResponsesInput({
-    messages: toOpenAIMessages(
-      merged
-        ? ({
-            ...input,
-            messages: merged.messages,
-            systemPrompt: merged.systemPrompt,
-            prompt: "",
-          } as ToolCallingTaskInput)
-        : input
-    ),
+    messages: toOpenAIMessages(conversation, { toolImagesInUserMessage: true }),
   });
   const toolChoice = mapResponsesToolChoice(input.toolChoice);
 
@@ -73,6 +75,18 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
   if (input.maxTokens !== undefined) params.max_output_tokens = input.maxTokens;
   if (input.temperature !== undefined) params.temperature = input.temperature;
   finalizeResponsesRequest(model, params);
+  // A reasoning model starts its thinking over every round unless it is handed
+  // its encrypted reasoning back; the items come back on `nativeTurn`. The
+  // input is written the way the checkpoint warm-up writes it, so a prefix
+  // still matches.
+  const conversationOptions = openAIConversationOptions(model, params);
+  const nativeKey = conversationOptions.nativeTurnProvider;
+  if (nativeKey !== undefined) {
+    params.include = ["reasoning.encrypted_content"];
+    params.input = buildResponsesInput({
+      messages: toOpenAIMessages(conversation, conversationOptions),
+    }).input;
+  }
 
   const promptText = promptTextForResponsesUsageEstimate(params);
   createEstimatedOutputUsageReporter(emit).onPrompt(promptText);
@@ -94,7 +108,7 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
       }
       emit(event);
     },
-    { promptText }
+    { promptText, nativeTurnProvider: nativeKey }
   );
   emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput, usage });
 };
