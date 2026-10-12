@@ -1,0 +1,13 @@
+{
+  // No `references`: with `use-source` stubs, project-reference redirect turns
+  // `dist/*.d.ts` → `src` and makes stub `export * from "../src/browser"` a
+  // self-import, so every `@workglow/*` export appears missing.
+  "extends": "../../tsconfig.json",
+  "include": ["src/**/*"],
+  "exclude": ["dist"],
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": "./src"
+  }
+}
