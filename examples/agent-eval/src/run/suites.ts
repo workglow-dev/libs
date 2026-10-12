@@ -129,6 +129,45 @@ function prefixSuffixGlobs(prefix: string, suffix: string): string[] {
 }
 
 /**
+ * `glob` itself when every name it can match already falls under `prefixGlob`
+ * (`P*`), `[]` when none can, `undefined` when that cannot be told apart here.
+ * Decided when `glob` has no `*` (each character matches exactly one, so a
+ * fixed-length match either covers the prefix or contradicts it), and when it
+ * holds a single `*` whose head already covers the prefix. This is what lets a
+ * `?`-filter narrower than a suite's `prefix_*` pattern through.
+ */
+function subsetOfPrefix(glob: string, prefixGlob: string): string[] | undefined {
+  const split = splitStar(prefixGlob);
+  if (!split || split.tail !== "") return undefined;
+  const prefix = split.head;
+  if (!glob.includes("*")) {
+    if (glob.length < prefix.length) return [];
+    for (let i = 0; i < prefix.length; i++) {
+      if (glob[i] !== prefix[i] && glob[i] !== "?") return [];
+    }
+    return [glob];
+  }
+  // A single-`*` glob (which may also hold `?`) whose head already covers the
+  // prefix matches only inside it (`polyglot_python_?*` needs one more
+  // character after the suite's `polyglot_python_*` prefix). A `?` inside the
+  // prefix range is only a partial overlap, and a head short of the prefix
+  // reaches into the star, so neither can be written down here.
+  const star = glob.indexOf("*");
+  if (star < 0 || glob.indexOf("*", star + 1) >= 0) return undefined;
+  const head = glob.slice(0, star);
+  // A contradiction inside the overlap means no name matches both, even when
+  // the head is short of the prefix. Past the overlap a short head reaches
+  // into the star, so only a head covering the whole prefix proves the subset.
+  const compared = Math.min(head.length, prefix.length);
+  for (let i = 0; i < compared; i++) {
+    if (head[i] === prefix[i] || prefix[i] === "?") continue;
+    return head[i] === "?" ? undefined : [];
+  }
+  if (head.length < prefix.length) return undefined;
+  return [glob];
+}
+
+/**
  * The task names `a` and `b` both match, as globs Harbor takes as one list: `[]` when
  * no name can match both, `undefined` when the overlap is not one this can write down.
  * Decided for literals, and for a single-`*` glob against a prefix glob (`P*`), which
@@ -143,7 +182,11 @@ function globIntersection(a: string, b: string): string[] | undefined {
   if (!/[*?]/.test(b)) return globRegExp(a).test(b) ? [b] : [];
   const sa = splitStar(a);
   const sb = splitStar(b);
-  if (!sa || !sb) return undefined;
+  if (!sa || !sb) {
+    // One side may be a `?`-glob with no `*` decided against the other's
+    // prefix above; anything wider stays unwritable.
+    return subsetOfPrefix(a, b) ?? subsetOfPrefix(b, a);
+  }
   const [glob, prefix] = sb.tail === "" ? [sa, sb.head] : sa.tail === "" ? [sb, sa.head] : [];
   if (!glob || prefix === undefined) return undefined;
   if (glob.head.startsWith(prefix)) return [`${glob.head}*${glob.tail}`];
@@ -175,7 +218,7 @@ export function narrowDataset<T extends JobDataset>(
           if (both === undefined) {
             throw new Error(
               `--tasks ${wanted} cannot be narrowed to this suite's ${allowed}: use a task ` +
-                `name, or a glob with one "*" and no [...] that starts within one of the suite's ` +
+                `name, or a glob with at most one "*" and no [...] that stays within one of the suite's ` +
                 `(${taskNames.join(", ")})`
             );
           }

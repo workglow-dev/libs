@@ -289,15 +289,23 @@ class WorkglowAgent(BaseInstalledAgent):
             logs_dir = self.environment_logs_dir.as_posix()
             flags = self.build_cli_flags()
             # Both are relative to the agent's own start, so the time setup took
-            # (the uploads above) comes off them.
-            spent = int(time.monotonic() - entered)
+            # (the uploads above) comes off them. Kept as a float: truncating
+            # would understate the setup time by up to a second. When setup has
+            # eaten the whole allowance there is no positive whole second left
+            # that ends before Harbor's deadline, so the flag is left off rather
+            # than clamped to 1 and scheduled past it.
+            spent = time.monotonic() - entered
             if self.options.max_duration_sec is None:
                 budget = self._max_duration_sec()
                 if budget is not None:
-                    flags = f"{flags} --max-duration-sec {max(1, budget - spent)}".strip()
+                    remaining = int(budget - spent)
+                    if remaining >= 1:
+                        flags = f"{flags} --max-duration-sec {remaining}".strip()
             stop = self._stop_after_sec()
             if stop is not None:
-                flags = f"{flags} --stop-after-sec {max(1, stop - spent)}".strip()
+                remaining = int(stop - spent)
+                if remaining >= 1:
+                    flags = f"{flags} --stop-after-sec {remaining}".strip()
             await self.exec_as_agent(
                 environment,
                 command=(

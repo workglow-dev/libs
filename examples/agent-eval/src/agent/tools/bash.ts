@@ -48,6 +48,41 @@ export function shellEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEn
 }
 
 /**
+ * Values that must never reach the transcript, read live so a test that sets
+ * them late still scrubs. Only non-trivial values: redacting a one-character
+ * value would mangle innocent output sharing it.
+ */
+function credentialValues(env: NodeJS.ProcessEnv = process.env): string[] {
+  const values = Object.entries(env)
+    .filter(
+      ([name, value]) => CREDENTIAL_ENV.test(name) && value !== undefined && value.length >= 8
+    )
+    .map(([, value]) => value as string)
+    .sort((a, b) => b.length - a.length);
+  return [...new Set(values)];
+}
+
+/**
+ * Removes credential values from command output before it reaches the
+ * transcript, the event log, or the spill file. Filtering the child's
+ * environment is not enough on its own: the agent starts with the provider
+ * keys in its own environment, and on Linux a same-UID command can read that
+ * back out of `/proc/$PPID/environ` no matter what the child was given, so a
+ * `printenv` and a `/proc` read exfiltrate alike. Scrubbing the output covers
+ * both, whatever path the value took to get there.
+ */
+export function scrubCredentialValues(
+  output: string,
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  let scrubbed = output;
+  for (const secret of credentialValues(env)) {
+    if (scrubbed.includes(secret)) scrubbed = scrubbed.split(secret).join("[REDACTED]");
+  }
+  return scrubbed;
+}
+
+/**
  * Runs `command` under `bash -c` in its own process group, so a timeout or an
  * abort stops everything it started — a test runner's workers, a server it
  * backgrounded — rather than only the shell.
@@ -251,18 +286,21 @@ export function createBashTool(context: CodingToolContext): ToolDefinition {
       const { sec: timeoutSec, capped } = commandTimeoutSec(requested, deadline, Date.now());
       const result = await runCommand(command, context.cwd, timeoutSec * 1000, signal);
 
-      const tail = truncateTail(result.output);
+      // Scrubbed before anything persists it: the transcript, the event log,
+      // and the spill file below all derive from this string.
+      const output = scrubCredentialValues(result.output);
+      const tail = truncateTail(output);
       let text = tail.text;
       if (tail.truncated || result.droppedBytes > 0) {
         await mkdir(context.spillDir, { recursive: true });
         const spill = join(context.spillDir, `bash-${uuid4()}.log`);
-        await writeFile(spill, result.output, "utf8");
+        await writeFile(spill, output, "utf8");
         const lost =
           result.droppedBytes > 0 ? `, ${result.droppedBytes} earlier bytes discarded` : "";
         text =
           `[Output truncated: showing the last ${tail.keptLines} of ${tail.totalLines} lines` +
           `${tail.partialLine ? ", the first of them only its end" : ""}. ` +
-          `Full output (${result.droppedBytes > 0 ? "last " : ""}${result.output.length} characters${lost}) saved to ${spill}]\n` +
+          `Full output (${result.droppedBytes > 0 ? "last " : ""}${output.length} characters${lost}) saved to ${spill}]\n` +
           text;
       }
       if (text.length === 0) text = "(no output)";

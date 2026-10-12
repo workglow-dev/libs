@@ -175,6 +175,13 @@ describe("narrowDataset", () => {
     ]);
   });
 
+  it("keeps a ?-filter already inside one of the suite's prefixes", () => {
+    expect(narrowDataset(lite, ["polyglot_python_?ank"], undefined)!.task_names).toEqual([
+      "polyglot_python_?ank",
+    ]);
+    expect(narrowDataset(lite, ["polyglot_go_???"], undefined)).toBeUndefined();
+  });
+
   it("refuses an overlap it cannot write down rather than dropping it", () => {
     expect(() => narrowDataset(lite, ["polyglot_*_bank*"], undefined)).toThrow(
       /cannot be narrowed/

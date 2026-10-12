@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadCredentialsFile } from "../agent/credentialsFile";
 import { PROBED_COMMANDS, probeCommands } from "../agent/environment";
@@ -166,7 +167,7 @@ describe("edit", () => {
   it("reports an ambiguous match and applies nothing for it", () => {
     const result = applyEdits("x\nx\n", [{ oldText: "x", newText: "y" }], "f");
     expect(result.content).toBe("x\nx\n");
-    expect(result.failures).toEqual([expect.stringMatching(/^edits\[0\]: .*2 occurrences/)]);
+    expect(result.failures).toEqual([expect.stringMatching(/^edits\[0\]: .*multiple occurrences/)]);
   });
 
   it("applies the first of two overlapping edits and reports the second", () => {
@@ -200,7 +201,7 @@ describe("edit", () => {
   it("counts overlapping fuzzy matches, so an ambiguous edit is refused", () => {
     // Trailing spaces defeat the exact match; each "a" line pair matches twice.
     const result = applyEdits("a\na\na\n", [{ oldText: "a \na ", newText: "x" }], "f");
-    expect(result.failures).toEqual([expect.stringMatching(/found 2 places matching/)]);
+    expect(result.failures).toEqual([expect.stringMatching(/found multiple places matching/)]);
   });
 
   it("searches fuzzily in time proportional to the file, not file × oldText", () => {
@@ -264,7 +265,7 @@ describe("edit", () => {
         },
         call
       )
-    ).rejects.toThrow(/Applied 1 of 2 edits[\s\S]*edits\[1\]: .*2 occurrences/);
+    ).rejects.toThrow(/Applied 1 of 2 edits[\s\S]*edits\[1\]: .*multiple occurrences/);
     expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("1\ntwo\ntwo\n");
   });
 
@@ -563,29 +564,59 @@ describe("bash", () => {
     }
   });
 
+  it("loads a credentials file into the environment and deletes it", () => {
+    const file = join(dir, "credentials.json");
+    writeFileSync(file, JSON.stringify({ WORKGLOW_TEST_API_KEY: "sk-from-file" }));
+    expect(loadCredentialsFile(file)).toEqual(["WORKGLOW_TEST_API_KEY"]);
+    expect(process.env.WORKGLOW_TEST_API_KEY).toBe("sk-from-file");
+    expect(existsSync(file)).toBe(false);
+    delete process.env.WORKGLOW_TEST_API_KEY;
+  });
+
   it.skipIf(process.platform !== "linux")(
-    "keeps keys loaded from a credentials file out of reach of its commands",
-    async () => {
-      const saved = { ...process.env };
-      const file = join(dir, "credentials.json");
-      writeFileSync(file, JSON.stringify({ WORKGLOW_TEST_API_KEY: "sk-from-file" }));
-      try {
-        expect(loadCredentialsFile(file)).toEqual(["WORKGLOW_TEST_API_KEY"]);
-        expect(process.env.WORKGLOW_TEST_API_KEY).toBe("sk-from-file");
-        expect(existsSync(file)).toBe(false);
-        // The shell's own environment, and its parent's starting environment, which
-        // a filter on the shell's environment cannot reach.
-        const out = String(
-          await createBashTool(context).execute!(
-            { command: "env; tr '\\0' '\\n' < /proc/$PPID/environ" },
-            call
-          )
-        );
-        expect(out).toContain("PATH=");
-        expect(out).not.toContain("sk-from-file");
-      } finally {
-        process.env = saved;
-      }
+    "keeps an exec-time credential out of command output however it is read",
+    () => {
+      // /proc/<pid>/environ shows the exec-time environment: a key set after
+      // this process started could never appear there, so asserting on it here
+      // would pass even if an inherited key leaked. The exfiltration has to run
+      // in a child launched with the key already in its environment — where a
+      // filter on the shell's environment alone cannot hide it from
+      // /proc/$PPID/environ.
+      const bashSrc = fileURLToPath(new URL("../agent/tools/bash.ts", import.meta.url));
+      const script = join(dir, "exfil-check.ts");
+      writeFileSync(
+        script,
+        [
+          `import { readFileSync } from "node:fs";`,
+          `import { createBashTool } from ${JSON.stringify(bashSrc)};`,
+          `const tool = createBashTool({`,
+          `  cwd: ${JSON.stringify(dir)},`,
+          `  spillDir: ${JSON.stringify(join(dir, ".spill"))},`,
+          `  defaultCommandTimeoutSec: 10,`,
+          `  images: false,`,
+          `});`,
+          `if (!readFileSync("/proc/self/environ", "utf8").includes("sk-from-file")) {`,
+          `  process.stderr.write("key missing from exec-time environ; test setup broken\\n");`,
+          `  process.exit(2);`,
+          `}`,
+          `const out = String(`,
+          `  await tool.execute!(`,
+          `    { command: "env; tr '\\\\0' '\\\\n' < /proc/$PPID/environ" },`,
+          `    { toolUseId: "t1", signal: new AbortController().signal, deadline: undefined }`,
+          `  )`,
+          `);`,
+          `process.stdout.write(out);`,
+          ``,
+        ].join("\n")
+      );
+      const out = execFileSync("bun", [script], {
+        cwd: dir,
+        env: { ...process.env, WORKGLOW_TEST_API_KEY: "sk-from-file" },
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+      expect(out).toContain("PATH=");
+      expect(out).not.toContain("sk-from-file");
     }
   );
 

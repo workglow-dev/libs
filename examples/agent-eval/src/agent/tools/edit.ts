@@ -42,7 +42,9 @@ export function normalizeLine(line: string): string {
 function exactRanges(content: string, needle: string): number[] {
   const found: number[] = [];
   let at = content.indexOf(needle);
-  while (at !== -1) {
+  // Only uniqueness matters to the caller; stop once it is disproven instead
+  // of retaining tens of millions of hits on a repetitive file.
+  while (at !== -1 && found.length < 2) {
     found.push(at);
     at = content.indexOf(needle, at + 1);
   }
@@ -90,7 +92,11 @@ function fuzzyRanges(content: string, oldText: string): Range[] {
       if (trailingNewline && end < content.length) end += 1;
       // Blank lines matched against the end of a file that has none (an empty
       // file asked for "\n") consume nothing: the edit would insert, not replace.
-      if (!pastLastLine && end !== start) ranges.push({ start, end, fuzzy: true });
+      if (!pastLastLine && end !== start) {
+        ranges.push({ start, end, fuzzy: true });
+        // As above: stop once uniqueness is disproven.
+        if (ranges.length === 2) return ranges;
+      }
       matched = fallback[matched - 1]!;
     }
     at = newline === -1 ? content.length + 1 : newline + 1;
@@ -114,7 +120,7 @@ function locate(content: string, edit: TextEdit, path: string, index: number): R
   }
   if (exact.length > 1) {
     throw new ToolCallError(
-      `${label}: found ${exact.length} occurrences of oldText in ${path}. ` +
+      `${label}: found multiple occurrences of oldText in ${path}. ` +
         "Include more surrounding lines so it matches exactly one place."
     );
   }
@@ -122,7 +128,7 @@ function locate(content: string, edit: TextEdit, path: string, index: number): R
   if (fuzzy.length === 1) return fuzzy[0]!;
   if (fuzzy.length > 1) {
     throw new ToolCallError(
-      `${label}: found ${fuzzy.length} places matching oldText in ${path} (ignoring trailing ` +
+      `${label}: found multiple places matching oldText in ${path} (ignoring trailing ` +
         "whitespace and typographic quotes). Include more surrounding lines so it matches one."
     );
   }

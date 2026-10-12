@@ -372,6 +372,23 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
   applyAnthropicThinkingParams(params, model);
   applyAnthropicSamplingParams(params, input, model);
 
+  // A forced tool choice suppresses legacy extended thinking (Anthropic rejects
+  // the combination), but the history may hold signed thinking blocks from an
+  // earlier auto-choice turn for this same model. Sending those blocks without
+  // thinking enabled is a 400 the signature retry below does not handle, so
+  // strip them up front. Scoped to the suppression case — thinking absent with
+  // no effort configured either — so an adaptive run (thinking or
+  // output_config.effort present) keeps replaying its turn verbatim.
+  if (
+    (toolChoice?.type === "any" || toolChoice?.type === "tool") &&
+    params.thinking === undefined &&
+    (params.output_config as { effort?: unknown } | undefined)?.effort === undefined &&
+    Array.isArray(params.messages)
+  ) {
+    const stripped = withoutThinking(params.messages);
+    if (stripped !== undefined) params.messages = stripped;
+  }
+
   if (input.systemPrompt) {
     params.system = input.systemPrompt;
   }
