@@ -1,0 +1,8 @@
+# The benchmark harness gives a model a shell and the file system of a
+# throwaway task container: its tools read, write and run whatever paths and
+# commands they are handed, by design. Scanning it reports that design as
+# injection on every tool, which buries findings in the code this repository
+# ships.
+name: workglow CodeQL config
+paths-ignore:
+  - examples/agent-eval
