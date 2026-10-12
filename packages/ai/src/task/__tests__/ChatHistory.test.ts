@@ -7,6 +7,7 @@
 import type { ChatMessage } from "@workglow/ai";
 import {
   DEFAULT_MAX_HISTORY_CHARS,
+  measureHistoryForModel,
   normalizeHistoryForModel,
   trimHistoryForModel,
 } from "@workglow/ai";
@@ -67,6 +68,28 @@ describe("trimHistoryForModel", () => {
     expect(trimHistoryForModel(history)).toEqual(history);
   });
 
+  it("keeps a system message past the leading run when it cuts the turn around it", () => {
+    const filler = "z".repeat(400);
+    const system: ChatMessage = { role: "system", content: [{ type: "text", text: "be terse" }] };
+    const history = [user(`old ${filler}`), system, assistant(`reply ${filler}`), user("now")];
+    const trimmed = trimHistoryForModel(history, 100, 3);
+    expect(trimmed).toEqual([system, user("now")]);
+  });
+
+  it("keeps a run of user messages whole, never cutting between them", () => {
+    const filler = "z".repeat(400);
+    const history = [
+      user(`old ${filler}`),
+      assistant(`reply ${filler}`),
+      user("the question"),
+      user("the new prompt"),
+    ];
+    // Too small for everything: the old turn goes, the pending user turn stays whole,
+    // even with keepFrom at the newest prompt.
+    const trimmed = trimHistoryForModel(history, 100, 3);
+    expect(trimmed).toEqual([user("the question"), user("the new prompt")]);
+  });
+
   it("cuts only at a user message, so no tool_result outlives its tool_use", () => {
     // The invariant is not "the first message is a user message" — it is that
     // every surviving `tool_result` still has the `tool_use` it answers, which
@@ -97,6 +120,32 @@ describe("trimHistoryForModel", () => {
     );
     expect(results.length).toBeGreaterThan(0);
     for (const id of results) expect(uses.has(id)).toBe(true);
+  });
+
+  it("does not count a reasoning block's payload against the budget", () => {
+    // The payload is a provider's own turn, replayed verbatim and never shown
+    // to the model as text, so a long one must not push earlier turns out.
+    const build = (payload: string | undefined): ChatMessage[] => {
+      const history: ChatMessage[] = [];
+      for (let i = 0; i < 6; i++) {
+        history.push(user(`ask ${i} ${"q".repeat(200)}`));
+        history.push({
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "", provider: "openai:m", ...(payload ? { payload } : {}) },
+            { type: "text", text: `done ${i} ${"a".repeat(200)}` },
+          ],
+        });
+      }
+      return history;
+    };
+    const budget = 1500;
+    const plain = trimHistoryForModel(build(undefined), budget);
+    expect(plain.length).toBeLessThan(12);
+    expect(plain.length).toBeGreaterThan(0);
+    const withPayload = trimHistoryForModel(build("p".repeat(5000)), budget);
+    expect(withPayload).toHaveLength(plain.length);
+    expect(withPayload[0]).toEqual(plain[0]);
   });
 
   it("keeps the newest turn even when it alone exceeds the budget", () => {
@@ -151,6 +200,36 @@ describe("trimHistoryForModel", () => {
     ];
     const trimmed = trimHistoryForModel(history, 500);
     expect(trimmed.map((m) => m.role)).toEqual(["system", "system", "user"]);
+  });
+
+  it("never cuts past keepFrom", () => {
+    // A turn's own reminder is a user message; cutting there would keep the
+    // reminder and drop the question it is about.
+    const history = [
+      user("old".repeat(200)),
+      assistant("old reply"),
+      user("the question"),
+      assistant("x".repeat(1000)),
+      user("check your work"),
+    ];
+    expect(trimHistoryForModel(history, 500)).toEqual([history[4]]);
+    expect(trimHistoryForModel(history, 500, 2)).toEqual(history.slice(2));
+  });
+
+  it("measures history as the trim does, payload left out", () => {
+    const plain: ChatMessage[] = [user("a"), assistant("b")];
+    const withPayload: ChatMessage[] = [
+      user("a"),
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "", provider: "openai:m", payload: "p".repeat(5000) },
+          { type: "text", text: "b" },
+        ],
+      },
+    ];
+    expect(measureHistoryForModel(plain)).toBeGreaterThan(0);
+    expect(measureHistoryForModel(withPayload)).toBeLessThan(5000);
   });
 
   it("exposes a default budget callers can reason about", () => {

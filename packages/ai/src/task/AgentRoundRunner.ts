@@ -14,6 +14,12 @@ export interface AgentRoundContext {
   /** The round's text as it streams, re-emitted as the turn's own. */
   readonly onTextDelta: (delta: string) => void;
   /**
+   * The round's reasoning as it streams, re-emitted as the turn's own on its
+   * `reasoning` port. Held with the round's text until the attempt settles, so
+   * a round that fails and is retried contributes neither.
+   */
+  readonly onReasoningDelta: (delta: string) => void;
+  /**
    * Progress while the round has nothing to say yet — a model being downloaded
    * or loaded. `progress` is 0..100, or undefined when there is no denominator.
    */

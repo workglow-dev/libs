@@ -243,15 +243,52 @@ The rest are controls a batch host needs: `toolConcurrency` (opt-in; a round hol
 put to a person still runs one at a time, and results return in the order asked),
 `maxRoundRetries` (default 2, for a `RetryableJobError`, waiting as the provider's
 retry-after says within 1–60 s), `roundTimeoutMs` (a provider can accept a request and never answer;
-past it the round is abandoned as a retryable failure, so the retries cover it; a round's text is
-forwarded only once the attempt settles, since a failed attempt's partial cannot be taken back
-from the accumulated text port), and budgets — `maxInputTokens`, `maxCostUsd` (refused
-without a price card, since a budget it cannot measure never stops anything, and failing closed
-for a round that reports no usage: it cannot be priced, so the turn ends `"budget"` after it),
+past it the round is abandoned as a retryable failure, so the retries cover it; a round's text and
+reasoning are forwarded only once the attempt settles, since a failed attempt's partial cannot be
+taken back from the accumulated port; reasoning goes out on the turn's own `reasoning` port, a
+blank line between rounds, and is absent from the output when no round returned any), and
+budgets — `maxInputTokens`, `maxCostUsd` (refused without a price card,
+since a budget it cannot measure never stops anything, and failing closed for a round that reports no usage: it cannot be priced, so the turn ends `"budget"` after it),
 `maxDurationMs` — each ending the turn `"budget"`, never between a `tool_use` and its result.
 Every round leaves an `AgentStep` on `steps` (timings, attempts, each tool's outcome and
 size, usage, cost) and rides on the `snapshot` beside `messages`; `costUsd` totals them when
 every round could be priced.
+A tool with an `execute` function is handed the turn's `deadline` on its `ToolExecuteContext`
+(undefined without `maxDurationMs`; a task-backed tool never receives it): the loop stops only
+between rounds, so a tool that can bound its own work caps it there. A retry wait that would pass
+the deadline ends the turn `"budget"` instead of sleeping. `announceTimeLeft` appends the time
+left to the text of each round's last tool result, and the notice stays in the returned
+`messages` — the model cannot budget time it is never told about, and a long command started in
+the last minutes is how a turn runs past its budget.
+`reviewPrompt` is sent once per turn, the first time the model replies without a tool call, so it
+checks its answer against what it was asked before the turn ends; the model may go back to its
+tools. A chat host that passes it on every turn gets a review each turn. It is skipped with
+`outputSchema` (that is `checkSubmission`'s job) and when no round, budget or time is left. The
+turn's `text` then carries both replies.
+
+**A provider can be handed its own turn back.** A run-fn that can replay its own output emits it
+once per round on `ToolCallingTask`'s `nativeTurn` port (`{ provider, payload }`), and `AgentTask`
+keeps it on the assistant message's `reasoning` block (`provider`, `payload`). That provider's
+converter then replays the payload verbatim instead of rebuilding the turn — the OpenAI Responses
+items with their encrypted reasoning, Anthropic's content blocks with their signed thinking — and
+only while the turn's call ids still match it (by count and order: each call's id, name and arguments, and for Anthropic the turn's text too), so
+a host that changed or dropped a call id gets the rebuilt turn. The `provider` is `openai:<model>`
+or `anthropic:<model>` (the provider name and its API model name), because encrypted reasoning and
+signed thinking are readable only by the model that wrote them, so a turn is replayed only to that
+model and rebuilt after a model switch. A reasoning model handed nothing back starts its thinking
+over every round, spending output tokens re-deriving it. The payload stays on the message, so a
+turn that is not truly replayable must not be emitted at all: OpenAI emits one only when encrypted
+reasoning was requested (`include: ["reasoning.encrypted_content"]`, sent only for a reasoning
+model, that is when reasoning effort is not `none`) and every reasoning item came back with it,
+since a reasoning item replayed without it is looked up by id and fails where nothing is stored.
+Anthropic emits none when it cannot capture the turn verbatim — a block or delta type it does not
+reproduce, a thinking block without its signature, or an empty text block dropped ahead of a
+thinking block. Anthropic binds a thinking block's signature to the conversation before it, so
+the replay must be append-only; a request it rejects as edited is retried once with every thinking
+block stripped. History trimming measures a message without its payload.
+`provider_config.replay_reasoning: false` turns the OpenAI replay off; Anthropic has no such
+switch. DeepSeek's `replay_reasoning` is a different mechanism: it controls replaying the
+`reasoning_content` text, not a native turn.
 
 **The loop and the model call can live in different places.** A host whose tools are closures
 (they draw on a screen, ask a person, read state only that process holds) but whose model is
@@ -422,6 +459,22 @@ Rules for writing a run-fn:
   discriminate on a field one caller always sends and the other never does (e.g.
   `Array.isArray(input.messages) && input.messages.length > 0`).
 
+**Reasoning travels between rounds, and each provider carries it its own way.** DeepSeek and
+the llama.cpp server replay `reasoning_content`; Ollama replays `thinking`; HF Transformers
+hands `reasoning_content` to the chat template; node-llama-cpp replays thought segments.
+OpenAI and Anthropic replay a native turn, and OpenRouter carries `reasoning_details` as one
+keyed `openrouter:<model>`; all three replay it only while the turn's calls still match (each call's
+id, name and arguments, in order), so a host that changed or dropped one gets the rebuilt turn, and OpenRouter emits none for Anthropic
+thinking cut off before its signature, or for a turn one of whose calls it filtered out. **A tool-calling run-fn converts `messages` with a
+converter that keeps tool calls and prefers `messages` over `prompt`:** `AgentTask` sends both
+every round, and a converter that reads `prompt` or flattens to text shows the model its first
+turn again and never a tool result. A history holding tool calls or tool results must never go
+through `toTextFlatMessages`; HF Transformers still uses it, but only on the path where the
+history has no tool messages and no reasoning yet, where it loses nothing. Tool-result images go
+in a user message after the tool message (OpenAI, xAI, OpenRouter, HF Inference, Ollama); Gemini 3+ takes them in
+`functionResponse.parts`, and older models, which reject that with HTTP 400, get a user turn of
+their own — beside the response they leak their thinking into the answer.
+
 ### `examples/cli` — the CLI and its web console
 
 `workglow web` (`src/web/`, client in `src/web/client/`) serves the same commands the
@@ -538,6 +591,32 @@ resolvable — its URL is relative to that module.
 The client bundles via `bun run build-web` into `dist/web` and is part of `build-example`. Its webfont link is
 deliberately non-render-blocking; a blocking font link blanks the console on any machine
 that cannot reach the CDN.
+
+### `examples/agent-eval` — the harness comparison
+
+This example runs `AgentTask`, opencode and pi on public benchmarks (Terminal-Bench 2.0,
+Aider Polyglot, SWE-bench Verified) through **Harbor**, with the same model for all three, and
+compares them task by task. Harbor is a Python tool and needs Docker; it ships the opencode and
+pi adapters.
+
+What the Workglow arm is:
+
+- **The agent.** `src/bin/workglow-agent.ts` is `AgentTask` plus four coding tools (`read`,
+  `bash`, `edit`, `write`). The tools match pi's defaults and limits on purpose, so the
+  Workglow–pi gap measures the loop and not the tools.
+- **How it gets into the container.** It is bundled into one Node file. `harbor/workglow_agent.py`
+  uploads that bundle into each task container, so a run measures the checkout it was built
+  from: rebuild with `bun run build-agent` after touching `AgentTask`.
+
+Two rules hold for every run:
+
+- **Parity.** `run` sets the turn cap and the reasoning level explicitly for every arm, because
+  the three harnesses' defaults differ enough to decide the result.
+- **Blocked trials.** A trial whose container or install failed is _blocked_, and is excluded
+  from every rate rather than counted as a failure.
+
+`mock-model` is a scripted Anthropic API. With it, the whole pipeline runs offline with no key
+and no cost.
 
 ### `@workglow/util`
 

@@ -62,12 +62,27 @@ export function normalizeHistoryForModel(history: readonly ChatMessage[]): ChatM
  */
 export const DEFAULT_MAX_HISTORY_CHARS = 120_000;
 
+/**
+ * A message's size as the model reads it. A reasoning block's `payload` is a
+ * provider's own turn kept for replay, not text this budget is protecting the
+ * context window from, so it is measured without it.
+ */
 function messageChars(message: ChatMessage): number {
   try {
-    return JSON.stringify(message).length;
+    const content = message.content.map((block) => {
+      if (block.type !== "reasoning" || block.payload === undefined) return block;
+      const { payload: _payload, ...rest } = block;
+      return rest;
+    });
+    return JSON.stringify({ ...message, content }).length;
   } catch {
     return 0;
   }
+}
+
+/** `history`'s size as {@link trimHistoryForModel} measures it against its budget. */
+export function measureHistoryForModel(history: readonly ChatMessage[]): number {
+  return history.reduce((sum, message) => sum + messageChars(message), 0);
 }
 
 /**
@@ -82,14 +97,24 @@ function messageChars(message: ChatMessage): number {
  * otherwise be nothing for the model to answer, and silently returning an empty
  * list turns "this turn is too long" into "the conversation is gone".
  *
- * A leading run of `system` messages belongs to no turn and is never cut: it
- * carries the instructions every later turn is answered under, and dropping it
- * for being old changes how the model behaves with nothing to show for it. Its
- * size still counts against the budget, so the turns cut to fit around it.
+ * A `system` message is never cut, leading or not: it carries instructions
+ * every later turn is answered under, and dropping one for being old changes
+ * how the model behaves with nothing to show for it. A later one stays in its
+ * place ahead of the turns that survive. Their size still counts against the
+ * budget, so the turns cut to fit around them.
+ *
+ * `keepFrom` holds everything from that index on, for a caller whose newest
+ * turn holds user messages of its own (a reminder, a review prompt): cutting at
+ * one of those would keep the prompt and drop the question it is about.
+ *
+ * A reasoning block's `payload` is not counted, so a provider replaying its own
+ * turns (encrypted reasoning, signed thinking) sends more than `max`. The budget
+ * caps the conversation's text, not those opaque payloads.
  */
 export function trimHistoryForModel(
   history: readonly ChatMessage[],
-  max: number = DEFAULT_MAX_HISTORY_CHARS
+  max: number = DEFAULT_MAX_HISTORY_CHARS,
+  keepFrom: number = history.length
 ): ChatMessage[] {
   const sizes = history.map(messageChars);
   let total = sizes.reduce((sum, n) => sum + n, 0);
@@ -99,15 +124,25 @@ export function trimHistoryForModel(
   while (history[prefixEnd]?.role === "system") prefixEnd++;
 
   const turnStarts: number[] = [];
+  // A run of user messages is one pending turn (as normalizeHistoryForModel
+  // merges it), so only its first message is a place to cut: cutting inside it
+  // would keep the newest prompt and drop the question it follows.
   for (let i = prefixEnd; i < history.length; i++) {
-    if (history[i]?.role === "user") turnStarts.push(i);
+    if (history[i]?.role === "user" && history[i - 1]?.role !== "user") turnStarts.push(i);
   }
 
+  // A system message past the leading run is an instruction too, and every
+  // provider lifts it into the system prompt wherever it sits, so a cut keeps it
+  // and it stays counted.
   let cut = prefixEnd;
   for (const start of turnStarts.slice(1)) {
-    for (let i = cut; i < start; i++) total -= sizes[i] ?? 0;
+    if (start > keepFrom) break;
+    for (let i = cut; i < start; i++) {
+      if (history[i]?.role !== "system") total -= sizes[i] ?? 0;
+    }
     cut = start;
     if (total <= max) break;
   }
-  return [...history.slice(0, prefixEnd), ...history.slice(cut)];
+  const keptSystem = history.slice(prefixEnd, cut).filter((message) => message.role === "system");
+  return [...history.slice(0, prefixEnd), ...keptSystem, ...history.slice(cut)];
 }

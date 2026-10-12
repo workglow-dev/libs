@@ -5,7 +5,12 @@
  */
 
 import type { ToolCallingTaskInput, ToolDefinition } from "@workglow/ai";
-import { toOpenAIMessages, toTextFlatMessages } from "@workglow/ai";
+import {
+  liftSystemMessages,
+  normalizeChatMessages,
+  toOpenAIMessages,
+  toTextFlatMessages,
+} from "@workglow/ai";
 import { describe, expect, test } from "vitest";
 
 const dummyTools: ToolDefinition[] = [
@@ -43,6 +48,72 @@ describe("toOpenAIMessages", () => {
     expect(msgs[0].role).toBe("system");
     expect(msgs[0].content).toBe("You are helpful");
     expect(msgs[1].role).toBe("user");
+  });
+
+  test("keeps a nested tool_use a tool returned, as JSON, whichever way images go", () => {
+    const nested = { type: "tool_use", id: "x", name: "inner", input: { a: 1 } };
+    const input = makeInput({
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: "c1", name: "t", input: {} }] },
+        {
+          role: "tool",
+          content: [{ type: "tool_result", tool_use_id: "c1", content: [nested] }],
+        },
+      ],
+    } as any);
+    expect(toOpenAIMessages(input, { toolImagesInUserMessage: true })[1]).toEqual({
+      role: "tool",
+      content: JSON.stringify(nested),
+      tool_call_id: "c1",
+    });
+    expect(toOpenAIMessages(input)[1]!.content).toEqual([
+      { type: "text", text: JSON.stringify(nested) },
+    ]);
+  });
+
+  test("passes an image_url part a caller wrote for chat-completions through", () => {
+    const part = { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } };
+    const msgs = toOpenAIMessages(
+      makeInput({
+        messages: [{ role: "user", content: [{ type: "text", text: "what is this" }, part] }],
+      } as any)
+    );
+    expect(msgs).toEqual([
+      { role: "user", content: [{ type: "text", text: "what is this" }, part] },
+    ]);
+  });
+
+  test("joins system turns in the history to the system prompt", () => {
+    const msgs = toOpenAIMessages(
+      makeInput({
+        systemPrompt: "base",
+        messages: [
+          { role: "system", content: [{ type: "text", text: "rule one" }] },
+          { role: "user", content: [{ type: "text", text: "hi" }] },
+        ],
+      } as any)
+    );
+    expect(msgs).toEqual([
+      { role: "system", content: "base\n\nrule one" },
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+    ]);
+    const only = toOpenAIMessages(
+      makeInput({
+        messages: [
+          { role: "system", content: [{ type: "text", text: "rule" }] },
+          { role: "user", content: [{ type: "text", text: "hi" }] },
+        ],
+      } as any)
+    );
+    expect(only[0]).toEqual({ role: "system", content: "rule" });
+    // A history of system turns alone is still the history: the prompt is not sent.
+    const systemOnly = toOpenAIMessages(
+      makeInput({
+        prompt: "stale",
+        messages: [{ role: "system", content: [{ type: "text", text: "rule" }] }],
+      } as any)
+    );
+    expect(systemOnly).toEqual([{ role: "system", content: "rule" }]);
   });
 
   test("should convert multi-turn messages with user and assistant", () => {
@@ -125,7 +196,7 @@ describe("toOpenAIMessages", () => {
     });
   });
 
-  test("should set content to null for empty assistant text", () => {
+  test("should send empty assistant text as an empty string when there are no tool calls", () => {
     const input = makeInput({
       messages: [
         { role: "user", content: [{ type: "text", text: "Go" }] },
@@ -134,7 +205,7 @@ describe("toOpenAIMessages", () => {
     });
     const msgs = toOpenAIMessages(input);
 
-    expect(msgs[1].content).toBeNull();
+    expect(msgs[1].content).toBe("");
   });
 
   test("should convert user message with image content blocks to OpenAI format", () => {
@@ -216,6 +287,279 @@ describe("toOpenAIMessages", () => {
     expect(parts).toHaveLength(2);
     expect(parts[0]).toEqual({ type: "text", text: "Plain text" });
     expect(parts[1].type).toBe("image_url");
+  });
+
+  test("sends an empty tool result as an empty string, not an empty parts array", () => {
+    const out = toOpenAIMessages(
+      makeInput({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "go" }] },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "c1", name: "t", input: {} }],
+          },
+          { role: "tool", content: [{ type: "tool_result", tool_use_id: "c1", content: [] }] },
+        ] as any,
+      })
+    );
+    expect(out.at(-1)).toEqual({ role: "tool", content: "", tool_call_id: "c1" });
+  });
+
+  test("sends a reasoning-only assistant turn with empty-string content", () => {
+    const out = toOpenAIMessages(
+      makeInput({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "go" }] },
+          { role: "assistant", content: [{ type: "reasoning", text: "thinking" }] },
+          { role: "user", content: [{ type: "text", text: "again" }] },
+        ] as any,
+      })
+    );
+    expect(out[1]).toEqual({ role: "assistant", content: "" });
+  });
+
+  test("keeps null content for an assistant turn that only calls tools", () => {
+    const out = toOpenAIMessages(
+      makeInput({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "go" }] },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "c1", name: "t", input: {} }],
+          },
+        ] as any,
+      })
+    );
+    expect(out[1]!.content).toBeNull();
+    expect(out[1]!.tool_calls).toHaveLength(1);
+  });
+
+  describe("reasoning and tool images", () => {
+    const history = makeInput({
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Look" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "I should read the file." },
+            { type: "tool_use", id: "c1", name: "read", input: { path: "board.png" } },
+          ],
+        },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "c1",
+              content: [
+                { type: "text", text: "Image: board.png" },
+                { type: "image", mimeType: "image/png", data: "AAAA" },
+              ],
+              is_error: undefined,
+            },
+          ],
+        },
+      ],
+    });
+
+    test("drops reasoning blocks unless asked to replay them", () => {
+      const msgs = toOpenAIMessages(history);
+      expect(msgs[1]).not.toHaveProperty("reasoning_content");
+      expect(msgs[1]!.content).toBeNull();
+    });
+
+    test("replays reasoning as reasoning_content when asked", () => {
+      const msgs = toOpenAIMessages(history, { replayReasoning: true });
+      expect(msgs[1]).toMatchObject({
+        role: "assistant",
+        reasoning_content: "I should read the file.",
+        tool_calls: [{ id: "c1" }],
+      });
+    });
+
+    test("keeps tool images inline by default", () => {
+      const msgs = toOpenAIMessages(history);
+      expect(msgs[2]).toMatchObject({ role: "tool", tool_call_id: "c1" });
+      expect(msgs[2]!.content).toEqual([
+        { type: "text", text: "Image: board.png" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+      ]);
+    });
+
+    test("moves tool images into a user message after the turn's results when asked", () => {
+      const msgs = toOpenAIMessages(history, { toolImagesInUserMessage: true });
+      expect(msgs[2]).toEqual({
+        role: "tool",
+        tool_call_id: "c1",
+        content: "Image: board.png\n[image 1] follows in the next message",
+      });
+      expect(msgs[3]).toEqual({
+        role: "user",
+        content: [
+          { type: "text", text: "Images returned by the tool calls above:" },
+          { type: "text", text: "[image 1]" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+        ],
+      });
+    });
+
+    test("marks each moved image where it stood, numbered across the turn's results", () => {
+      const image = (data: string) => ({ type: "image", mimeType: "image/png", data });
+      const msgs = toOpenAIMessages(
+        makeInput({
+          messages: [
+            { role: "user", content: [{ type: "text", text: "Compare" }] },
+            {
+              role: "assistant",
+              content: [
+                { type: "tool_use", id: "c1", name: "shot", input: {} },
+                { type: "tool_use", id: "c2", name: "shot", input: {} },
+              ],
+            },
+            {
+              role: "tool",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "c1",
+                  content: [
+                    { type: "text", text: "before:" },
+                    image("AAAA"),
+                    { type: "text", text: "after:" },
+                    image("BBBB"),
+                  ],
+                },
+                { type: "tool_result", tool_use_id: "c2", content: [image("CCCC")] },
+              ],
+            },
+          ],
+        } as never),
+        { toolImagesInUserMessage: true }
+      );
+      expect(msgs[2]!.content).toBe(
+        "before:\n[image 1] follows in the next message\nafter:\n[image 2] follows in the next message"
+      );
+      expect(msgs[3]!.content).toBe("[image 3] follows in the next message");
+      const labels = (
+        msgs[4]!.content as Array<{ type: string; text?: string; image_url?: { url: string } }>
+      )
+        .slice(1)
+        .map((part) => part.text ?? part.image_url!.url.slice(-4));
+      expect(labels).toEqual(["[image 1]", "AAAA", "[image 2]", "BBBB", "[image 3]", "CCCC"]);
+    });
+  });
+
+  test("holds tool images until every separate tool message of the turn is out", () => {
+    const msgs = toOpenAIMessages(
+      makeInput({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Look" }] },
+          {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "c1", name: "shot", input: {} },
+              { type: "tool_use", id: "c2", name: "shot", input: {} },
+            ],
+          },
+          {
+            role: "tool",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "c1",
+                content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+              },
+            ],
+          },
+          {
+            role: "tool",
+            content: [
+              { type: "tool_result", tool_use_id: "c2", content: [{ type: "text", text: "ok" }] },
+            ],
+          },
+          { role: "user", content: [{ type: "text", text: "Next" }] },
+        ],
+      } as never),
+      { toolImagesInUserMessage: true }
+    );
+    expect(msgs.map((m) => (m.role === "tool" ? `tool:${m.tool_call_id}` : m.role))).toEqual([
+      "user",
+      "assistant",
+      "tool:c1",
+      "tool:c2",
+      "user",
+      "user",
+    ]);
+    expect(JSON.stringify(msgs[4]!.content)).toContain("Images returned by the tool calls above");
+  });
+
+  describe("native turn replay", () => {
+    const withBlock = (block: Record<string, unknown>) =>
+      makeInput({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Look" }] },
+          {
+            role: "assistant",
+            content: [block, { type: "tool_use", id: "c1", name: "read", input: {} }],
+          },
+        ],
+      } as never);
+    const items = [{ type: "reasoning", id: "rs_1", encrypted_content: "ENC" }];
+
+    test("attaches the items of a reasoning block this provider produced", () => {
+      const msgs = toOpenAIMessages(
+        withBlock({
+          type: "reasoning",
+          text: "",
+          provider: "openai",
+          payload: JSON.stringify(items),
+        }),
+        { nativeTurnProvider: "openai" }
+      );
+      expect(msgs[1]!.native_items).toEqual(items);
+    });
+
+    test("ignores a block another provider produced", () => {
+      const msgs = toOpenAIMessages(
+        withBlock({
+          type: "reasoning",
+          text: "",
+          provider: "anthropic",
+          payload: JSON.stringify(items),
+        }),
+        { nativeTurnProvider: "openai" }
+      );
+      expect(msgs[1]).not.toHaveProperty("native_items");
+    });
+
+    test("ignores a payload that is not JSON, not an array, or not typed items", () => {
+      for (const payload of [
+        "{not json",
+        JSON.stringify({ a: 1 }),
+        "[]",
+        "[null]",
+        JSON.stringify([{ type: "reasoning" }, 7]),
+        JSON.stringify([{ id: "rs_1" }]),
+      ]) {
+        const msgs = toOpenAIMessages(
+          withBlock({ type: "reasoning", text: "", provider: "openai", payload }),
+          { nativeTurnProvider: "openai" }
+        );
+        expect(msgs[1]).not.toHaveProperty("native_items");
+      }
+    });
+
+    test("attaches nothing unless asked", () => {
+      const msgs = toOpenAIMessages(
+        withBlock({
+          type: "reasoning",
+          text: "",
+          provider: "openai",
+          payload: JSON.stringify(items),
+        })
+      );
+      expect(msgs[1]).not.toHaveProperty("native_items");
+    });
   });
 });
 
@@ -365,5 +709,38 @@ describe("toTextFlatMessages", () => {
 
     expect(msgs).toHaveLength(1);
     expect(msgs[0]).toEqual({ role: "user", content: "Look at this" });
+  });
+});
+
+describe("normalizeChatMessages", () => {
+  test("turns bare-string content into a text block and leaves blocks alone", () => {
+    const blocks = [{ type: "image" as const, mimeType: "image/png", data: "AAAA" }];
+    expect(
+      normalizeChatMessages([
+        { role: "user", content: "hi" },
+        { role: "user", content: blocks },
+      ])
+    ).toEqual([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      { role: "user", content: blocks },
+    ]);
+  });
+});
+
+describe("liftSystemMessages", () => {
+  test("moves system turns into the system prompt, after the one given", () => {
+    const lifted = liftSystemMessages(
+      [
+        { role: "system", content: [{ type: "text", text: "rule one" }] },
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+      ],
+      "base"
+    );
+    expect(lifted.systemPrompt).toBe("base\n\nrule one");
+    expect(lifted.messages).toEqual([{ role: "user", content: [{ type: "text", text: "hi" }] }]);
+  });
+
+  test("leaves the system prompt undefined when there is none anywhere", () => {
+    expect(liftSystemMessages([], undefined).systemPrompt).toBeUndefined();
   });
 });

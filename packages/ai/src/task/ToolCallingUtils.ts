@@ -8,6 +8,7 @@ import type { SchemaNode } from "@workglow/util/schema";
 import { compileSchema } from "@workglow/util/schema";
 import type { JsonSchema } from "@workglow/util/worker";
 import { getLogger } from "@workglow/util/worker";
+import type { ContentBlockImage, ContentBlockText } from "./ChatMessage";
 
 /**
  * A tool definition that can be passed to an LLM for tool calling.
@@ -77,6 +78,23 @@ export interface ToolDefinition {
 export interface ToolExecuteContext {
   readonly toolUseId: string;
   readonly signal: AbortSignal;
+  /**
+   * When the turn's `maxDurationMs` runs out, in epoch milliseconds; undefined
+   * when the turn has no time budget. The loop stops only between rounds, so a
+   * tool that can bound its own work (a command timeout, a poll) caps it here,
+   * or one call can run the turn past its budget.
+   */
+  readonly deadline: number | undefined;
+}
+
+/**
+ * A tool result made of content blocks rather than one string — what a tool's
+ * `execute` returns to hand the model an image. Anything else a tool returns is
+ * shown to the model as text, so without this an image would arrive as a
+ * base64 string, clamped.
+ */
+export class ToolResultContent {
+  constructor(readonly content: ReadonlyArray<ContentBlockText | ContentBlockImage>) {}
 }
 
 /**

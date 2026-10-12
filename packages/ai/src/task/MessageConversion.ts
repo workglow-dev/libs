@@ -53,6 +53,32 @@ export interface OpenAICompatMessage {
     function: { name: string; arguments: string };
   }>;
   tool_call_id?: string;
+  /** An assistant turn's reasoning, under the name the provider reads it back by. */
+  reasoning_content?: string;
+  /** The provider's own output items for this turn, for the Responses converter to replay. */
+  native_items?: unknown[];
+}
+
+export interface OpenAIMessageOptions {
+  /**
+   * Send each assistant turn's reasoning back as `reasoning_content`. DeepSeek's
+   * thinking models read it on the turns of a tool-calling loop; other
+   * OpenAI-compatible APIs do not know the field, so it is opt-in and reasoning
+   * blocks are otherwise dropped.
+   */
+  readonly replayReasoning?: boolean | undefined;
+  /**
+   * Chat-completions accepts only text in a `tool` message. With this set, the
+   * images a turn's tools returned are sent in one user message after that
+   * turn's tool results, and each tool message says an image follows. Without
+   * it they stay inline in the tool message, for APIs that accept that.
+   */
+  readonly toolImagesInUserMessage?: boolean | undefined;
+  /**
+   * Attach an assistant turn's native items (`native_items`) when its reasoning
+   * block was produced by this provider, for the Responses converter to replay.
+   */
+  readonly nativeTurnProvider?: string | undefined;
 }
 
 /**
@@ -61,14 +87,24 @@ export interface OpenAICompatMessage {
  *
  * Multi-turn capable: preserves full tool call metadata across turns.
  */
-export function toOpenAIMessages(input: ToolCallingTaskInput): OpenAICompatMessage[] {
+export function toOpenAIMessages(
+  input: ToolCallingTaskInput,
+  options: OpenAIMessageOptions = {}
+): OpenAICompatMessage[] {
   const messages: OpenAICompatMessage[] = [];
 
-  if (input.systemPrompt) {
-    messages.push({ role: "system", content: input.systemPrompt });
+  // System turns in the history join the system prompt; the loop below has no
+  // place for them, and a caller's instructions must not be dropped.
+  const history = getInputMessages(input);
+  const lifted = history ? liftSystemMessages(history, input.systemPrompt) : undefined;
+  const systemPrompt = lifted ? lifted.systemPrompt : input.systemPrompt;
+  if (systemPrompt) {
+    messages.push({ role: "system", content: systemPrompt });
   }
 
-  const inputMessages = getInputMessages(input);
+  // A history that held only system turns is still the history: the prompt is
+  // what a caller with no history sends, never a stand-in for one.
+  const inputMessages = lifted?.messages;
   if (!inputMessages) {
     if (!Array.isArray(input.prompt)) {
       messages.push({ role: "user", content: input.prompt });
@@ -102,7 +138,26 @@ export function toOpenAIMessages(input: ToolCallingTaskInput): OpenAICompatMessa
     return messages;
   }
 
+  // Images a tool returned wait until every result of the run of tool messages
+  // is out: a user turn between two results of one assistant turn would leave a
+  // call unanswered before it.
+  let deferredImages: Array<{ type: string; [key: string]: unknown }> = [];
+  let deferredImageCount = 0;
+  const flushDeferredImages = (): void => {
+    if (deferredImages.length === 0) return;
+    messages.push({
+      role: "user",
+      content: [
+        { type: "text", text: "Images returned by the tool calls above:" },
+        ...deferredImages,
+      ],
+    });
+    deferredImages = [];
+    deferredImageCount = 0;
+  };
+
   for (const msg of inputMessages) {
+    if (msg.role !== "tool") flushDeferredImages();
     if (msg.role === "user") {
       const parts: Array<{ type: string; [key: string]: unknown }> = [];
       for (const block of msg.content) {
@@ -113,6 +168,9 @@ export function toOpenAIMessages(input: ToolCallingTaskInput): OpenAICompatMessa
             type: "image_url",
             image_url: { url: `data:${block.mimeType};base64,${block.data}` },
           });
+        } else if ((block as { type: string }).type === "image_url") {
+          // Already in this format: a caller written against chat-completions.
+          parts.push(block as unknown as { type: string; [key: string]: unknown });
         }
         // tool_use / tool_result not valid in a user message — skip
       }
@@ -134,18 +192,86 @@ export function toOpenAIMessages(input: ToolCallingTaskInput): OpenAICompatMessa
         }));
       const entry: OpenAICompatMessage = {
         role: "assistant",
-        content: textParts.length > 0 ? textParts : null,
+        // A turn with neither text nor calls (the model only reasoned) still needs a
+        // content string: chat-completions APIs reject `null` without `tool_calls`.
+        content: textParts.length > 0 ? textParts : toolCalls.length > 0 ? null : "",
       };
       if (toolCalls.length > 0) {
         entry.tool_calls = toolCalls;
+      }
+      if (options.replayReasoning) {
+        // Sent even when empty: DeepSeek returns an empty reasoning on some
+        // turns and still expects the field on every assistant turn it reads.
+        entry.reasoning_content = msg.content
+          .filter((b): b is Extract<ContentBlock, { type: "reasoning" }> => b.type === "reasoning")
+          .map((b) => b.text)
+          .join("");
+      }
+      if (options.nativeTurnProvider !== undefined) {
+        const own = msg.content.find(
+          (b): b is Extract<ContentBlock, { type: "reasoning" }> =>
+            b.type === "reasoning" &&
+            b.provider === options.nativeTurnProvider &&
+            b.payload !== undefined
+        );
+        if (own) {
+          try {
+            const items = JSON.parse(own.payload!) as unknown;
+            // Each item must at least be a typed object; `[null]` or a bare value
+            // would be sent as an input item and refused, where a rebuilt turn
+            // is not.
+            if (
+              Array.isArray(items) &&
+              items.length > 0 &&
+              items.every(
+                (item) =>
+                  item !== null &&
+                  typeof item === "object" &&
+                  !Array.isArray(item) &&
+                  typeof (item as { type?: unknown }).type === "string"
+              )
+            ) {
+              entry.native_items = items;
+            }
+          } catch {
+            // A payload this provider cannot read is not replayed; the turn is rebuilt.
+          }
+        }
       }
       messages.push(entry);
     } else if (msg.role === "tool") {
       for (const block of msg.content) {
         if (block.type !== "tool_result") continue;
         let content: string | Array<{ type: string; [key: string]: unknown }>;
-        if (block.content.length === 1 && block.content[0].type === "text") {
-          content = block.content[0].text;
+        const onlyText = block.content.every((inner) => inner.type === "text");
+        if (onlyText) {
+          // Several text blocks, or none, still become one string: some chat-completions
+          // APIs reject a parts array in a tool message.
+          content = block.content.map((inner) => (inner as { text: string }).text).join("\n");
+        } else if (options.toolImagesInUserMessage) {
+          // Each image leaves a numbered marker where it stood, and the user message
+          // labels it with the same number, so text around an image still points at
+          // the right one. A block that is neither text nor an image (a nested
+          // tool_use) is data the tool returned, and goes as JSON rather than dropped.
+          const lines: string[] = [];
+          for (const inner of block.content) {
+            if (inner.type === "text") {
+              lines.push(inner.text);
+            } else if (inner.type === "image") {
+              const label = `[image ${++deferredImageCount}]`;
+              lines.push(`${label} follows in the next message`);
+              deferredImages.push(
+                { type: "text", text: label },
+                {
+                  type: "image_url",
+                  image_url: { url: `data:${inner.mimeType};base64,${inner.data}` },
+                }
+              );
+            } else {
+              lines.push(JSON.stringify(inner));
+            }
+          }
+          content = lines.join("\n");
         } else {
           const parts: Array<{ type: string; [key: string]: unknown }> = [];
           for (const inner of block.content) {
@@ -156,6 +282,8 @@ export function toOpenAIMessages(input: ToolCallingTaskInput): OpenAICompatMessa
                 type: "image_url",
                 image_url: { url: `data:${inner.mimeType};base64,${inner.data}` },
               });
+            } else {
+              parts.push({ type: "text", text: JSON.stringify(inner) });
             }
           }
           content = parts;
@@ -164,8 +292,54 @@ export function toOpenAIMessages(input: ToolCallingTaskInput): OpenAICompatMessa
       }
     }
   }
+  flushDeferredImages();
 
   return messages;
+}
+
+/** A message whose content is either workglow content blocks or a bare string. */
+export interface LooseChatMessage {
+  readonly role: string;
+  readonly content: string | ReadonlyArray<ContentBlock>;
+}
+
+/**
+ * Chat history as content blocks, accepting the bare-string `content` that
+ * text-generation callers have always been allowed to pass. A provider runs
+ * this before its converter, so a string message and a block message reach the
+ * wire the same way instead of the array being forwarded unconverted.
+ */
+export function normalizeChatMessages(messages: ReadonlyArray<LooseChatMessage>): ChatMessage[] {
+  return messages.map((message) => ({
+    role: message.role as ChatMessage["role"],
+    content:
+      typeof message.content === "string"
+        ? [{ type: "text", text: message.content }]
+        : message.content,
+  }));
+}
+
+/**
+ * Moves system-role messages out of a history and into the system prompt. Most
+ * converters take the system prompt as its own input and skip system turns in
+ * `messages`, so a caller that put its instructions in the history would
+ * otherwise lose them; `toOpenAIMessages` lifts them itself.
+ */
+export function liftSystemMessages(
+  history: ReadonlyArray<ChatMessage>,
+  systemPrompt: string | undefined
+): { readonly messages: ChatMessage[]; readonly systemPrompt: string | undefined } {
+  const lifted = history
+    .filter((message) => message.role === "system")
+    .map((message) =>
+      message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("")
+    )
+    .filter((text) => text.length > 0);
+  const parts = [systemPrompt, ...lifted].filter((text): text is string => !!text);
+  return {
+    messages: history.filter((message) => message.role !== "system"),
+    systemPrompt: parts.length > 0 ? parts.join("\n\n") : undefined,
+  };
 }
 
 export interface TextFlatMessage {
@@ -175,8 +349,8 @@ export interface TextFlatMessage {
 
 /**
  * Converts ToolCallingTaskInput to a simplified text-only message format.
- * Used by providers that don't natively support structured multi-turn
- * tool calling (Ollama, HuggingFace Transformers).
+ * Used for single-turn prompts by providers whose template takes only role and
+ * text. A tool-calling loop must not use it:
  *
  * NOTE: This format discards tool_use blocks from assistant messages.
  * The LLM will not see what tools it previously called. Multi-turn tool

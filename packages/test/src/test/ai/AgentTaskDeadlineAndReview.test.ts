@@ -1,0 +1,352 @@
+/**
+ * @license
+ * Copyright 2026 Steven Roussey <sroussey@gmail.com>
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import type {
+  AiProviderRunFn,
+  ChatMessage,
+  ModelConfig,
+  ToolCallingTaskInput,
+  ToolDefinition,
+} from "@workglow/ai";
+import {
+  AgentTask,
+  AiProviderRegistry,
+  DirectExecutionStrategy,
+  getAiProviderRegistry,
+  setAiProviderRegistry,
+} from "@workglow/ai";
+import { RetryableJobError } from "@workglow/job-queue";
+import { TaskConfigurationError } from "@workglow/task-graph";
+import { Container, ServiceRegistry } from "@workglow/util";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+const PROVIDER = "mock-deadline-provider";
+
+const MODEL: ModelConfig = {
+  model_id: "mock/deadline-1",
+  provider: PROVIDER,
+  title: "",
+  description: "",
+  capabilities: ["tool-use"],
+  provider_config: {},
+  metadata: {},
+};
+
+interface Round {
+  readonly text?: string;
+  readonly calls?: ReadonlyArray<{ id: string; name: string; input: Record<string, unknown> }>;
+}
+
+/** A scripted model, one entry per call with the last repeating; returns what each call was sent. */
+function script(rounds: readonly Round[]): ToolCallingTaskInput[] {
+  const seen: ToolCallingTaskInput[] = [];
+  const runFn: AiProviderRunFn = async (input, _model, _signal, emit) => {
+    const round = rounds[Math.min(seen.length, rounds.length - 1)]!;
+    seen.push(input as ToolCallingTaskInput);
+    if (round.text) emit({ type: "text-delta", port: "text", textDelta: round.text });
+    if (round.calls?.length) {
+      emit({ type: "object-delta", port: "toolCalls", objectDelta: [...round.calls] });
+    }
+    emit({ type: "finish", data: {} });
+  };
+  getAiProviderRegistry().registerRunFn(PROVIDER, { serves: ["tool-use"], runFn });
+  return seen;
+}
+
+const EMPTY = { type: "object", properties: {}, additionalProperties: false } as const;
+
+function tool(name: string, execute: ToolDefinition["execute"]): ToolDefinition {
+  return { name, description: name, inputSchema: EMPTY, execute };
+}
+
+describe("AgentTask deadline", () => {
+  let registry: ServiceRegistry;
+
+  beforeEach(() => {
+    setAiProviderRegistry(new AiProviderRegistry());
+    getAiProviderRegistry().setDefaultStrategy(new DirectExecutionStrategy());
+    registry = new ServiceRegistry(new Container());
+  });
+
+  afterEach(() => {
+    getAiProviderRegistry().unregisterProvider(PROVIDER);
+  });
+
+  it("hands a tool the moment the turn's time budget runs out", async () => {
+    script([{ calls: [{ id: "c1", name: "clock", input: {} }] }, { text: "done" }]);
+    const seen: Array<number | undefined> = [];
+    const before = Date.now();
+    await new AgentTask().run(
+      {
+        model: MODEL,
+        prompt: "?",
+        maxDurationMs: 60_000,
+        tools: [
+          tool("clock", async (_input, context) => {
+            seen.push(context.deadline);
+            return "ok";
+          }),
+        ],
+      },
+      { registry }
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeGreaterThanOrEqual(before + 60_000);
+    expect(seen[0]).toBeLessThanOrEqual(Date.now() + 60_000);
+  });
+
+  it("hands no deadline on a turn with no time budget", async () => {
+    script([{ calls: [{ id: "c1", name: "clock", input: {} }] }, { text: "done" }]);
+    const seen: Array<number | undefined> = [];
+    await new AgentTask().run(
+      {
+        model: MODEL,
+        prompt: "?",
+        tools: [
+          tool("clock", async (_input, context) => {
+            seen.push(context.deadline);
+            return "ok";
+          }),
+        ],
+      },
+      { registry }
+    );
+    expect(seen).toEqual([undefined]);
+  });
+});
+
+describe("AgentTask announceTimeLeft", () => {
+  let registry: ServiceRegistry;
+
+  beforeEach(() => {
+    setAiProviderRegistry(new AiProviderRegistry());
+    getAiProviderRegistry().setDefaultStrategy(new DirectExecutionStrategy());
+    registry = new ServiceRegistry(new Container());
+  });
+
+  afterEach(() => {
+    getAiProviderRegistry().unregisterProvider(PROVIDER);
+  });
+
+  const look = tool("look", async () => "looked");
+
+  it("appends the time left to the round's last tool result", async () => {
+    const seen = script([
+      {
+        calls: [
+          { id: "c1", name: "look", input: {} },
+          { id: "c2", name: "look", input: {} },
+        ],
+      },
+      { text: "done" },
+    ]);
+    const output = await new AgentTask().run(
+      { model: MODEL, prompt: "?", tools: [look], maxDurationMs: 600_000, announceTimeLeft: true },
+      { registry }
+    );
+    const sent = (seen[1]!.messages as ChatMessage[]).find((m) => m.role === "tool")!;
+    const [first, last] = sent.content as unknown as Array<{
+      content: Array<{ type: string; text?: string }>;
+    }>;
+    expect(first!.content.map((block) => block.text)).toEqual(["looked"]);
+    expect(last!.content).toHaveLength(1);
+    expect(last!.content[0]!.type).toBe("text");
+    expect(last!.content[0]!.text).toMatch(/^looked\n\n\[Time left: (9m [0-5]?\d|10m 0)s\]$/);
+    // The step records what the model was shown, notice included.
+    expect(output.steps![0]!.tools.map((t) => t.chars)).toEqual([
+      "looked".length,
+      last!.content[0]!.text!.length,
+    ]);
+  });
+
+  it("says nothing about time unless asked", async () => {
+    const seen = script([{ calls: [{ id: "c1", name: "look", input: {} }] }, { text: "done" }]);
+    await new AgentTask().run(
+      { model: MODEL, prompt: "?", tools: [look], maxDurationMs: 600_000 },
+      { registry }
+    );
+    expect(JSON.stringify(seen[1]!.messages)).not.toContain("Time left");
+  });
+
+  it("refuses announceTimeLeft without a time budget to announce", async () => {
+    script([{ text: "done" }]);
+    await expect(
+      new AgentTask().run(
+        { model: MODEL, prompt: "?", tools: [look], announceTimeLeft: true },
+        { registry }
+      )
+    ).rejects.toBeInstanceOf(TaskConfigurationError);
+  });
+});
+
+describe("AgentTask deadline and round retries", () => {
+  let registry: ServiceRegistry;
+
+  beforeEach(() => {
+    setAiProviderRegistry(new AiProviderRegistry());
+    getAiProviderRegistry().setDefaultStrategy(new DirectExecutionStrategy());
+    registry = new ServiceRegistry(new Container());
+  });
+
+  afterEach(() => {
+    getAiProviderRegistry().unregisterProvider(PROVIDER);
+  });
+
+  it("ends the turn instead of sleeping through a retry wait that passes the deadline", async () => {
+    let calls = 0;
+    const runFn: AiProviderRunFn = async () => {
+      calls++;
+      throw new RetryableJobError("429", new Date(Date.now() + 30_000));
+    };
+    getAiProviderRegistry().registerRunFn(PROVIDER, { serves: ["tool-use"], runFn });
+    const started = Date.now();
+    const output = await new AgentTask().run(
+      { model: MODEL, prompt: "?", tools: [], maxDurationMs: 5_000 },
+      { registry }
+    );
+    expect(output.stopReason).toBe("budget");
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(calls).toBe(1);
+  });
+
+  it("does not start a round a slow progress write carried past the deadline", async () => {
+    let calls = 0;
+    const runFn: AiProviderRunFn = async () => {
+      calls++;
+      throw new Error("the model must not be called");
+    };
+    getAiProviderRegistry().registerRunFn(PROVIDER, { serves: ["tool-use"], runFn });
+    const task = new AgentTask();
+    task.events.on("progress", (_progress, message) => {
+      if (message !== "Thinking") return;
+      const until = Date.now() + 300;
+      while (Date.now() < until) {
+        // A slow progress listener holds the turn past its deadline.
+      }
+    });
+    const output = await task.run(
+      { model: MODEL, prompt: "?", tools: [], maxDurationMs: 200 },
+      { registry }
+    );
+    expect(output.stopReason).toBe("budget");
+    expect(output.rounds).toBe(0);
+    expect(calls).toBe(0);
+  });
+
+  it("does not start a retry the wait carried past the deadline", async () => {
+    let calls = 0;
+    const runFn: AiProviderRunFn = async () => {
+      calls++;
+      // Asks for a 1 s wait with 1.5 s left; the progress write then runs long.
+      throw new RetryableJobError("429", new Date(Date.now() + 1_000));
+    };
+    getAiProviderRegistry().registerRunFn(PROVIDER, { serves: ["tool-use"], runFn });
+    const task = new AgentTask();
+    task.events.on("progress", (_progress, message) => {
+      if (!message?.startsWith("Retrying")) return;
+      const until = Date.now() + 700;
+      while (Date.now() < until) {
+        // A slow progress listener holds the turn past its deadline.
+      }
+    });
+    const output = await task.run(
+      { model: MODEL, prompt: "?", tools: [], maxDurationMs: 1_500, maxRoundRetries: 5 },
+      { registry }
+    );
+    expect(output.stopReason).toBe("budget");
+    expect(calls).toBe(1);
+  });
+});
+
+describe("AgentTask reviewPrompt", () => {
+  let registry: ServiceRegistry;
+
+  beforeEach(() => {
+    setAiProviderRegistry(new AiProviderRegistry());
+    getAiProviderRegistry().setDefaultStrategy(new DirectExecutionStrategy());
+    registry = new ServiceRegistry(new Container());
+  });
+
+  afterEach(() => {
+    getAiProviderRegistry().unregisterProvider(PROVIDER);
+  });
+
+  const reviewText = (messages: readonly ChatMessage[]): number =>
+    messages.filter(
+      (m) => m.role === "user" && JSON.stringify(m.content).includes("Check your work.")
+    ).length;
+
+  it("asks once for a review when the model first tries to finish", async () => {
+    const seen = script([{ text: "done" }, { text: "checked" }]);
+    const output = await new AgentTask().run(
+      { model: MODEL, prompt: "?", tools: [], reviewPrompt: "Check your work." },
+      { registry }
+    );
+    expect(seen).toHaveLength(2);
+    expect(reviewText(output.messages)).toBe(1);
+    expect(output.stopReason).toBe("answered");
+  });
+
+  it("lets the model go back to its tools after the review", async () => {
+    let looked = 0;
+    const seen = script([
+      { text: "done" },
+      { calls: [{ id: "c1", name: "look", input: {} }] },
+      { text: "fixed" },
+    ]);
+    const output = await new AgentTask().run(
+      {
+        model: MODEL,
+        prompt: "?",
+        tools: [
+          tool("look", async () => {
+            looked++;
+            return "looked";
+          }),
+        ],
+        reviewPrompt: "Check your work.",
+      },
+      { registry }
+    );
+    expect(seen).toHaveLength(3);
+    expect(looked).toBe(1);
+    expect(reviewText(output.messages)).toBe(1);
+  });
+
+  it("sends no review when no round is left to act on it", async () => {
+    const seen = script([{ text: "done" }]);
+    await new AgentTask().run(
+      { model: MODEL, prompt: "?", tools: [], reviewPrompt: "Check your work.", maxRounds: 1 },
+      { registry }
+    );
+    expect(seen).toHaveLength(1);
+  });
+
+  it("keeps the turn's prompt and work in the review round when history is over budget", async () => {
+    const seen = script([{ calls: [{ id: "c1", name: "look", input: {} }] }, { text: "done" }]);
+    await new AgentTask().run(
+      {
+        model: MODEL,
+        prompt: "Write the report.",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "an earlier question" }] },
+          { role: "assistant", content: [{ type: "text", text: "an earlier answer" }] },
+        ],
+        tools: [tool("look", async () => "x".repeat(2_000))],
+        reviewPrompt: "Check your work.",
+        maxHistoryChars: 500,
+      },
+      { registry }
+    );
+    expect(seen).toHaveLength(3);
+    const review = seen[2]!.messages!;
+    // The earlier turn is cut to fit; the review is not a turn of its own.
+    expect(JSON.stringify(review)).not.toContain("an earlier question");
+    expect(JSON.stringify(review)).toContain("Write the report.");
+    expect(review.some((m) => m.role === "tool")).toBe(true);
+    expect(reviewText(review)).toBe(1);
+  });
+});

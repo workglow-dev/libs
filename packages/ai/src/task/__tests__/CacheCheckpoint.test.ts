@@ -519,9 +519,18 @@ describe("CacheCheckpointTask storage cost inside a graph", () => {
 
 describe("ToolCallingTask checkpoint ports", () => {
   let toolCalls: { session: AiSessionContext | undefined }[];
+  let withNativeTurn = false;
 
   const toolUseFn: AiProviderRunFn = async (_input, _model, _signal, emit, _schema, session) => {
     toolCalls.push({ session });
+    if (withNativeTurn) {
+      emit({ type: "text-delta", port: "reasoning", textDelta: "thought" } as any);
+      emit({
+        type: "object-delta",
+        port: "nativeTurn",
+        objectDelta: { provider: "p:m", payload: "SIGNED" },
+      } as any);
+    }
     emit({ type: "text-delta", port: "text", textDelta: "done" } as any);
     emit({ type: "finish", data: { text: "", toolCalls: [] } } as any);
   };
@@ -545,6 +554,7 @@ describe("ToolCallingTask checkpoint ports", () => {
     setAiProviderRegistry(new AiProviderRegistry());
     clearCheckpointsForTesting();
     toolCalls = [];
+    withNativeTurn = false;
     const provider = new CheckpointTestProvider([
       { serves: ["text.generation", "tool-use"] as Capability[], runFn: toolUseFn },
       { serves: ["cache.checkpoint"] as Capability[], runFn: ckptWarmFn },
@@ -596,6 +606,48 @@ describe("ToolCallingTask checkpoint ports", () => {
     // new prefix = parent messages + user turn + assistant turn
     expect(entry?.prefix.messages?.at(-1)?.role).toBe("assistant");
     expect(entry?.prefix.messages?.at(-2)?.role).toBe("user");
+  });
+
+  it("records the turn's reasoning and native turn in the emitted checkpoint", async () => {
+    withNativeTurn = true;
+    const scope = new ResourceScope();
+    const out = await new ToolCallingTask().run(
+      { model: toolModel(), prompt: "hi", tools: [aTool], emitCheckpoint: true },
+      { resourceScope: scope }
+    );
+    const entry = getCheckpoint((out as { checkpoint?: string }).checkpoint!);
+    expect(entry?.prefix.messages?.at(-1)).toEqual({
+      role: "assistant",
+      content: [
+        { type: "reasoning", text: "thought", provider: "p:m", payload: "SIGNED" },
+        { type: "text", text: "done" },
+      ],
+    });
+  });
+
+  it("records a tool call's provider signature in the emitted checkpoint", async () => {
+    const signedCall = async (_i: any, _m: any, _s: any, emit: any) => {
+      emit({
+        type: "object-delta",
+        port: "toolCalls",
+        objectDelta: [{ id: "c1", name: "a", input: {}, providerSignature: "SIG" }],
+      });
+      emit({ type: "finish", data: { text: "", toolCalls: [] } });
+    };
+    setAiProviderRegistry(new AiProviderRegistry());
+    clearCheckpointsForTesting();
+    await new CheckpointTestProvider([
+      { serves: ["text.generation", "tool-use"] as Capability[], runFn: signedCall as any },
+      { serves: ["cache.checkpoint"] as Capability[], runFn: ckptWarmFn },
+    ]).register({ queue: { autoCreate: false } });
+    const out = await new ToolCallingTask().run(
+      { model: toolModel(), prompt: "hi", tools: [aTool], emitCheckpoint: true },
+      { resourceScope: new ResourceScope() }
+    );
+    const entry = getCheckpoint((out as { checkpoint?: string }).checkpoint!);
+    expect(entry?.prefix.messages?.at(-1)?.content).toEqual([
+      { type: "tool_use", id: "c1", name: "a", input: {}, providerSignature: "SIG" },
+    ]);
   });
 
   it("keepParentCheckpoint preserves the parent", async () => {

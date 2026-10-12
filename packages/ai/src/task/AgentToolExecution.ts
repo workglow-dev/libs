@@ -17,8 +17,9 @@ import {
 import type { IHumanRequest, IHumanResponse, ServiceRegistry } from "@workglow/util";
 import { createServiceToken, getLogger, HUMAN_CONNECTOR, uuid4 } from "@workglow/util";
 import type { DataPortSchema } from "@workglow/util/schema";
+import type { ContentBlockImage, ContentBlockText } from "./ChatMessage";
 import type { ToolCall, ToolDefinition } from "./ToolCallingUtils";
-import { ToolCallError } from "./ToolCallingUtils";
+import { ToolCallError, ToolResultContent } from "./ToolCallingUtils";
 
 /**
  * When a tool call is put to a human before it runs.
@@ -62,6 +63,11 @@ function hostAllowsSkippingApproval(registry: ServiceRegistry | undefined): bool
 export interface AgentToolResult {
   readonly text: string;
   readonly isError: boolean;
+  /**
+   * The blocks a tool returned through {@link ToolResultContent}, in its order,
+   * so text describing an image stays beside it. `text` is their text joined.
+   */
+  readonly content?: ReadonlyArray<ContentBlockText | ContentBlockImage> | undefined;
 }
 
 /**
@@ -160,13 +166,15 @@ export function toolCallNeedsApproval(
 async function askToApprove(
   context: IExecuteContext,
   toolName: string,
-  request: IHumanRequest
+  request: IHumanRequest,
+  signal: AbortSignal
 ): Promise<IHumanResponse | undefined> {
   try {
-    return await context.registry.get(HUMAN_CONNECTOR).send(request, context.signal);
+    return await context.registry.get(HUMAN_CONNECTOR).send(request, signal);
   } catch (error) {
     if (context.signal.aborted) throw error;
-    getLogger().warn(`Could not ask for approval of "${toolName}"`, { error });
+    // Withdrawn at the turn's deadline: the caller reports that, not a failure to ask.
+    if (!signal.aborted) getLogger().warn(`Could not ask for approval of "${toolName}"`, { error });
     return undefined;
   }
 }
@@ -198,7 +206,8 @@ function describeToolReach(
 async function approveToolCall(
   tool: ToolDefinition,
   call: ToolCall,
-  context: IExecuteContext
+  context: IExecuteContext,
+  signal: AbortSignal
 ): Promise<AgentToolResult | undefined> {
   if (!context.registry.has(HUMAN_CONNECTOR)) {
     return {
@@ -209,21 +218,26 @@ async function approveToolCall(
     };
   }
   const ctor = getTaskConstructors(context.registry).get(backingTaskType(tool));
-  const response = await askToApprove(context, tool.name, {
-    requestId: uuid4(),
-    targetHumanId: "default",
-    kind: "confirm",
-    message: `Run "${tool.name}"?`,
-    contentSchema: APPROVAL_SCHEMA as DataPortSchema,
-    contentData: {
-      tool: tool.name,
-      reach: describeToolReach(tool, ctor),
-      arguments: clampToolText(stringifyForModel(call.input), MAX_APPROVAL_ARGUMENT_CHARS),
+  const response = await askToApprove(
+    context,
+    tool.name,
+    {
+      requestId: uuid4(),
+      targetHumanId: "default",
+      kind: "confirm",
+      message: `Run "${tool.name}"?`,
+      contentSchema: APPROVAL_SCHEMA as DataPortSchema,
+      contentData: {
+        tool: tool.name,
+        reach: describeToolReach(tool, ctor),
+        arguments: clampToolText(stringifyForModel(call.input), MAX_APPROVAL_ARGUMENT_CHARS),
+      },
+      expectsResponse: true,
+      mode: "single",
+      metadata: { toolUseId: call.id, toolName: tool.name },
     },
-    expectsResponse: true,
-    mode: "single",
-    metadata: { toolUseId: call.id, toolName: tool.name },
-  });
+    signal
+  );
   if (response === undefined) {
     return {
       text:
@@ -243,6 +257,51 @@ async function approveToolCall(
   };
 }
 
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * A signal that aborts at `deadline`, however far off. A timer past 2^31-1 ms
+ * fires at once, so a deadline further away than that is reached in steps, each
+ * re-armed for what is left.
+ */
+export function deadlineSignal(deadline: number): {
+  readonly signal: AbortSignal;
+  readonly cancel: () => void;
+} {
+  const expiry = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (): void => {
+    const left = deadline - Date.now();
+    timer =
+      left > MAX_TIMER_MS
+        ? setTimeout(arm, MAX_TIMER_MS)
+        : setTimeout(() => expiry.abort(), Math.max(0, left));
+  };
+  arm();
+  return { signal: expiry.signal, cancel: () => clearTimeout(timer) };
+}
+
+/** Asks for approval, withdrawing the request when the turn's deadline passes. */
+async function approveWithinDeadline(
+  tool: ToolDefinition,
+  call: ToolCall,
+  context: IExecuteContext,
+  deadline: number | undefined
+): Promise<AgentToolResult | undefined> {
+  if (deadline === undefined) return approveToolCall(tool, call, context, context.signal);
+  const expiry = deadlineSignal(deadline);
+  try {
+    return await approveToolCall(
+      tool,
+      call,
+      context,
+      AbortSignal.any([context.signal, expiry.signal])
+    );
+  } finally {
+    expiry.cancel();
+  }
+}
+
 /**
  * Runs one tool call and returns what the model reads back.
  *
@@ -255,15 +314,40 @@ export async function runAgentTool(
   tool: ToolDefinition,
   call: ToolCall,
   context: IExecuteContext,
-  options: { readonly approval: AgentApprovalMode; readonly maxResultChars: number }
+  options: {
+    readonly approval: AgentApprovalMode;
+    readonly maxResultChars: number;
+    readonly deadline: number | undefined;
+  }
 ): Promise<AgentToolResult> {
-  const refusal = toolCallNeedsApproval(tool, options.approval, context.registry)
-    ? await approveToolCall(tool, call, context)
+  const needsApproval = toolCallNeedsApproval(tool, options.approval, context.registry);
+  const refusal = needsApproval
+    ? await approveWithinDeadline(tool, call, context, options.deadline)
     : undefined;
+  // A person can take longer to answer than the turn has left: the request is
+  // withdrawn at the deadline, and an approval landing after it does not start the tool.
+  if (needsApproval && options.deadline !== undefined && Date.now() >= options.deadline) {
+    return {
+      text:
+        `The turn's time ran out while "${tool.name}" waited for approval, so it was not run. ` +
+        `Do not call it again this turn.`,
+      isError: true,
+    };
+  }
   if (refusal) return refusal;
 
   try {
-    const output = await invokeTool(tool, call, context);
+    const output = await invokeTool(tool, call, context, options.deadline);
+    if (output instanceof ToolResultContent) {
+      const text = output.content
+        .flatMap((block) => (block.type === "text" ? [block.text] : []))
+        .join("\n");
+      return {
+        text: clampToolText(text, options.maxResultChars),
+        isError: false,
+        content: output.content,
+      };
+    }
     return {
       text: clampToolText(stringifyForModel(output), options.maxResultChars),
       isError: false,
@@ -287,13 +371,14 @@ export async function runAgentTool(
 async function invokeTool(
   tool: ToolDefinition,
   call: ToolCall,
-  context: IExecuteContext
+  context: IExecuteContext,
+  deadline: number | undefined
 ): Promise<unknown> {
   if (tool.type === "function" || (tool.type === undefined && tool.execute)) {
     if (!tool.execute) {
       throw new Error(`Tool "${tool.name}" is declared type "function" but supplies no execute()`);
     }
-    return await tool.execute(call.input, { toolUseId: call.id, signal: context.signal });
+    return await tool.execute(call.input, { toolUseId: call.id, signal: context.signal, deadline });
   }
   const ctor = getTaskConstructors(context.registry).get(backingTaskType(tool));
   if (!ctor) {

@@ -258,6 +258,26 @@ export const ToolCallingOutputSchema = {
       description: "Tool calls requested by the model",
       "x-stream": "object",
     },
+    reasoning: {
+      type: "string",
+      title: "Reasoning",
+      description:
+        "What a thinking model reasoned before replying, when its provider returns it as text",
+      "x-stream": "append",
+    },
+    nativeTurn: {
+      type: "object",
+      title: "Native Turn",
+      description:
+        "The provider's own assistant output for this round, kept so the provider can be handed it back verbatim on the next round",
+      properties: {
+        provider: { type: "string" },
+        payload: { type: "string" },
+      },
+      required: ["provider", "payload"],
+      additionalProperties: false,
+      "x-stream": "object",
+    },
     ...CheckpointOutputProperty,
   },
   required: ["text", "toolCalls"],
@@ -320,6 +340,10 @@ export type ToolCallingTaskOutput = {
     input: { [x: string]: unknown };
     providerSignature?: string;
   }[];
+  /** Present when the provider returned the model's reasoning as text. */
+  reasoning?: string | undefined;
+  /** Present when the provider handed back its own turn for replay. */
+  nativeTurn?: { readonly provider: string; readonly payload: string } | undefined;
   checkpoint?: string | undefined;
 };
 export type ToolCallingTaskConfig = TaskConfig<ToolCallingTaskInput>;
@@ -450,7 +474,12 @@ export class ToolCallingTask extends StreamingAiTask<
 
   private async finalizeCheckpoint(
     input: ToolCallingTaskInput,
-    out: { text: string; toolCalls: ToolCallingTaskOutput["toolCalls"] }
+    out: {
+      text: string;
+      toolCalls: ToolCallingTaskOutput["toolCalls"];
+      reasoning?: string | undefined;
+      nativeTurn?: ToolCallingTaskOutput["nativeTurn"];
+    }
   ): Promise<void> {
     const resolved = this._resolvedCheckpoint;
     if (!resolved?.emitCheckpointId) return;
@@ -459,12 +488,41 @@ export class ToolCallingTask extends StreamingAiTask<
       input.messages && input.messages.length > 0
         ? [...input.messages]
         : [promptToUserMessage(input.prompt)];
-    const assistantContent = [
+    const replyContent = [
       ...(out.text ? ([{ type: "text", text: out.text }] as const) : []),
+      // A call's provider signature (Gemini's thought signature) rides with it,
+      // as the agent loop records it: Gemini refuses a replayed call without it.
       ...out.toolCalls.map(
-        (tc) => ({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input }) as const
+        (tc) =>
+          ({
+            type: "tool_use",
+            id: tc.id,
+            name: tc.name,
+            input: tc.input,
+            ...(tc.providerSignature === undefined
+              ? {}
+              : { providerSignature: tc.providerSignature }),
+          }) as const
       ),
     ];
+    // The turn is recorded with its reasoning and the provider's own output, as
+    // the agent loop records it, so a provider that replays its turn (signed
+    // thinking, encrypted reasoning) is handed it back from the checkpoint too.
+    // Reasoning alone is not a reply, so it rides only beside one.
+    const reasoningBlock =
+      replyContent.length === 0
+        ? undefined
+        : out.nativeTurn
+          ? ({
+              type: "reasoning",
+              text: out.reasoning ?? "",
+              provider: out.nativeTurn.provider,
+              payload: out.nativeTurn.payload,
+            } as const)
+          : out.reasoning
+            ? ({ type: "reasoning", text: out.reasoning } as const)
+            : undefined;
+    const assistantContent = reasoningBlock ? [reasoningBlock, ...replyContent] : replyContent;
     await finalizeEmittedCheckpoint({
       model,
       resolved,
@@ -547,12 +605,18 @@ export class ToolCallingTask extends StreamingAiTask<
     }
 
     let text = "";
+    let reasoning = "";
+    let nativeTurn: ToolCallingTaskOutput["nativeTurn"];
     let toolCalls: ToolCallingTaskOutput["toolCalls"] = [];
     let finalized = false;
     try {
       for await (const event of super.executeStream(input, context)) {
         if (event.type === "text-delta" && (event.port ?? "text") === "text") {
           text += event.textDelta;
+        } else if (event.type === "text-delta" && event.port === "reasoning") {
+          reasoning += event.textDelta;
+        } else if (event.type === "object-delta" && event.port === "nativeTurn") {
+          nativeTurn = event.objectDelta as unknown as ToolCallingTaskOutput["nativeTurn"];
         } else if (event.type === "object-delta" && event.port === "toolCalls") {
           // Mirror StreamProcessor's canonical accumulation: array deltas are
           // upserts by id (OpenAI-shaped providers emit one single-element
@@ -571,7 +635,12 @@ export class ToolCallingTask extends StreamingAiTask<
           }
         }
         if (event.type === "finish") {
-          await this.finalizeCheckpoint(input, { text, toolCalls });
+          await this.finalizeCheckpoint(input, {
+            text,
+            toolCalls,
+            reasoning: reasoning || undefined,
+            nativeTurn,
+          });
           finalized = true;
           yield {
             type: "text-delta",

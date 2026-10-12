@@ -333,6 +333,42 @@ describe("AgentTask turn controls", () => {
       ]);
       expect(overlap.peak).toBe(1);
     });
+
+    it("does not start a tool whose approval arrives after the deadline", async () => {
+      script([{ calls: [{ id: "a", name: "gated", input: {} }] }, { text: "done" }]);
+      const slowApproval: IHumanConnector = {
+        send: async (request) => {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          return { requestId: request.requestId, action: "accept", content: undefined, done: true };
+        },
+      };
+      registry.registerInstance(HUMAN_CONNECTOR, slowApproval);
+      let ran = false;
+      const output = await new AgentTask().run(
+        {
+          model: MODEL,
+          prompt: "?",
+          tools: [
+            {
+              name: "gated",
+              description: "gated",
+              inputSchema: { type: "object", properties: {}, additionalProperties: false },
+              requiresApproval: true,
+              execute: async () => {
+                ran = true;
+                return "ran";
+              },
+            },
+          ],
+          maxDurationMs: 50,
+        },
+        { registry }
+      );
+      expect(ran).toBe(false);
+      const [result] = toolResults(output.messages);
+      expect(result!.is_error).toBe(true);
+      expect(JSON.stringify(result!.content)).toContain("time ran out");
+    });
   });
 
   describe("steps", () => {

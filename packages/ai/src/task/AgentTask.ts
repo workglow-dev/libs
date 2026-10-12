@@ -48,7 +48,9 @@ import {
 import type {
   ChatMessage,
   ContentBlock,
+  ContentBlockImage,
   ContentBlockInToolResultBody,
+  ContentBlockText,
   ContentBlockToolResult,
 } from "./ChatMessage";
 import { ChatMessageSchema } from "./ChatMessage";
@@ -84,6 +86,9 @@ const DEFAULT_MAX_TOOL_RESULT_CHARS = 20_000;
  * for those rounds, and failing it for one 429 throws them away.
  */
 const DEFAULT_MAX_ROUND_RETRIES = 2;
+
+/** Between two rounds' reasoning, which would otherwise run together into one thought. */
+const REASONING_ROUND_SEPARATOR = "\n\n";
 
 /**
  * Times a turn with an `outputSchema` reminds a model that replied in text to
@@ -158,6 +163,8 @@ export const AgentInputSchema = {
       description:
         "Time one model call may take before it is abandoned and retried as a retryable failure",
       minimum: 1,
+      // The longest timer that can be set; past it the round would be abandoned at once.
+      maximum: 2_147_483_647,
       "x-ui-group": "Configuration",
     },
     toolConcurrency: {
@@ -200,6 +207,20 @@ export const AgentInputSchema = {
       minimum: 1,
       "x-ui-group": "Configuration",
     },
+    announceTimeLeft: {
+      type: "boolean",
+      title: "Announce Time Left",
+      description:
+        "Append the time left before maxDurationMs to the last tool result of every round, so the model can plan the work it has time for. Needs maxDurationMs",
+      "x-ui-group": "Configuration",
+    },
+    reviewPrompt: {
+      type: "string",
+      title: "Review Prompt",
+      description:
+        "Sent once, as a user message, the first time the model replies without calling a tool, so it checks its work before the turn ends. Not sent on a turn with outputSchema, or when no round, budget or time is left to act on it",
+      "x-ui-group": "Configuration",
+    },
     approval: {
       type: "string",
       title: "Approval",
@@ -221,6 +242,12 @@ export const AgentOutputSchema = {
       title: "Text",
       description:
         "Everything the assistant said this turn, including what it narrated between tool calls",
+      "x-stream": "append",
+    },
+    reasoning: {
+      type: "string",
+      title: "Reasoning",
+      description: "The model's reasoning this turn, as the provider streamed it",
       "x-stream": "append",
     },
     messages: {
@@ -296,6 +323,8 @@ export type AgentTaskInput = {
   readonly maxInputTokens?: number | undefined;
   readonly maxCostUsd?: number | undefined;
   readonly maxDurationMs?: number | undefined;
+  readonly announceTimeLeft?: boolean | undefined;
+  readonly reviewPrompt?: string | undefined;
   readonly approval?: AgentApprovalMode | undefined;
 };
 
@@ -303,6 +332,12 @@ export type AgentStopReason = "answered" | "submitted" | "budget" | "max-rounds"
 
 export type AgentTaskOutput = {
   text: string;
+  /**
+   * Each round's reasoning, a blank line between rounds that reasoned. Absent
+   * when no round returned any, so a turn against a model that does not think
+   * has the output it always had.
+   */
+  reasoning?: string | undefined;
   messages: ChatMessage[];
   rounds: number;
   stopReason: AgentStopReason;
@@ -329,8 +364,27 @@ function isAnswerable(call: ToolCall): boolean {
   return typeof call.id === "string" && call.id.length > 0 && typeof call.name === "string";
 }
 
-function assistantMessage(text: string, calls: readonly ToolCall[]): ChatMessage {
+function assistantMessage(
+  text: string,
+  calls: readonly ToolCall[],
+  reasoning: string | undefined,
+  nativeTurn: { readonly provider: string; readonly payload: string } | undefined
+): ChatMessage {
   const content: ContentBlock[] = [];
+  // Reasoning rides only on a reply that has something else: on its own it is
+  // not a reply, and an assistant turn with no text and no call is rejected.
+  if (text.length > 0 || calls.length > 0) {
+    if (nativeTurn) {
+      content.push({
+        type: "reasoning",
+        text: reasoning ?? "",
+        provider: nativeTurn.provider,
+        payload: nativeTurn.payload,
+      });
+    } else if (reasoning) {
+      content.push({ type: "reasoning", text: reasoning });
+    }
+  }
   if (text.length > 0) content.push({ type: "text", text });
   for (const call of calls) {
     content.push({
@@ -362,17 +416,74 @@ function toolResult(
   call: ToolCall,
   text: string,
   isError: boolean,
-  maxChars: number
+  maxChars: number,
+  content?: ReadonlyArray<ContentBlockText | ContentBlockImage>
 ): ContentBlockToolResult {
-  const body: ContentBlockInToolResultBody[] = [
-    { type: "text", text: clampToolText(text, maxChars) },
-  ];
   return {
     type: "tool_result",
     tool_use_id: call.id,
-    content: body,
+    content: content ? orderedToolBody(content, maxChars) : [textBlock(text, maxChars)],
     is_error: isError ? true : undefined,
   };
+}
+
+function textBlock(text: string, maxChars: number): ContentBlockText {
+  return { type: "text", text: clampToolText(text, maxChars) };
+}
+
+/**
+ * A tool's own blocks in the order it returned them, so text describing an image
+ * stays beside it. Adjacent text joins into one block, which keeps a result of
+ * text alone a single block, as providers send it as a plain string. The text
+ * shares one budget: past it a block is cut and later text dropped, while images
+ * stay. A result of images alone carries no text block: an empty one is not a
+ * block Anthropic accepts, and there is nothing in it for the model to read.
+ */
+function orderedToolBody(
+  blocks: ReadonlyArray<ContentBlockText | ContentBlockImage>,
+  maxChars: number
+): ContentBlockInToolResultBody[] {
+  const runs: Array<ContentBlockText | ContentBlockImage> = [];
+  for (const block of blocks) {
+    const previous = runs[runs.length - 1];
+    if (block.type === "text" && previous?.type === "text") {
+      runs[runs.length - 1] = { type: "text", text: `${previous.text}\n${block.text}` };
+    } else {
+      runs.push(block);
+    }
+  }
+  const total = runs.reduce((n, block) => n + (block.type === "text" ? block.text.length : 0), 0);
+  const note = `[truncated, ${total} chars total]`;
+  let left = maxChars;
+  let noted = false;
+  const body: ContentBlockInToolResultBody[] = [];
+  for (const block of runs) {
+    if (block.type === "image") {
+      body.push(block);
+    } else if (block.text.length === 0) {
+      continue;
+    } else if (block.text.length <= left) {
+      body.push(block);
+      left -= block.text.length;
+    } else if (left > 0) {
+      body.push({ type: "text", text: `${block.text.slice(0, left)}… ${note}` });
+      left = 0;
+      noted = true;
+    } else if (!noted) {
+      // The budget ran out exactly at an earlier block: the model is still told
+      // that text was left out, where it was.
+      body.push({ type: "text", text: `… ${note}` });
+      noted = true;
+    }
+  }
+  return body.length > 0 ? body : [textBlock("", maxChars)];
+}
+
+/** The time a turn has left, as the model is shown it: whole seconds, rounded down. */
+function timeLeftNotice(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  return `\n\n[Time left: ${minutes > 0 ? `${minutes}m ` : ""}${total % 60}s]`;
 }
 
 interface RunCallOptions {
@@ -380,6 +491,8 @@ interface RunCallOptions {
   readonly validators: ReturnType<typeof compileToolValidators>;
   readonly approval: AgentApprovalMode;
   readonly maxResultChars: number;
+  /** When the turn's time budget runs out; see {@link ToolExecuteContext.deadline}. */
+  readonly deadline: number | undefined;
   /** The tool that submits the answer, when the turn has an `outputSchema`. */
   readonly submitToolName: string | undefined;
 }
@@ -540,8 +653,15 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
         "AgentTask: maxCostUsd needs a price card for the model, and none was found"
       );
     }
+    if (input.announceTimeLeft && input.maxDurationMs === undefined) {
+      throw new TaskConfigurationError(
+        "AgentTask: announceTimeLeft needs maxDurationMs, the budget it announces"
+      );
+    }
 
     const startedAt = Date.now();
+    const deadline =
+      input.maxDurationMs === undefined ? undefined : startedAt + input.maxDurationMs;
     const steps: AgentStep[] = [];
     let spentTokens = 0;
     let spentUsd = 0;
@@ -551,8 +671,11 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     // counts as spending the cap: the turn stops after that round.
     let unmeteredRound = false;
     let reminders = 0;
+    let reviewed = false;
 
     const messages: ChatMessage[] = [...(input.messages ?? []), promptToUserMessage(input.prompt)];
+    // Where this turn's own messages begin: the prompt, after the prior conversation.
+    const turnStart = input.messages?.length ?? 0;
     turnSoFar = () => ({ messages, steps });
     /**
      * The transcript so far, for a host drawing one while the turn is still
@@ -571,11 +694,13 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
         data: { messages: [...messages], steps: [...steps] },
       }) as StreamEvent<AgentTaskOutput>;
     let text = "";
+    let reasoning = "";
     let rounds = 0;
     const finish = (stopReason: AgentStopReason): StreamEvent<AgentTaskOutput> => ({
       type: "finish",
       data: {
         text,
+        ...(reasoning.length > 0 ? { reasoning } : {}),
         messages,
         rounds,
         stopReason,
@@ -596,8 +721,14 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
         yield finish("budget");
         return;
       }
-      rounds = round + 1;
       await context.updateProgress(undefined, "Thinking");
+      // A slow progress write can carry the turn past its deadline, and a round
+      // started there is a model call the budget no longer covers.
+      if (deadline !== undefined && Date.now() >= deadline) {
+        yield finish("budget");
+        return;
+      }
+      rounds = round + 1;
       const roundStart = Date.now();
 
       const captured: { output: ToolCallingTaskOutput | undefined } = { output: undefined };
@@ -610,9 +741,11 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
             captured,
             roundTurn,
             messages,
+            turnStart,
             maxHistoryChars,
             context,
-            input.roundTimeoutMs
+            input.roundTimeoutMs,
+            reasoning.length > 0
           )) {
             yield event;
           }
@@ -621,8 +754,23 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
           if (attempts > maxRoundRetries || !isRetryableRoundError(err)) throw err;
           context.signal.throwIfAborted();
           const wait = retryDelayMs(err, attempts);
+          // Nothing from the failed attempt has been recorded, so the turn can end
+          // here as cleanly as between rounds.
+          if (deadline !== undefined && Date.now() + wait >= deadline) {
+            yield finish("budget");
+            return;
+          }
           await context.updateProgress(undefined, `Retrying in ${Math.ceil(wait / 1000)}s`);
           await sleepUnlessAborted(wait, context.signal);
+          // The wait can overrun (a slow progress write, a late timer); an attempt
+          // started past the deadline is one the budget no longer covers.
+          if (deadline !== undefined && Date.now() >= deadline) {
+            yield finish("budget");
+            return;
+          }
+          // Said as the attempt starts, not before the wait: a wait cut short
+          // (the run stopped during it) is no attempt made.
+          await context.updateProgress(undefined, `Thinking (attempt ${attempts + 1})`);
         }
       }
       const modelMs = Date.now() - roundStart;
@@ -634,6 +782,10 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       // streams nothing, and counting deltas would report an empty answer while
       // `messages` carried the real one.
       text += output?.text ?? "";
+      const roundReasoning = output?.reasoning ?? "";
+      if (roundReasoning.length > 0) {
+        reasoning += (reasoning.length > 0 ? REASONING_ROUND_SEPARATOR : "") + roundReasoning;
+      }
 
       const record = (toolRecords: readonly AgentToolRecord[]): void => {
         steps.push({
@@ -661,13 +813,33 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       // A turn with neither text nor a usable call records nothing: an empty
       // assistant message is not a reply, and providers reject a replayed
       // prefix containing one.
-      const reply = assistantMessage(output?.text ?? "", calls);
+      const reply = assistantMessage(
+        output?.text ?? "",
+        calls,
+        output?.reasoning,
+        output?.nativeTurn
+      );
       if (reply.content.length > 0) {
         messages.push(reply);
         yield transcript();
       }
       if (calls.length === 0) {
         record([]);
+        // A turn with an outputSchema has checkSubmission for this, and a review
+        // sent with no round, budget or time left could never be acted on.
+        if (
+          input.reviewPrompt &&
+          !reviewed &&
+          submitTool === undefined &&
+          round + 1 < maxRounds &&
+          !overBudget() &&
+          (deadline === undefined || Date.now() < deadline)
+        ) {
+          reviewed = true;
+          messages.push({ role: "user", content: [{ type: "text", text: input.reviewPrompt }] });
+          yield transcript();
+          continue;
+        }
         if (submitTool !== undefined && reminders < MAX_SUBMIT_REMINDERS && !overBudget()) {
           reminders++;
           messages.push({ role: "user", content: [{ type: "text", text: SUBMIT_REMINDER }] });
@@ -707,9 +879,33 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
         validators,
         approval,
         maxResultChars: maxToolResultChars,
+        deadline,
         submitToolName: submitTool?.name,
       })) {
         yield event;
+      }
+      // On the last result rather than in a message of its own: a tool message
+      // holds only tool results, and the tail of the transcript is the one place
+      // a changing line costs no prompt cache.
+      if (input.announceTimeLeft && deadline !== undefined && results.length > 0) {
+        const last = results[results.length - 1]!;
+        const notice = timeLeftNotice(deadline - Date.now());
+        // Joined onto the last text block, not added as a second one: a result of
+        // one text block stays one, which providers send as a plain string (or
+        // parse as a whole) and a second block would turn into a list of parts.
+        // A result of images alone has no text to join, so the notice leads them.
+        const content = [...last.content];
+        const at = content.findLastIndex((block) => block.type === "text");
+        const block = content[at];
+        if (block?.type === "text") content[at] = { ...block, text: block.text + notice };
+        else content.unshift({ type: "text", text: notice });
+        results[results.length - 1] = { ...last, content };
+        // The record counts what the model is shown, which now includes the notice.
+        const recordAt = toolRecords.findIndex((r) => r.id === last.tool_use_id);
+        if (recordAt !== -1) {
+          const counted = toolRecords[recordAt]!;
+          toolRecords[recordAt] = { ...counted, chars: counted.chars + notice.length };
+        }
       }
       messages.push({ role: "tool", content: results });
       record(toolRecords);
@@ -793,7 +989,7 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
   }
 
   /**
-   * Runs one round's model call and re-yields its text as this task's own.
+   * Runs one round's model call and re-yields its text and reasoning as this task's own.
    *
    * Owned, so the round shows up under this task and inherits the registry,
    * the abort signal and the run's usage accounting. The child's `toolCalls`
@@ -808,15 +1004,21 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     captured: { output: ToolCallingTaskOutput | undefined },
     input: AgentTaskInput,
     messages: readonly ChatMessage[],
+    turnStart: number,
     maxHistoryChars: number,
     context: IExecuteContext,
-    timeoutMs: number | undefined
+    timeoutMs: number | undefined,
+    reasonedBefore: boolean
   ): AsyncIterable<StreamEvent<AgentTaskOutput>> {
     const roundInput: ToolCallingTaskInput = {
       model: input.model,
       prompt: input.prompt,
       systemPrompt: input.systemPrompt,
-      messages: normalizeHistoryForModel(trimHistoryForModel(messages, maxHistoryChars)),
+      // The current turn is held whole: a reminder or review prompt is a user
+      // message, and a cut there would drop the prompt the model is asked to
+      // check its answer against and every tool result it gathered. Earlier
+      // turns are still cut to fit.
+      messages: normalizeHistoryForModel(trimHistoryForModel(messages, maxHistoryChars, turnStart)),
       tools: input.tools,
       temperature: input.temperature,
       maxTokens: input.maxTokens,
@@ -844,6 +1046,8 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
           signal: AbortSignal.any([context.signal, roundAbort.signal]),
           onTextDelta: (delta) =>
             queue.push({ type: "text-delta", port: "text", textDelta: delta }),
+          onReasoningDelta: (delta) =>
+            queue.push({ type: "text-delta", port: "reasoning", textDelta: delta }),
           // Progress is advisory: a failed update must not surface as an
           // unhandled rejection, nor fail a round that is otherwise fine.
           onProgress: (progress, message) => {
@@ -856,8 +1060,9 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       abandon = () => turn.abort();
       off = turn.subscribe("stream_chunk", (event: StreamEvent) => {
         if (event.type !== "text-delta") return;
-        if ((event.port ?? "text") !== "text") return;
-        queue.push({ type: "text-delta", port: "text", textDelta: event.textDelta });
+        const port = event.port ?? "text";
+        if (port !== "text" && port !== "reasoning") return;
+        queue.push({ type: "text-delta", port, textDelta: event.textDelta });
       });
       runRound = () => turn.run(roundInput);
     }
@@ -887,13 +1092,25 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     // reached the caller.
     run.catch(() => {});
     // Held until the attempt settles: the stream accumulates every delta it is
-    // handed into the task's text port and offers no way to take one back, so
-    // text forwarded from an attempt that then fails and is retried would be
-    // joined to the retry's. A failed attempt throws here and its text is dropped.
+    // handed into the task's text and reasoning ports and offers no way to take
+    // one back, so either forwarded from an attempt that then fails and is
+    // retried would be joined to the retry's. A failed attempt throws here and
+    // its text and reasoning are dropped together.
     const held: StreamEvent<AgentTaskOutput>[] = [];
     for await (const event of queue.iterable) held.push(event);
     await run;
-    for (const event of held) yield event;
+    let separated = !reasonedBefore;
+    for (const event of held) {
+      // Rounds are told apart on the wire exactly as in the settled output, and
+      // only once this round has something to say: a separator ahead of nothing
+      // would leave the streamed reasoning ending differently than the final one.
+      if (!separated && event.type === "text-delta" && event.port === "reasoning") {
+        if (event.textDelta.length === 0) continue;
+        yield { type: "text-delta", port: "reasoning", textDelta: REASONING_ROUND_SEPARATOR };
+        separated = true;
+      }
+      yield event;
+    }
   }
 
   /**
@@ -936,8 +1153,9 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     const result = await runAgentTool(tool, { ...call, input: sanitized }, context, {
       approval: options.approval,
       maxResultChars: options.maxResultChars,
+      deadline: options.deadline,
     });
-    return toolResult(call, result.text, result.isError, options.maxResultChars);
+    return toolResult(call, result.text, result.isError, options.maxResultChars, result.content);
   }
 }
 
