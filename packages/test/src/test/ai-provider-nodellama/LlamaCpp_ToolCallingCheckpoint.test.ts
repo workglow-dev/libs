@@ -65,7 +65,11 @@ vi.mock("node-llama-cpp", () => ({
     generateResponse(
       history: any[],
       options: {
-        readonly onTextChunk: (chunk: string) => void;
+        readonly onResponseChunk: (chunk: {
+          type: undefined;
+          segmentType: undefined;
+          text: string;
+        }) => void;
         readonly signal: AbortSignal;
       }
     ): Promise<{
@@ -84,7 +88,7 @@ vi.mock("node-llama-cpp", () => ({
         return Promise.reject(options.signal.reason);
       }
       advanceFakeSequence(this.sequence, TURN_TOKENS);
-      options.onTextChunk("calling");
+      options.onResponseChunk({ type: undefined, segmentType: undefined, text: "calling" });
       const cleanHistory = [
         ...history,
         {

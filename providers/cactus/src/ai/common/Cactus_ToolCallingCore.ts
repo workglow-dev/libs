@@ -31,12 +31,38 @@ function buildToolsJson(tools: ReadonlyArray<ToolDefinition>): string {
   );
 }
 
+/**
+ * What the engine is asked this round. Needle answers one query with no
+ * conversation of its own, and each round's input carries the whole history
+ * beside the turn's prompt, so the question is the latest user turn: sending
+ * the prompt every round would repeat it after a tool result. A later user turn
+ * within the same request can lean on the prompt (a review asking the model to
+ * check its answer against what it was asked), so the prompt goes ahead of it
+ * whenever the two differ. Earlier requests in the history are left out.
+ */
 function promptText(input: ToolCallingTaskInput): string {
-  if (typeof input.prompt === "string") return input.prompt;
-  if (input.prompt) return extractMessageText(input.prompt);
-  if (input.messages && input.messages.length > 0) {
-    const last = input.messages[input.messages.length - 1];
-    return extractMessageText(last.content);
+  const query = queryText(input);
+  return input.systemPrompt ? `${input.systemPrompt}\n\n${query}` : query;
+}
+
+function queryText(input: ToolCallingTaskInput): string {
+  const prompt =
+    typeof input.prompt === "string"
+      ? input.prompt
+      : input.prompt
+        ? extractMessageText(input.prompt)
+        : "";
+  const messages = input.messages;
+  if (messages && messages.length > 0) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role !== "user") continue;
+      const latest = extractMessageText(messages[i].content);
+      return prompt !== "" && latest !== prompt ? `${prompt}\n\n${latest}` : latest;
+    }
+  }
+  if (prompt !== "") return prompt;
+  if (messages && messages.length > 0) {
+    return extractMessageText(messages[messages.length - 1].content);
   }
   return "";
 }
@@ -76,7 +102,9 @@ export function createCactusToolCalling(
 
     // One definition of "what the caller sees as text", so the streamed and
     // one-shot paths cannot disagree about it.
-    const visible = createNeedleVisibleTextFilter();
+    const visible = createNeedleVisibleTextFilter((chunk) => {
+      emit({ type: "text-delta", port: "reasoning", textDelta: chunk });
+    });
     const emitVisible = (chunk: string): void => {
       if (chunk.length > 0) emit({ type: "text-delta", port: "text", textDelta: chunk });
     };

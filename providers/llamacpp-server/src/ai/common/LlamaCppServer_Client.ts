@@ -102,6 +102,8 @@ const noopRelease = async (): Promise<void> => {};
 /** One parsed delta from an OpenAI-compatible `/v1/chat/completions` stream. */
 export interface IChatCompletionDelta {
   readonly contentDelta?: string;
+  /** The model's thinking, streamed as `delta.reasoning_content` by a reasoning model. */
+  readonly reasoningDelta?: string | undefined;
   readonly toolCallDeltas?: ReadonlyArray<{
     readonly index?: number;
     readonly id?: string;
@@ -159,6 +161,7 @@ export async function* readChatCompletionDeltas(
           choices?: Array<{
             delta?: {
               content?: string;
+              reasoning_content?: string;
               tool_calls?: IChatCompletionDelta["toolCallDeltas"];
             };
             finish_reason?: string;
@@ -172,6 +175,7 @@ export async function* readChatCompletionDeltas(
         }
         const choice = chunk.choices?.[0];
         const contentDelta = choice?.delta?.content;
+        const reasoningDelta = choice?.delta?.reasoning_content;
         const toolCallDeltas = choice?.delta?.tool_calls;
         const finishReason = choice?.finish_reason;
         // The usage-bearing chunk carries an empty `choices` array, so it must
@@ -179,11 +183,12 @@ export async function* readChatCompletionDeltas(
         const usage = chunk.usage ?? undefined;
         if (
           contentDelta !== undefined ||
+          reasoningDelta !== undefined ||
           toolCallDeltas !== undefined ||
           finishReason ||
           usage !== undefined
         ) {
-          yield { contentDelta, toolCallDeltas, finishReason, usage };
+          yield { contentDelta, reasoningDelta, toolCallDeltas, finishReason, usage };
         }
       }
     }

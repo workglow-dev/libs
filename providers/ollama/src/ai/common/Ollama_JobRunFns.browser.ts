@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { AiProviderRunFnRegistration, ToolCallingTaskInput } from "@workglow/ai";
+import type { AiProviderRunFnRegistration } from "@workglow/ai";
 import {
   OLLAMA_JSON_MODE,
   OLLAMA_MODEL_INFO,
@@ -16,6 +16,7 @@ import {
   OLLAMA_TOOL_USE,
 } from "./Ollama_CapabilitySets";
 import { getClient } from "./Ollama_Client.browser";
+import { toOllamaMessages } from "./Ollama_Messages";
 import { createOllamaModelInfoStream } from "./Ollama_ModelInfo";
 import type { OllamaModelConfig } from "./Ollama_ModelSchema";
 import { createOllamaModelSearchStream } from "./Ollama_ModelSearch";
@@ -28,27 +29,12 @@ import { createOllamaToolCallingStream } from "./Ollama_ToolCalling";
 
 export { getClient, getModelName, loadOllamaSDK } from "./Ollama_Client.browser";
 
-function buildBrowserToolCallingMessages(input: ToolCallingTaskInput): Array<{
-  role: string;
-  content: string;
-}> {
-  const messages: Array<{ role: string; content: string }> = [];
-  if (input.systemPrompt) {
-    messages.push({ role: "system", content: input.systemPrompt as string });
-  }
-  messages.push({ role: "user", content: input.prompt as string });
-  return messages;
-}
-
 export const Ollama_TextGeneration_Stream = createOllamaTextGenerationStream(getClient);
 export const Ollama_StructuredGeneration_Stream = createOllamaStructuredGenerationStream(getClient);
 export const Ollama_TextRewriter_Stream = createOllamaTextRewriterStream(getClient);
 export const Ollama_TextSummary_Stream = createOllamaTextSummaryStream(getClient);
 export const Ollama_TextEmbedding_Stream = createOllamaTextEmbeddingStream(getClient);
-export const Ollama_ToolCalling_Stream = createOllamaToolCallingStream(
-  getClient,
-  buildBrowserToolCallingMessages
-);
+export const Ollama_ToolCalling_Stream = createOllamaToolCallingStream(getClient, toOllamaMessages);
 export const Ollama_ModelInfo_Stream = createOllamaModelInfoStream(getClient);
 export const Ollama_ModelSearch_Stream = createOllamaModelSearchStream(getClient);
 

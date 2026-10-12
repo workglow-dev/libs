@@ -6,11 +6,16 @@
 
 import type {
   AiProviderRunFn,
+  LooseChatMessage,
   TextGenerationTaskInput,
   TextGenerationTaskOutput,
   Usage,
 } from "@workglow/ai";
+import { normalizeChatMessages } from "@workglow/ai/worker";
 import { createEstimatedOutputUsageReporter } from "@workglow/ai/provider-utils";
+import { ollamaThinkParam } from "./Ollama_EffortPolicy";
+import type { OllamaChatMessage } from "./Ollama_Messages";
+import { toOllamaMessages } from "./Ollama_Messages";
 import type { OllamaModelConfig } from "./Ollama_ModelSchema";
 import { getOllamaModelName } from "./Ollama_ModelUtil";
 import { mapOllamaUsage } from "./Ollama_Usage";
@@ -18,8 +23,27 @@ import { mapOllamaUsage } from "./Ollama_Usage";
 type GetClient = (model: OllamaModelConfig | undefined) => Promise<any>;
 
 interface UnifiedTextGenerationInput extends TextGenerationTaskInput {
-  readonly messages?: readonly { readonly role: string; readonly content: string }[];
+  readonly messages?: ReadonlyArray<LooseChatMessage>;
   readonly systemPrompt?: string;
+}
+
+/**
+ * Chat history in Ollama's shape, through the same converter tool calling uses:
+ * an assistant turn keeps its tool calls and each tool result keeps the call it
+ * answers, so a history seeded with a tool exchange is not sent half of it.
+ * System turns join the system prompt, and a user turn's images ride in its own
+ * `images` field.
+ */
+export function toOllamaChatMessages(
+  messages: ReadonlyArray<LooseChatMessage>,
+  systemPrompt: string | undefined
+): OllamaChatMessage[] {
+  return toOllamaMessages({
+    messages: normalizeChatMessages(messages),
+    systemPrompt,
+    prompt: "",
+    tools: [],
+  } as never);
 }
 
 /**
@@ -41,11 +65,8 @@ export function createOllamaTextGenerationStream(
     const unified = input as UnifiedTextGenerationInput;
     const hasMessages = Array.isArray(unified.messages) && unified.messages.length > 0;
 
-    const messages = hasMessages
-      ? [
-          ...(unified.systemPrompt ? [{ role: "system", content: unified.systemPrompt }] : []),
-          ...unified.messages!.map((m) => ({ role: m.role, content: m.content })),
-        ]
+    const messages: OllamaChatMessage[] = hasMessages
+      ? toOllamaChatMessages(unified.messages!, unified.systemPrompt)
       : [{ role: "user", content: input.prompt }];
 
     // Ollama only reports counts on the terminal `done: true` chunk; estimate ↑
@@ -61,6 +82,7 @@ export function createOllamaTextGenerationStream(
     const stream = await client.chat({
       model: modelName,
       messages,
+      ...ollamaThinkParam(model),
       options: {
         temperature: input.temperature,
         top_p: input.topP,

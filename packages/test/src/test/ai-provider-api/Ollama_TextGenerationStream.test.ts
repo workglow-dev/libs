@@ -207,3 +207,105 @@ describe("createOllamaTextGenerationStream usage", () => {
     expect(finish.usage.output).toBe(3);
   });
 });
+
+describe("createOllamaTextGenerationStream chat history", () => {
+  const model = {
+    model_id: "ollama:test",
+    provider_config: { model_name: "llava" },
+  } as any;
+
+  it("sends block history as Ollama messages: string content, images beside it, thinking replayed", async () => {
+    const chat = vi.fn().mockResolvedValue(makeFakeStream(["ok"]));
+    const streamFn = createOllamaTextGenerationStream(vi.fn().mockResolvedValue({ chat }));
+    await streamFn(
+      {
+        prompt: "",
+        systemPrompt: "be brief",
+        messages: [
+          { role: "system", content: [{ type: "text", text: "answer in English" }] },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "What is this?" },
+              { type: "image", mimeType: "image/png", data: "AAAA" },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              { type: "reasoning", text: "It looks red." },
+              { type: "text", text: "A red square." },
+            ],
+          },
+          { role: "user", content: "Thanks" },
+        ],
+      } as any,
+      model,
+      new AbortController().signal,
+      () => {}
+    );
+
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(chat.mock.calls[0]![0].messages).toEqual([
+      { role: "system", content: "be brief\n\nanswer in English" },
+      { role: "user", content: "What is this?", images: ["AAAA"] },
+      { role: "assistant", content: "A red square.", thinking: "It looks red." },
+      { role: "user", content: "Thanks" },
+    ]);
+  });
+
+  it("keeps a tool exchange in the history whole: the call and the result it answers", async () => {
+    const chat = vi.fn().mockResolvedValue(makeFakeStream(["ok"]));
+    const streamFn = createOllamaTextGenerationStream(vi.fn().mockResolvedValue({ chat }));
+    await streamFn(
+      {
+        prompt: "",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "weather?" }] },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "c1", name: "weather", input: { city: "Paris" } }],
+          },
+          {
+            role: "tool",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "c1",
+                content: [{ type: "text", text: "sunny" }],
+              },
+            ],
+          },
+          { role: "user", content: "and tomorrow?" },
+        ],
+      } as any,
+      model,
+      new AbortController().signal,
+      () => {}
+    );
+    expect(chat.mock.calls[0]![0].messages).toEqual([
+      { role: "user", content: "weather?" },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ function: { name: "weather", arguments: { city: "Paris" } } }],
+      },
+      { role: "tool", content: "sunny", tool_name: "weather" },
+      { role: "user", content: "and tomorrow?" },
+    ]);
+  });
+  it("sends the model's effort as think, and nothing for a model with no effort set", async () => {
+    const chat = vi.fn().mockResolvedValue(makeFakeStream(["ok"]));
+    const streamFn = createOllamaTextGenerationStream(vi.fn().mockResolvedValue({ chat }));
+    const qwen = (effort?: string): any => ({
+      model_id: "ollama:qwen3",
+      provider: "OLLAMA",
+      provider_config: { model_name: "qwen3:8b" },
+      ...(effort === undefined ? {} : { effort }),
+    });
+    await streamFn({ prompt: "hi" } as any, qwen("high"), new AbortController().signal, () => {});
+    await streamFn({ prompt: "hi" } as any, qwen("none"), new AbortController().signal, () => {});
+    await streamFn({ prompt: "hi" } as any, qwen(), new AbortController().signal, () => {});
+    expect(chat.mock.calls.map((call) => call[0].think)).toEqual([true, false, undefined]);
+  });
+});

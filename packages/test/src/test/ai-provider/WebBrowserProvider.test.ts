@@ -1106,6 +1106,28 @@ describe("WebBrowser_ToolCalling session lifecycle", () => {
       restore();
     }
   });
+
+  it("finishes with the full empty scaffold, leaving accumulation to the deltas", async () => {
+    const { factory } = makeFakeToolCallingModel();
+    const restore = installLanguageModelGlobal(factory);
+    try {
+      const events: Array<{ type?: string; data?: unknown }> = [];
+      await WebBrowser_ToolCalling(
+        asTCI({ prompt: "do it", tools: [toolA, toolB] }),
+        undefined,
+        new AbortController().signal,
+        (e: unknown) => {
+          events.push(e as { type?: string; data?: unknown });
+        },
+        undefined,
+        { sessionId: sid }
+      );
+      const finish = events.find((e) => e.type === "finish");
+      expect(finish?.data).toEqual({ text: "", toolCalls: [] });
+    } finally {
+      restore();
+    }
+  });
 });
 
 // --------------------------------------------------------------------------

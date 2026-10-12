@@ -17,13 +17,13 @@ import { buildToolDescription, filterValidToolCalls, sanitizeToolArgs } from "@w
 import { parsePartialJson } from "@workglow/util/worker";
 import type { OllamaModelConfig } from "./Ollama_ModelSchema";
 import { getOllamaModelName } from "./Ollama_ModelUtil";
+import { ollamaThinkParam } from "./Ollama_EffortPolicy";
+import type { OllamaChatMessage } from "./Ollama_Messages";
 import { mapOllamaUsage } from "./Ollama_Usage";
 
 type GetClient = (model: OllamaModelConfig | undefined) => Promise<any>;
 
-export type OllamaToolCallingMessagesFn = (
-  input: ToolCallingTaskInput
-) => Array<{ role: string; content: string }>;
+export type OllamaToolCallingMessagesFn = (input: ToolCallingTaskInput) => OllamaChatMessage[];
 
 function mapOllamaTools(tools: ReadonlyArray<ToolDefinition>) {
   return tools.map((t) => ({
@@ -60,6 +60,7 @@ export function createOllamaToolCallingStream(
       model: modelName,
       messages,
       tools,
+      ...ollamaThinkParam(model),
       options: {
         temperature: input.temperature,
         num_predict: input.maxTokens,
@@ -76,6 +77,11 @@ export function createOllamaToolCallingStream(
     try {
       for await (const chunk of stream) {
         usage = mapOllamaUsage(chunk) ?? usage;
+        const thinking = chunk.message.thinking;
+        if (thinking) {
+          provisionalUsage.onText(thinking);
+          emit({ type: "text-delta", port: "reasoning", textDelta: thinking });
+        }
         const delta = chunk.message.content;
         if (delta) {
           provisionalUsage.onText(delta);

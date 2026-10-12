@@ -18,6 +18,7 @@ export * from "./provider-utils/registerProvider";
 export * from "./provider-utils/modelSearchQuery";
 export * from "./provider-utils/ToolCallParsers";
 export * from "./provider-utils/ToolCallMarkupFilter";
+export * from "./provider-utils/ThinkTagFilter";
 export * from "./provider-utils/HfModelSearch";
 export * from "./provider-utils/PipelineTaskMapping";
 export * from "./provider-utils/imageOutputHelpers";

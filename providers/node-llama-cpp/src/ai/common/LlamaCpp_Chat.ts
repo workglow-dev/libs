@@ -27,6 +27,7 @@ import {
   withModelInUse,
 } from "./LlamaCpp_Runtime";
 import { messagesToPureChatHistoryForPrefix } from "./LlamaCpp_ToolCalling";
+import { llamaCppThoughtBudgetOption } from "./LlamaCpp_EffortPolicy";
 
 export function resolveLlamaCppCheckpointSystemPrompt(
   inputSystemPrompt: string | undefined,
@@ -185,6 +186,7 @@ export const LlamaCpp_Chat_Stream: AiProviderRunFn<
         ...llamaCppSeedPromptSpread(model.provider_config),
         ...(input.temperature !== undefined && { temperature: input.temperature }),
         ...(input.maxTokens !== undefined && { maxTokens: input.maxTokens }),
+        ...llamaCppThoughtBudgetOption(model),
         onTextChunk: (chunk: string) => {
           queue.push(chunk);
           provisionalUsage.onText(chunk);

@@ -32,6 +32,7 @@ import {
   withModelInUse,
   withSessionLock,
 } from "./LlamaCpp_Runtime";
+import { llamaCppThoughtBudgetOption } from "./LlamaCpp_EffortPolicy";
 
 export const LlamaCpp_TextGeneration_Stream: AiProviderRunFn<
   TextGenerationTaskInput,
@@ -175,6 +176,7 @@ export const LlamaCpp_TextGeneration_Stream: AiProviderRunFn<
               ...(input.temperature !== undefined && { temperature: input.temperature }),
               ...(input.maxTokens !== undefined && { maxTokens: input.maxTokens }),
               ...(input.topP !== undefined && { topP: input.topP }),
+              ...llamaCppThoughtBudgetOption(model),
             });
           },
           signal,
