@@ -5,13 +5,14 @@
  */
 
 import { createCloudProviderClass } from "@workglow/ai/provider-utils";
-import type { Capability, ModelRecord } from "@workglow/ai/worker";
+import type { Capability, ModelEffortPolicy, ModelRecord } from "@workglow/ai/worker";
 import { AiProvider } from "@workglow/ai/worker";
 import {
   hfInferenceWorkerRunFnSpecs,
   inferHfInferenceCapabilities,
 } from "./common/HFI_Capabilities";
 import { HF_INFERENCE } from "./common/HFI_Constants";
+import { hfiEffortPolicy } from "./common/HFI_EffortPolicy";
 import type { HfInferenceModelConfig } from "./common/HFI_ModelSchema";
 
 /**
@@ -27,6 +28,10 @@ export class HfInferenceProvider extends createCloudProviderClass<HfInferenceMod
 ) {
   override inferCapabilities(model: ModelRecord): readonly Capability[] {
     return inferHfInferenceCapabilities(model);
+  }
+
+  override effortPolicy(model: HfInferenceModelConfig): ModelEffortPolicy | undefined {
+    return hfiEffortPolicy(model);
   }
 
   protected override workerRunFnSpecs(): readonly { serves: readonly Capability[] }[] {

@@ -118,6 +118,28 @@ export function getModelName(model: GeminiModelConfig | undefined): string {
 }
 
 /**
+ * Whether the model accepts images inside `functionResponse.parts`. Only the
+ * Gemini 3 series and later do; older ids answer such a request with a 400.
+ * Aliases such as `gemini-flash-latest` do not match and take the portable shape.
+ */
+export function geminiSupportsMultimodalFunctionResponses(modelName: string): boolean {
+  return /^gemini-(?:[3-9]|\d{2,})(?:[.-]|$)/i.test(modelName);
+}
+
+/**
+ * Whether the model returns thought summaries: Gemini 2.5 and later, and the
+ * `-latest` aliases, which point at them. Earlier ids do not think and reject
+ * `includeThoughts`.
+ */
+export function geminiReturnsThoughts(modelName: string | undefined): boolean {
+  if (!modelName) return false;
+  return (
+    /^gemini-(?:2\.5|[3-9]|\d{2,})(?:[.-]|$)/i.test(modelName) ||
+    /^gemini-[a-z-]*-latest$/i.test(modelName)
+  );
+}
+
+/**
  * Reasoning-token budget for thinking models. Native
  * `provider_config.thinking_budget` wins; otherwise map `model.effort`.
  * Returns `undefined` when neither is set so callers can omit thinkingConfig.
@@ -158,15 +180,30 @@ export function getGeminiSeed(model: GeminiModelConfig | undefined): number | un
 export function resolveThinkingConfig(
   model: GeminiModelConfig | undefined,
   maxTokens: number | undefined,
-  defaultBudget?: number
+  defaultBudget?: number,
+  options?: { readonly includeThoughts?: boolean | undefined }
 ): {
-  thinkingConfig: { thinkingBudget: number } | undefined;
+  thinkingConfig: { thinkingBudget?: number; includeThoughts?: boolean } | undefined;
   maxOutputTokens: number | undefined;
 } {
   const budget = getThinkingBudget(model) ?? defaultBudget;
-  if (budget === undefined) {
+  // Thought summaries exist only when the model thinks: a zero budget turns
+  // thinking off, and models before Gemini 2.5 reject the config.
+  const thinks =
+    budget !== 0 &&
+    geminiEffortPolicy(model).supported.length > 0 &&
+    geminiReturnsThoughts(model?.provider_config?.model_name);
+  const includeThoughts = options?.includeThoughts === true && thinks;
+  if (budget === undefined && !includeThoughts) {
     return { thinkingConfig: undefined, maxOutputTokens: maxTokens };
   }
-  const maxOutputTokens = maxTokens !== undefined && budget > 0 ? maxTokens + budget : maxTokens;
-  return { thinkingConfig: { thinkingBudget: budget }, maxOutputTokens };
+  const maxOutputTokens =
+    maxTokens !== undefined && budget !== undefined && budget > 0 ? maxTokens + budget : maxTokens;
+  return {
+    thinkingConfig: {
+      ...(budget !== undefined ? { thinkingBudget: budget } : {}),
+      ...(includeThoughts ? { includeThoughts: true } : {}),
+    },
+    maxOutputTokens,
+  };
 }

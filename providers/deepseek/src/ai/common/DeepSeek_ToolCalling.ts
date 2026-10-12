@@ -17,7 +17,7 @@ import {
 } from "@workglow/ai/provider-utils";
 import { filterValidToolCalls, toOpenAIMessages } from "@workglow/ai/worker";
 import { RetryableJobError } from "@workglow/job-queue";
-import { getClient, getModelName, resolveMaxTokens } from "./DeepSeek_Client";
+import { getClient, getModelName, reasoningParams, resolveMaxTokens } from "./DeepSeek_Client";
 import type { DeepSeekModelConfig } from "./DeepSeek_ModelSchema";
 import { mapDeepSeekUsage } from "./DeepSeek_Usage";
 
@@ -125,7 +125,12 @@ export const DeepSeek_ToolCalling_Stream: AiProviderRunFn<
   const modelName = getModelName(model);
 
   const tools = buildOpenAITools(input.tools);
-  const messages = toOpenAIMessages(input);
+  // DeepSeek's thinking models read their reasoning back on each turn of a
+  // tool-calling loop, and an image a tool returned has to ride a user message.
+  const messages = toOpenAIMessages(input, {
+    replayReasoning: model?.provider_config?.replay_reasoning !== false,
+    toolImagesInUserMessage: true,
+  });
   const toolChoice = mapDeepSeekToolChoice(input.toolChoice);
 
   const stream = await client.chat.completions.create(
@@ -133,6 +138,7 @@ export const DeepSeek_ToolCalling_Stream: AiProviderRunFn<
       model: modelName,
       messages,
       max_tokens: resolveMaxTokens(model, input.maxTokens),
+      ...reasoningParams(model),
       temperature: input.temperature,
       stream: true,
       tools,

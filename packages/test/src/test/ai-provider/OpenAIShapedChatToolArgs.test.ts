@@ -98,3 +98,20 @@ describe("accumulateOpenAIChatStream tool-call arguments", () => {
     expect(deltas.at(-1)).toEqual([{ id: "c0", name: "now", input: {} }]);
   });
 });
+
+describe("accumulateOpenAIChatStream reasoning", () => {
+  it("streams reasoning_content and reasoning deltas to the reasoning port", async () => {
+    const out: string[] = [];
+    await accumulateOpenAIChatStream(
+      chunks([
+        { choices: [{ delta: { reasoning_content: "think " } }] },
+        { choices: [{ delta: { reasoning: "more" } }] },
+        { choices: [{ delta: { content: "answer" } }] },
+      ]),
+      (e) => {
+        if (e.type === "text-delta") out.push(`${e.port}:${e.textDelta}`);
+      }
+    );
+    expect(out).toEqual(["reasoning:think ", "reasoning:more", "text:answer"]);
+  });
+});

@@ -123,6 +123,34 @@ export function getModelName(model: DeepSeekModelConfig | undefined): string {
 }
 
 /**
+ * DeepSeek's names for the shared effort levels. `none` is not a level here:
+ * it turns thinking off, which DeepSeek spells as a separate switch.
+ */
+const EFFORT_TO_REASONING_EFFORT: Record<Exclude<ModelEffort, "none">, string> = {
+  low: "low",
+  medium: "medium",
+  high: "high",
+  extra: "xhigh",
+  ultra: "max",
+};
+
+/**
+ * The request fields that carry `model.effort` to DeepSeek. Without them the
+ * effort a caller set only sized `max_tokens`, and the model reasoned at its own
+ * default whatever was asked. Nothing is sent for a model whose policy has no
+ * reasoning, or when no effort is set.
+ */
+export function reasoningParams(model: DeepSeekModelConfig | undefined): {
+  reasoning_effort?: string;
+  thinking?: { type: "disabled" };
+} {
+  const effort = resolveEnabledEffort(model, deepseekEffortPolicy(model));
+  if (effort === undefined) return {};
+  if (effort === "none") return { thinking: { type: "disabled" } };
+  return { reasoning_effort: EFFORT_TO_REASONING_EFFORT[effort] };
+}
+
+/**
  * Reasoning headroom added when the model sets no `reasoning_allowance`. Sized
  * above the ~4k reasoning tokens the thinking models typically spend.
  */

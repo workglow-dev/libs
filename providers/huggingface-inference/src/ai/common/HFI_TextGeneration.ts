@@ -16,6 +16,7 @@ import {
 } from "@workglow/ai/provider-utils";
 import { toOpenAIMessages } from "@workglow/ai/worker";
 import { getClient, getModelName, getProvider } from "./HFI_Client";
+import { hfiReasoningParams } from "./HFI_EffortPolicy";
 import type { HfInferenceModelConfig } from "./HFI_ModelSchema";
 
 /**
@@ -76,6 +77,7 @@ export const HFI_TextGeneration_Stream: AiProviderRunFn<
       top_p: input.topP,
       frequency_penalty: input.frequencyPenalty,
       provider,
+      ...hfiReasoningParams(model),
     },
     { signal }
   );

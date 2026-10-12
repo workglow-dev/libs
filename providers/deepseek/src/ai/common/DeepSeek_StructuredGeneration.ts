@@ -21,6 +21,7 @@ import {
   getClient,
   getModelName,
   resolveMaxTokens,
+  reasoningParams,
 } from "./DeepSeek_Client";
 import type { DeepSeekModelConfig } from "./DeepSeek_ModelSchema";
 import { mapDeepSeekUsage } from "./DeepSeek_Usage";
@@ -62,6 +63,7 @@ export const DeepSeek_StructuredGeneration_Stream: AiProviderRunFn<
       messages: [{ role: "user", content: userContent }],
       response_format: responseFormat as never,
       max_tokens: resolveMaxTokens(model, input.maxTokens),
+      ...reasoningParams(model),
       temperature: input.temperature,
       stream: true,
       ...OPENAI_STREAM_USAGE_OPTIONS,

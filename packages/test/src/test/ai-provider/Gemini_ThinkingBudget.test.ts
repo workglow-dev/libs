@@ -90,4 +90,71 @@ describe("resolveThinkingConfig", () => {
       maxOutputTokens: 1000,
     });
   });
+  describe("includeThoughts option", () => {
+    const flash = (extra: Record<string, unknown> = {}) =>
+      model({ provider_config: { model_name: "gemini-2.5-flash" }, ...extra });
+
+    it("asks for thoughts with no budget when no effort is set", () => {
+      expect(resolveThinkingConfig(flash(), 100, undefined, { includeThoughts: true })).toEqual({
+        thinkingConfig: { includeThoughts: true },
+        maxOutputTokens: 100,
+      });
+    });
+
+    it("adds includeThoughts beside the effort budget and pads the output cap", () => {
+      expect(
+        resolveThinkingConfig(flash({ effort: "high" }), 100, undefined, { includeThoughts: true })
+      ).toEqual({
+        thinkingConfig: { thinkingBudget: 2048, includeThoughts: true },
+        maxOutputTokens: 2148,
+      });
+    });
+
+    it("sends nothing for a model that does not think", () => {
+      for (const model_name of ["gemini-embedding-001", "imagen-4.0-generate-001"]) {
+        expect(
+          resolveThinkingConfig(model({ provider_config: { model_name } }), 100, undefined, {
+            includeThoughts: true,
+          })
+        ).toEqual({ thinkingConfig: undefined, maxOutputTokens: 100 });
+      }
+    });
+
+    it("does not ask a model from before Gemini 2.5 for thoughts", () => {
+      for (const model_name of ["gemini-1.5-pro", "gemini-2.0-flash", "gemini-pro"]) {
+        expect(
+          resolveThinkingConfig(model({ provider_config: { model_name } }), 100, undefined, {
+            includeThoughts: true,
+          })
+        ).toEqual({ thinkingConfig: undefined, maxOutputTokens: 100 });
+      }
+    });
+
+    it("asks a -latest alias and Gemini 3 for thoughts", () => {
+      for (const model_name of ["gemini-flash-latest", "gemini-3.5-pro"]) {
+        expect(
+          resolveThinkingConfig(model({ provider_config: { model_name } }), 100, undefined, {
+            includeThoughts: true,
+          })
+        ).toEqual({ thinkingConfig: { includeThoughts: true }, maxOutputTokens: 100 });
+      }
+    });
+
+    it("does not ask for thoughts when the budget is zero", () => {
+      expect(
+        resolveThinkingConfig(flash({ effort: "none" }), 100, undefined, { includeThoughts: true })
+      ).toEqual({ thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 100 });
+    });
+
+    it("leaves calls without the option unchanged", () => {
+      expect(resolveThinkingConfig(flash(), 100)).toEqual({
+        thinkingConfig: undefined,
+        maxOutputTokens: 100,
+      });
+      expect(resolveThinkingConfig(flash({ effort: "high" }), 100, undefined, {})).toEqual({
+        thinkingConfig: { thinkingBudget: 2048 },
+        maxOutputTokens: 2148,
+      });
+    });
+  });
 });

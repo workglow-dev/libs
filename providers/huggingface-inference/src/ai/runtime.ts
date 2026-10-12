@@ -14,5 +14,6 @@
 // organize-imports-ignore
 
 export * from "./common/HFI_Client";
+export * from "./common/HFI_EffortPolicy";
 export * from "./registerHfInferenceInline";
 export * from "./registerHfInferenceWorker";

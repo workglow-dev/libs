@@ -6,7 +6,7 @@
 
 import type { ChatMessage, ModelRecord } from "@workglow/ai";
 import { GEMINI_FALLBACK_MODELS, _testOnly } from "@workglow/google-gemini/ai";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const { GoogleGeminiQueuedProvider, GEMINI_RUN_FN_SPECS, GEMINI_RUN_FNS } = _testOnly;
 
@@ -294,5 +294,229 @@ describe("buildGeminiContents multi-turn", () => {
     const modelTurn = contents.find((c) => c.role === "model");
     const fnPart = modelTurn.parts.find((p: any) => p.functionCall);
     expect("thoughtSignature" in fnPart).toBe(false);
+  });
+});
+
+describe("buildGeminiContents tool results", () => {
+  const { buildGeminiContents } = _testOnly;
+
+  const call = (id: string, name: string) => ({
+    role: "assistant",
+    content: [{ type: "tool_use", id, name, input: {} }],
+  });
+  const result = (id: string, content: any[], is_error?: boolean) => ({
+    role: "tool",
+    content: [
+      {
+        type: "tool_result",
+        tool_use_id: id,
+        content,
+        ...(is_error ? { is_error } : {}),
+      },
+    ],
+  });
+
+  it.each([
+    ["42", { result: 42 }],
+    ["null", { result: null }],
+    ["[1,2]", { result: [1, 2] }],
+    ['"s"', { result: "s" }],
+    ['{"a":1}', { a: 1 }],
+    ["plain words", { result: "plain words" }],
+  ])("wraps a %s tool result as an object", (text, response) => {
+    const contents = buildGeminiContents(
+      [call("c1", "t"), result("c1", [{ type: "text", text }])] as any,
+      "x"
+    );
+    expect(contents.at(-1).parts[0].functionResponse.response).toEqual(response);
+  });
+
+  it("holds tool images until every separate tool message of the turn is out", () => {
+    const contents = buildGeminiContents(
+      [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "c1", name: "shot", input: {} },
+            { type: "tool_use", id: "c2", name: "shot", input: {} },
+          ],
+        },
+        result("c1", [{ type: "image", mimeType: "image/png", data: "AAAA" }]),
+        result("c2", [{ type: "text", text: "ok" }]),
+      ] as any,
+      "x"
+    );
+    const responses = contents.filter((c: any) => c.parts[0]?.functionResponse);
+    expect(responses).toHaveLength(2);
+    expect(contents.indexOf(responses[1])).toBeLessThan(contents.length - 1);
+    expect(contents.at(-1)).toEqual({
+      role: "user",
+      parts: [
+        { text: "Images returned by the tool calls above:" },
+        { inlineData: { mimeType: "image/png", data: "AAAA" } },
+      ],
+    });
+  });
+
+  it("reports an error result under `error`", () => {
+    const contents = buildGeminiContents(
+      [call("c1", "t"), result("c1", [{ type: "text", text: "boom" }], true)] as any,
+      "x"
+    );
+    expect(contents.at(-1).parts[0].functionResponse.response).toEqual({ error: "boom" });
+  });
+
+  it("reports an is_error result whose text is JSON under `error`, unparsed", () => {
+    const contents = buildGeminiContents(
+      [call("c1", "t"), result("c1", [{ type: "text", text: '{"code":1}' }], true)] as any,
+      "x"
+    );
+    expect(contents.at(-1).parts[0].functionResponse.response).toEqual({
+      error: '{"code":1}',
+    });
+  });
+
+  it("returns images in functionResponse.parts when the model takes them there", () => {
+    const contents = buildGeminiContents(
+      [
+        call("c1", "t"),
+        result("c1", [
+          { type: "text", text: "here" },
+          { type: "image", mimeType: "image/png", data: "AAAA" },
+        ]),
+      ] as any,
+      "x",
+      { multimodalFunctionResponses: true }
+    );
+    expect(contents.at(-1).parts[0].functionResponse).toEqual({
+      name: "t",
+      response: { result: "here" },
+      parts: [{ inlineData: { mimeType: "image/png", data: "AAAA" } }],
+    });
+  });
+
+  it("sends images in a separate user turn after the function responses by default", () => {
+    const contents = buildGeminiContents(
+      [
+        call("c1", "t"),
+        result("c1", [
+          { type: "text", text: "here" },
+          { type: "image", mimeType: "image/png", data: "AAAA" },
+        ]),
+      ] as any,
+      "x"
+    );
+    expect(contents).toHaveLength(3);
+    expect(contents[1].parts).toEqual([
+      { functionResponse: { name: "t", response: { result: "here" } } },
+    ]);
+    expect(contents[2]).toEqual({
+      role: "user",
+      parts: [
+        { text: "Images returned by the tool calls above:" },
+        { inlineData: { mimeType: "image/png", data: "AAAA" } },
+      ],
+    });
+  });
+
+  it("puts every image of a tool message in one labelled turn after all of its function responses", () => {
+    const toolMessage = {
+      role: "tool",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "c1",
+          content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+        },
+        {
+          type: "tool_result",
+          tool_use_id: "c2",
+          content: [{ type: "text", text: "two" }],
+        },
+      ],
+    };
+    const contents = buildGeminiContents(
+      [call("c1", "a"), call("c2", "b"), toolMessage] as any,
+      "x"
+    );
+    const [responses, images] = contents.slice(-2);
+    expect(responses.parts).toEqual([
+      { functionResponse: { name: "a", response: { result: "" } } },
+      { functionResponse: { name: "b", response: { result: "two" } } },
+    ]);
+    expect(images.parts).toEqual([
+      { text: "Images returned by the tool calls above:" },
+      { inlineData: { mimeType: "image/png", data: "AAAA" } },
+    ]);
+  });
+});
+
+describe("geminiSupportsMultimodalFunctionResponses", () => {
+  const { geminiSupportsMultimodalFunctionResponses } = _testOnly;
+
+  it.each(["gemini-3-flash-preview", "gemini-3.5-flash", "gemini-10-pro"])(
+    "accepts multimodal function responses for %s",
+    (name) => {
+      expect(geminiSupportsMultimodalFunctionResponses(name)).toBe(true);
+    }
+  );
+
+  it.each(["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"])(
+    "rejects multimodal function responses for %s",
+    (name) => {
+      expect(geminiSupportsMultimodalFunctionResponses(name)).toBe(false);
+    }
+  );
+});
+
+describe("Gemini tool calling thought summaries", () => {
+  afterEach(() => {
+    _testOnly.setGeminiClientForTests(undefined);
+  });
+
+  const run = async (model_name: string, parts: readonly Record<string, unknown>[]) => {
+    const requests: Array<Record<string, any>> = [];
+    _testOnly.setGeminiClientForTests({
+      models: {
+        generateContentStream: async (request: Record<string, any>) => {
+          requests.push(request);
+          return {
+            async *[Symbol.asyncIterator]() {
+              yield { candidates: [{ content: { parts } }] };
+            },
+          };
+        },
+      },
+    } as never);
+    const registration = GEMINI_RUN_FNS.find(({ serves }) =>
+      (serves as readonly string[]).includes("tool-use")
+    );
+    const events: any[] = [];
+    await (registration!.runFn as any)(
+      { prompt: "hi", tools: [] },
+      { provider: "GOOGLE_GEMINI", provider_config: { api_key: "k", model_name } },
+      undefined,
+      (event: unknown) => events.push(event),
+      undefined
+    );
+    return { requests, events };
+  };
+
+  it("emits thought parts on reasoning and the rest on text", async () => {
+    const { requests, events } = await run("gemini-2.5-flash", [
+      { text: "pondering", thought: true },
+      { text: "answer" },
+    ]);
+    const deltas = events.filter((e) => e.type === "text-delta");
+    expect(deltas).toEqual([
+      { type: "text-delta", port: "reasoning", textDelta: "pondering" },
+      { type: "text-delta", port: "text", textDelta: "answer" },
+    ]);
+    expect(requests[0].config.thinkingConfig.includeThoughts).toBe(true);
+  });
+
+  it("sends no thinkingConfig to a model that does not think", async () => {
+    const { requests } = await run("gemini-embedding-001", [{ text: "answer" }]);
+    expect(requests[0].config.thinkingConfig).toBeUndefined();
   });
 });

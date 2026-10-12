@@ -11,6 +11,7 @@ import {
   DEEPSEEK_ALLOWED_HOSTS,
   DEEPSEEK_DEFAULT_BASE_URL,
   DEEPSEEK_DEFAULT_REASONING_ALLOWANCE,
+  reasoningParams,
   resolveMaxTokens,
 } from "@workglow/deepseek/ai";
 import { describe, expect, it } from "vitest";
@@ -205,6 +206,37 @@ describe("resolveMaxTokens", () => {
       provider_config: { model_name: "deepseek-v4-flash", reasoning_allowance: -5000 },
     };
     expect(resolveMaxTokens(bogus as never, 2048)).toBe(2048);
+  });
+});
+
+describe("reasoningParams", () => {
+  const flash = (effort?: string) =>
+    ({
+      provider: "DEEPSEEK",
+      provider_config: { model_name: "deepseek-flash" },
+      ...(effort ? { effort } : {}),
+    }) as never;
+
+  it("sends the effort a caller set, in DeepSeek's names", () => {
+    expect(reasoningParams(flash("low"))).toEqual({ reasoning_effort: "low" });
+    expect(reasoningParams(flash("high"))).toEqual({ reasoning_effort: "high" });
+    expect(reasoningParams(flash("extra"))).toEqual({ reasoning_effort: "xhigh" });
+    expect(reasoningParams(flash("ultra"))).toEqual({ reasoning_effort: "max" });
+  });
+
+  it("turns thinking off for none, which DeepSeek spells as its own switch", () => {
+    expect(reasoningParams(flash("none"))).toEqual({ thinking: { type: "disabled" } });
+  });
+
+  it("sends nothing when no effort is set, or the model does not reason", () => {
+    expect(reasoningParams(flash())).toEqual({});
+    expect(
+      reasoningParams({
+        provider: "DEEPSEEK",
+        provider_config: { model_name: "deepseek-chat" },
+        effort: "high",
+      } as never)
+    ).toEqual({});
   });
 });
 

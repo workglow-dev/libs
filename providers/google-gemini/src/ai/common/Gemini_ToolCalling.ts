@@ -24,6 +24,7 @@ import { generateGeminiStreamWithCacheFallback } from "./Gemini_CachedContentFal
 import { evictIfStaleGeminiCachedContent, getGeminiCachedContent } from "./Gemini_CacheStore";
 import {
   createGeminiClient,
+  geminiSupportsMultimodalFunctionResponses,
   getGeminiSeed,
   getModelName,
   resolveThinkingConfig,
@@ -32,9 +33,20 @@ import type { GeminiModelConfig } from "./Gemini_ModelSchema";
 import { emitGeminiRefusal, geminiRefusalCategory } from "./Gemini_Refusal";
 import { mapGeminiUsage } from "./Gemini_Usage";
 
+export interface IGeminiContentsOptions {
+  /**
+   * Whether the model takes images inside `functionResponse.parts`. When it does
+   * not, a tool message's images go in their own user turn after its function
+   * responses, behind a label. Images beside the response in the same turn made
+   * gemini-2.5-flash write its thinking into the answer text.
+   */
+  readonly multimodalFunctionResponses?: boolean | undefined;
+}
+
 export function buildGeminiContents(
   messages: ReadonlyArray<ChatMessage> | undefined,
-  prompt: unknown
+  prompt: unknown,
+  options: IGeminiContentsOptions = {}
 ): any[] {
   if (!messages || messages.length === 0) {
     return [{ role: "user", parts: [{ text: prompt }] }];
@@ -50,7 +62,20 @@ export function buildGeminiContents(
   const toolUseNames = new Map<string, string>();
 
   const contents: any[] = [];
+  // Images a tool returned wait until every result of the run of tool messages
+  // is out: a user turn between two results of one model turn would leave a
+  // call unanswered before it.
+  let deferredImages: any[] = [];
+  const flushDeferredImages = (): void => {
+    if (deferredImages.length === 0) return;
+    contents.push({
+      role: "user",
+      parts: [{ text: "Images returned by the tool calls above:" }, ...deferredImages],
+    });
+    deferredImages = [];
+  };
   for (const msg of messages) {
+    if (msg.role !== "tool") flushDeferredImages();
     if (msg.role === "user") {
       const parts: any[] = [];
       for (const block of msg.content) {
@@ -87,21 +112,46 @@ export function buildGeminiContents(
       for (const block of msg.content) {
         if (block.type !== "tool_result") continue;
         const name = toolUseNames.get(block.tool_use_id) ?? "unknown";
-        const textContent = block.content
+        const text = block.content
           .filter((b) => b.type === "text")
           .map((b) => (b as { type: "text"; text: string }).text)
           .join("");
+        const images = block.content.filter(
+          (b): b is Extract<typeof b, { type: "image" }> => b.type === "image"
+        );
         let response: Record<string, unknown>;
-        try {
-          response = JSON.parse(textContent);
-        } catch {
-          response = { result: textContent };
+        if (block.is_error) {
+          response = { error: text };
+        } else {
+          let parsed: unknown = text;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            // Not JSON: sent as the text it is.
+          }
+          // `response` must be an object; a scalar, array or null result is wrapped.
+          response =
+            parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+              ? (parsed as Record<string, unknown>)
+              : { result: parsed };
         }
-        parts.push({ functionResponse: { name, response } });
+        const functionResponse: Record<string, unknown> = { name, response };
+        const imageParts = images.map((image) => ({
+          inlineData: { mimeType: image.mimeType, data: image.data },
+        }));
+        if (imageParts.length > 0) {
+          if (options.multimodalFunctionResponses === true) {
+            functionResponse.parts = imageParts;
+          } else {
+            deferredImages.push(...imageParts);
+          }
+        }
+        parts.push({ functionResponse });
       }
       if (parts.length > 0) contents.push({ role: "user", parts });
     }
   }
+  flushDeferredImages();
   return contents;
 }
 
@@ -133,6 +183,10 @@ export const Gemini_ToolCalling_Stream: AiProviderRunFn<
   GeminiModelConfig
 > = async (input, model, signal, emit, _outputSchema, sessionContext) => {
   const ai = await createGeminiClient(model);
+
+  const contentOptions: IGeminiContentsOptions = {
+    multimodalFunctionResponses: geminiSupportsMultimodalFunctionResponses(getModelName(model)),
+  };
 
   const functionDeclarations = buildGeminiFunctionDeclarations(input.tools);
 
@@ -186,12 +240,17 @@ export const Gemini_ToolCalling_Stream: AiProviderRunFn<
   // Thinking is opt-in here (no default budget): the model uses its own default
   // reasoning unless `provider_config.thinking_budget` is set, in which case the
   // output cap is padded so reasoning can't starve the tool call / answer.
-  const { thinkingConfig, maxOutputTokens } = resolveThinkingConfig(model, input.maxTokens);
+  const { thinkingConfig, maxOutputTokens } = resolveThinkingConfig(
+    model,
+    input.maxTokens,
+    undefined,
+    { includeThoughts: true }
+  );
 
   /** Build the tail-only request that references the CachedContent handle. */
   const buildCachedRequest = (): Record<string, unknown> => ({
     model: getModelName(model),
-    contents: buildGeminiContents(input.messages, input.prompt),
+    contents: buildGeminiContents(input.messages, input.prompt, contentOptions),
     config: {
       abortSignal: signal ?? undefined,
       systemInstruction: undefined,
@@ -206,8 +265,8 @@ export const Gemini_ToolCalling_Stream: AiProviderRunFn<
   /** Build the full inline-replay request (prefix messages + tail + tools). */
   const buildInlineReplayRequest = (): Record<string, unknown> => {
     const contents = prefix
-      ? buildGeminiPrefixedContents(prefix, input.messages, input.prompt)
-      : buildGeminiContents(input.messages, input.prompt);
+      ? buildGeminiPrefixedContents(prefix, input.messages, input.prompt, contentOptions)
+      : buildGeminiContents(input.messages, input.prompt, contentOptions);
     const systemInstruction = input.systemPrompt || (prefix ? prefix.systemPrompt : undefined);
     return {
       model: getModelName(model),
@@ -246,7 +305,9 @@ export const Gemini_ToolCalling_Stream: AiProviderRunFn<
     refusalCategory = refusalCategory ?? geminiRefusalCategory(chunk);
     const parts = chunk.candidates?.[0]?.content?.parts ?? [];
     for (const part of parts) {
-      if (part.text && !part.thought) {
+      if (part.text && part.thought) {
+        emit({ type: "text-delta", port: "reasoning", textDelta: part.text });
+      } else if (part.text) {
         emit({ type: "text-delta", port: "text", textDelta: part.text });
       }
       if (part.functionCall) {

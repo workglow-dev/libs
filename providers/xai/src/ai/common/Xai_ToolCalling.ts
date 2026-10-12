@@ -40,7 +40,7 @@ export const Xai_ToolCalling_Stream: AiProviderRunFn<
   const modelName = getModelName(model);
 
   const tools = buildOpenAITools(input.tools);
-  const messages = toOpenAIMessages(input);
+  const messages = toOpenAIMessages(input, { toolImagesInUserMessage: true });
   const toolChoice = mapOpenAIToolChoice(input.toolChoice, true);
   const reasoningEffort = getXaiReasoningEffort(model);
 

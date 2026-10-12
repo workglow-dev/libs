@@ -182,6 +182,17 @@ export async function accumulateOpenAIChatStream(
     const choice = chunk?.choices?.[0];
     if (!choice) continue;
 
+    // Thinking models on OpenAI-compatible APIs stream their reasoning beside
+    // the content: DeepSeek as `reasoning_content`, OpenRouter as `reasoning`.
+    // A chunk can carry both with one empty, so the first non-empty one wins.
+    const reasoningDelta = [choice.delta?.reasoning_content, choice.delta?.reasoning].find(
+      (value: unknown): value is string => typeof value === "string" && value.length > 0
+    );
+    if (reasoningDelta !== undefined) {
+      provisionalUsage?.onText(reasoningDelta);
+      emit({ type: "text-delta", port: "reasoning", textDelta: reasoningDelta });
+    }
+
     const contentDelta: string = choice.delta?.content ?? "";
     if (contentDelta) {
       provisionalUsage?.onText(contentDelta);

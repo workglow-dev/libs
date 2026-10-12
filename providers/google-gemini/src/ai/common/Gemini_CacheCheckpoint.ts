@@ -21,6 +21,7 @@ import { createGeminiClient, getModelName } from "./Gemini_Client";
 import type { GeminiModelConfig } from "./Gemini_ModelSchema";
 import { sanitizeSchemaForGemini } from "./Gemini_Schema";
 import { buildGeminiContents } from "./Gemini_ToolCalling";
+import type { IGeminiContentsOptions } from "./Gemini_ToolCalling";
 
 /** Default TTL for explicit cached content — Gemini bills storage per token-hour. */
 const GEMINI_CACHE_TTL = "3600s";
@@ -229,11 +230,12 @@ function canonicalSortKey(value: unknown): string {
 export function buildGeminiPrefixedContents(
   prefix: CheckpointPrefix,
   messages: ReadonlyArray<ChatMessage> | undefined,
-  prompt: unknown
+  prompt: unknown,
+  options: IGeminiContentsOptions = {}
 ): any[] {
   const tail: ChatMessage[] =
     messages && messages.length > 0 ? [...messages] : promptToTailMessages(prompt);
-  return buildGeminiContents([...(prefix.messages ?? []), ...tail], "");
+  return buildGeminiContents([...(prefix.messages ?? []), ...tail], "", options);
 }
 
 /**
