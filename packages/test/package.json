@@ -78,7 +78,7 @@
     "@workglow/xai": "workspace:*",
     "aws-sdk-client-mock": "catalog:",
     "fake-indexeddb": "catalog:",
-    "miniflare": "^5.20261001.0-alpha",
+    "miniflare": "^4.20260730.0",
     "node-llama-cpp": "catalog:",
     "pg": "catalog:",
     "playwright": "catalog:",
