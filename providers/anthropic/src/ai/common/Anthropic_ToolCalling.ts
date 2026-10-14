@@ -376,12 +376,14 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
   // the combination), but the history may hold signed thinking blocks from an
   // earlier auto-choice turn for this same model. Sending those blocks without
   // thinking enabled is a 400 the signature retry below does not handle, so
-  // strip them up front. Scoped to the suppression case — thinking absent with
-  // no effort configured either — so an adaptive run (thinking or
-  // output_config.effort present) keeps replaying its turn verbatim.
+  // strip them up front. Scoped to the suppression case — thinking absent or
+  // explicitly disabled, with no effort configured either — so an adaptive run
+  // (thinking or output_config.effort present) keeps replaying its turn
+  // verbatim.
+  const thinkingType = (params.thinking as { type?: string } | undefined)?.type;
   if (
     (toolChoice?.type === "any" || toolChoice?.type === "tool") &&
-    params.thinking === undefined &&
+    (params.thinking === undefined || thinkingType === "disabled") &&
     (params.output_config as { effort?: unknown } | undefined)?.effort === undefined &&
     Array.isArray(params.messages)
   ) {

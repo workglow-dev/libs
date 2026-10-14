@@ -470,6 +470,48 @@ describe("Anthropic native turn", () => {
     ]);
   });
 
+  it("strips a stored thinking turn up front when thinking is explicitly disabled", async () => {
+    // History recorded while thinking was on (a signed turn for this same
+    // model), replayed after the setting changed to off: sending its thinking
+    // blocks with thinking disabled is a 400 the signature retry does not
+    // handle, so the forced-choice path drops them before the request.
+    const disabledModel = {
+      model_id: "claude-haiku-4-5",
+      title: "",
+      description: "",
+      provider: ANTHROPIC,
+      provider_config: {
+        model_name: "claude-haiku-4-5",
+        api_key: "test-key",
+        thinking: { type: "disabled" },
+      },
+      capabilities: ["text.generation", "tool-use"],
+      metadata: {},
+    } as never;
+    const nativeKey = "anthropic:claude-haiku-4-5";
+    script = [[]];
+    const events: Array<Record<string, any>> = [];
+    await toolCallingRunFn()(
+      {
+        model: disabledModel,
+        prompt: "",
+        messages: turnMessages(nativeKey, "t1"),
+        tools: lookTool,
+        toolChoice: "required",
+      } as never,
+      disabledModel,
+      undefined as never,
+      ((event: Record<string, any>) => events.push(event)) as never
+    );
+    expect(calls).toHaveLength(1);
+    // The explicit setting still goes on the wire; only the stale blocks go.
+    expect(calls[0]!.thinking).toEqual({ type: "disabled" });
+    expect(sentAssistant(calls[0]!).content).toEqual([
+      { type: "tool_use", id: "t1", name: "look", input: { a: 1 } },
+    ]);
+    expect(events.some((e) => e.type === "finish")).toBe(true);
+  });
+
   it("does not loop: a second rejection is rethrown", async () => {
     script = [bindingError(), bindingError()];
     await expect(run(turnMessages(NATIVE_KEY, "t1"))).rejects.toThrow(/Invalid `signature`/);
