@@ -201,8 +201,10 @@ async function runWorkflowApp(task: ITask): Promise<string> {
   instance.unmount();
 
   // The last frame reflects the final React state, which is what the user
-  // actually sees once the run settles.
-  return stripAnsi(stdout.frames[stdout.frames.length - 1] ?? "");
+  // actually sees once the run settles. Ink 8 queues an empty write as a
+  // flush barrier on unmount, so the last *non-empty* frame is the content.
+  const lastContent = [...stdout.frames].reverse().find((f) => f.length > 0) ?? "";
+  return stripAnsi(lastContent);
 }
 
 /**
