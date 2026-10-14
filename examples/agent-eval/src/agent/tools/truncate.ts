@@ -128,8 +128,13 @@ export function truncateTail(
     const newline = kept.length === 0 && !text.endsWith("\n") ? 0 : 1;
     const size = byteLength(line) + newline;
     if (bytes + size > maxBytes) {
+      // The partial line still costs its newline once joined, so without room
+      // for even that the output would exceed the budget (e.g. blank lines
+      // with nothing to trim). Leave it out rather than grow past maxBytes.
+      const allowance = maxBytes - bytes - newline;
+      if (allowance < 0) break;
       if (kept.every((shown) => shown.length === 0)) {
-        kept.push(tailWithinBytes(line, maxBytes - bytes - newline));
+        kept.push(tailWithinBytes(line, allowance));
         partial = true;
       }
       break;

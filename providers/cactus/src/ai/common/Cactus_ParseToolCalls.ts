@@ -22,11 +22,16 @@ const THINK_FENCE = /<think>[\s\S]*?<\/think>/g;
  * `<tool_call>` the model merely *talked about* inside its reasoning from being
  * read as one it actually emitted.
  *
- * A block cut short at the token limit has no closing tag and is left alone —
- * there is nothing after it to protect.
+ * A block cut short at the token limit has no closing tag: everything after
+ * its opening tag is still reasoning (the stream filter routes it to the
+ * reasoning port), so the trailing unclosed block is dropped too rather than
+ * parsed for tool calls it merely talked about.
  */
 export function stripNeedleReasoning(raw: string): string {
-  return raw.replace(THINK_FENCE, "").trim();
+  return raw
+    .replace(THINK_FENCE, "")
+    .replace(/<think>[\s\S]*$/, "")
+    .trim();
 }
 
 /** A delta-stream filter: each delta in, the part a caller may see out. */

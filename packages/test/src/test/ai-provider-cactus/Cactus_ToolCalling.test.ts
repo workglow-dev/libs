@@ -622,8 +622,10 @@ describe("Cactus_ToolCalling answers the latest user turn in light of the prompt
     expect(query).toBe("first\n\nsecond");
   });
 
-  it("sends the prompt alone while it is the latest user message", async () => {
-    expect(await queryFor({ messages: [user("first"), toolUse, toolResult] })).toBe("first");
+  it("sends the tool results after the latest user message", async () => {
+    expect(await queryFor({ messages: [user("first"), toolUse, toolResult] })).toBe(
+      "first\n\nsunny"
+    );
   });
 
   it("leaves an earlier request in the chat history out of the query", async () => {

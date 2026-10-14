@@ -38,11 +38,46 @@ function buildToolsJson(tools: ReadonlyArray<ToolDefinition>): string {
  * the prompt every round would repeat it after a tool result. A later user turn
  * within the same request can lean on the prompt (a review asking the model to
  * check its answer against what it was asked), so the prompt goes ahead of it
- * whenever the two differ. Earlier requests in the history are left out.
+ * whenever the two differ. Earlier requests in the history are left out, but
+ * everything after the latest user turn (tool results, assistant text) is kept:
+ * the engine is stateless, so that tail is its only record of tool output.
  */
 function promptText(input: ToolCallingTaskInput): string {
   const query = queryText(input);
   return input.systemPrompt ? `${input.systemPrompt}\n\n${query}` : query;
+}
+
+function toolResultText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const record = block as {
+      readonly type?: unknown;
+      readonly content?: unknown;
+      readonly text?: unknown;
+    };
+    if (record.type === "tool_result" && Array.isArray(record.content)) {
+      for (const inner of record.content) {
+        if (
+          inner &&
+          typeof inner === "object" &&
+          (inner as { readonly type?: unknown }).type === "text"
+        ) {
+          const text = (inner as { readonly text?: unknown }).text;
+          if (typeof text === "string" && text.length > 0) parts.push(text);
+        }
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
+/** Text the engine should see from one history message after the latest user turn. */
+function tailMessageText(message: NonNullable<ToolCallingTaskInput["messages"]>[number]): string {
+  if (message.role === "tool") return toolResultText(message.content);
+  if (message.role === "assistant") return extractMessageText(message.content);
+  return "";
 }
 
 function queryText(input: ToolCallingTaskInput): string {
@@ -57,7 +92,17 @@ function queryText(input: ToolCallingTaskInput): string {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role !== "user") continue;
       const latest = extractMessageText(messages[i].content);
-      return prompt !== "" && latest !== prompt ? `${prompt}\n\n${latest}` : latest;
+      const base = prompt !== "" && latest !== prompt ? `${prompt}\n\n${latest}` : latest;
+      // Stateless engine: everything after the latest user turn (tool results,
+      // assistant text) is the only record of what the tools returned. Without
+      // it a round after a tool runs repeats the original question alone and
+      // can repeat the same call instead of answering from its result.
+      const tail = messages
+        .slice(i + 1)
+        .map(tailMessageText)
+        .filter((text) => text !== "");
+      if (tail.length === 0) return base;
+      return base !== "" ? `${base}\n\n${tail.join("\n\n")}` : tail.join("\n\n");
     }
   }
   if (prompt !== "") return prompt;
