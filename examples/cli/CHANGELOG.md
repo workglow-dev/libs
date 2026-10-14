@@ -1,5 +1,24 @@
 # @workglow/cli
 
+## 0.6.13
+
+### Features
+
+#### cli,web
+
+- draw a task's reasoning apart from its answer
+
+### Chores
+
+- update ink
+- update deps
+
+### Updated Dependencies
+
+- `ink`: ^8.0.0
+- `smol-toml`: ^1.9.1
+- `preact`: ^11.0.1
+
 ## 0.6.12
 
 ### Chores

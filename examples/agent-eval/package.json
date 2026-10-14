@@ -2,7 +2,7 @@
   "name": "@workglow/agent-eval",
   "private": true,
   "type": "module",
-  "version": "0.6.12",
+  "version": "0.6.13",
   "repository": {
     "type": "git",
     "url": "https://github.com/workglow-dev/libs.git",

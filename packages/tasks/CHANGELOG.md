@@ -1,5 +1,24 @@
 # @workglow/tasks
 
+## 0.6.13
+
+### Bug Fixes
+
+#### tasks
+
+- one credential-name pattern for URL redaction and body scrubbing
+- read an error page's title without a backtracking pattern
+- redact credentials in the URL quoted by fetch error messages
+- scrub credentials and neutralise remote text in HTTP fetch errors
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `undici`: ^8.12.1
+
 ## 0.6.12
 
 _No changes in this package._

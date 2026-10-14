@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.13
+
+### Features
+
+#### openai,anthropic
+
+- hand a model its own turn back each round
+
 ## 0.6.12
 
 ### Features

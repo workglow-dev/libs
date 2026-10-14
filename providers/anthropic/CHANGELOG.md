@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.13
+
+### Features
+
+#### openai,anthropic
+
+- hand a model its own turn back each round
+
+### Bug Fixes
+
+#### anthropic
+
+- add test for handling disabled thinking in native turn
+
+#### agent-eval
+
+- enhance time management and credential scrubbing
+
 ## 0.6.12
 
 _No changes in this package._

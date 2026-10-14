@@ -1,5 +1,30 @@
 # @workglow/ai
 
+## 0.6.13
+
+### Features
+
+#### providers
+
+- carry reasoning, tool calls and images between rounds on local runtimes
+- carry reasoning and tool-result images between rounds on cloud APIs
+
+#### openai,anthropic
+
+- hand a model its own turn back each round
+
+#### ai
+
+- AgentTask deadlines, time-left notices, review, reasoning and native-turn storage
+
+### Bug Fixes
+
+#### ai
+
+- fail closed when a round reports no usage under maxCostUsd
+- do not duplicate a retried AgentTask round's partial text
+- name the field a nullable section's submission got wrong
+
 ## 0.6.12
 
 ### Features

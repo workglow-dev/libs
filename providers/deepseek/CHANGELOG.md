@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.13
+
+### Features
+
+#### providers
+
+- carry reasoning and tool-result images between rounds on cloud APIs
+
 ## 0.6.12
 
 ### Bug Fixes

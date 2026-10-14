@@ -1,5 +1,27 @@
 # @workglow/web
 
+## 0.6.13
+
+### Features
+
+#### cli,web
+
+- draw a task's reasoning apart from its answer
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `@codemirror/view`: 6.43.14
+- `@codemirror/language`: 6.13.1
+- `@lezer/lr`: 1.4.11
+- `react-resizable-panels`: ^4.14.5
+- `@vitejs/plugin-react`: ^6.1.2
+- `jsdom`: ^30.1.2
+- `vite`: ^8.3.4
+
 ## 0.6.12
 
 ### Chores

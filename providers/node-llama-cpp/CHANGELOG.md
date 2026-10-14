@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.13
+
+### Features
+
+#### providers
+
+- carry reasoning, tool calls and images between rounds on local runtimes
+
 ## 0.6.12
 
 _No changes in this package._

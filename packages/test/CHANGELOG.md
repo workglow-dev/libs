@@ -1,5 +1,53 @@
 # @workglow/test
 
+## 0.6.13
+
+### Features
+
+#### providers
+
+- carry reasoning, tool calls and images between rounds on local runtimes
+- carry reasoning and tool-result images between rounds on cloud APIs
+
+#### openai,anthropic
+
+- hand a model its own turn back each round
+
+#### ai
+
+- AgentTask deadlines, time-left notices, review, reasoning and native-turn storage
+
+### Bug Fixes
+
+#### truncate
+
+- improve handling of newline allowance when truncating text
+
+#### anthropic
+
+- add test for handling disabled thinking in native turn
+
+#### tasks
+
+- one credential-name pattern for URL redaction and body scrubbing
+- read an error page's title without a backtracking pattern
+- redact credentials in the URL quoted by fetch error messages
+- scrub credentials and neutralise remote text in HTTP fetch errors
+
+#### ai
+
+- fail closed when a round reports no usage under maxCostUsd
+- do not duplicate a retried AgentTask round's partial text
+- name the field a nullable section's submission got wrong
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `miniflare`: ^4.20260730.0
+
 ## 0.6.12
 
 ### Features
