@@ -18,7 +18,7 @@
     "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
     "build-agent": "bun build --target=node --format=esm --outfile ./dist/workglow-agent.mjs ./src/bin/workglow-agent.ts",
     "build-cli": "bun build --target=bun --packages=external --outdir ./dist/bin ./src/bin/workglow-agent-eval.ts",
-    "build-types": "rm -f tsconfig.tsbuildinfo && tsc --noEmit",
+    "build-types": "bun check",
     "test": "vitest run --config ../../vitest.config.ts --project agent-eval"
   },
   "bin": {

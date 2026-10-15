@@ -4,6 +4,7 @@
     "noEmit": true,
     "composite": false,
     "incremental": false,
+    "tsBuildInfoFile": null,
     "declaration": false,
     "declarationMap": false,
     "emitDeclarationOnly": false,
