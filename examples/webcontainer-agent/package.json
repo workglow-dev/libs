@@ -1,0 +1,47 @@
+{
+  "name": "@workglow/webcontainer-agent",
+  "private": true,
+  "type": "module",
+  "version": "0.6.13",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/workglow-dev/libs.git",
+    "directory": "examples/webcontainer-agent"
+  },
+  "bugs": {
+    "url": "https://github.com/workglow-dev/libs/issues"
+  },
+  "description": "A coding agent that writes and runs a web project inside a WebContainer, so the code executes in the browser tab and cannot reach the host.",
+  "homepage": "https://workglow.dev",
+  "scripts": {
+    "dev": "bunx --bun vite --port 3810",
+    "build-example": "concurrently -c 'auto' -n 'code,types' 'bun run build-code' 'bun run build-types'",
+    "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
+    "build-code": "vite build",
+    "build-types": "rm -f tsconfig.tsbuildinfo && tsc",
+    "preview": "vite preview --port 3810",
+    "test": "vitest run --config ../../vitest.config.ts --project webcontainer-agent"
+  },
+  "dependencies": {
+    "@webcontainer/api": "^1.6.4",
+    "@workglow/ai": "workspace:*",
+    "@workglow/anthropic": "workspace:*",
+    "@workglow/google-gemini": "workspace:*",
+    "@workglow/openai": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^8.3.4"
+  },
+  "publishConfig": {
+    "access": "none"
+  },
+  "exports": {
+    "./sandboxPort": "./src/core/sandboxPort.ts",
+    "./sandboxTools": "./src/core/sandboxTools.ts",
+    "./sandboxPrompt": "./src/core/sandboxPrompt.ts",
+    "./runSandboxAgent": "./src/core/runSandboxAgent.ts",
+    "./webContainerPort": "./src/core/webContainerPort.ts"
+  }
+}

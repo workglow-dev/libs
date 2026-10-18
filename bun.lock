@@ -176,6 +176,22 @@
         "vite-plugin-wasm": "^3.6.0",
       },
     },
+    "examples/webcontainer-agent": {
+      "name": "@workglow/webcontainer-agent",
+      "version": "0.6.13",
+      "dependencies": {
+        "@webcontainer/api": "^1.6.4",
+        "@workglow/ai": "workspace:*",
+        "@workglow/anthropic": "workspace:*",
+        "@workglow/google-gemini": "workspace:*",
+        "@workglow/openai": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+      },
+      "devDependencies": {
+        "vite": "^8.3.4",
+      },
+    },
     "packages/a2a": {
       "name": "@workglow/a2a",
       "version": "0.6.13",
@@ -1780,6 +1796,8 @@
 
     "@vitest/utils": ["@vitest/utils@5.0.4", "", { "dependencies": { "@vitest/pretty-format": "5.0.4", "convert-source-map": "^2.0.0", "tinyrainbow": "^3.2.0" } }, "sha512-hgpnyMuMqCz2PARmk3v62FxUr8jHIkY13ygvUeh8s+dmQxfnvkB/sgtoZFzG4lMitnEdnrg/lCvDbtVzuAsGWQ=="],
 
+    "@webcontainer/api": ["@webcontainer/api@1.6.4", "", {}, "sha512-r9sHCXg1FcC1AMgppGwAc0vYWaQhqvg282cnsuPbJEzYnWifAdCVvg+8ngJUEHyHcomhJJp+/zuytite4ITHLw=="],
+
     "@workglow/a2a": ["@workglow/a2a@workspace:packages/a2a"],
 
     "@workglow/a2ui": ["@workglow/a2ui@workspace:packages/a2ui"],
@@ -1871,6 +1889,8 @@
     "@workglow/web": ["@workglow/web@workspace:examples/web"],
 
     "@workglow/web-search": ["@workglow/web-search@workspace:packages/web-search"],
+
+    "@workglow/webcontainer-agent": ["@workglow/webcontainer-agent@workspace:examples/webcontainer-agent"],
 
     "@workglow/xai": ["@workglow/xai@workspace:providers/xai"],
 
