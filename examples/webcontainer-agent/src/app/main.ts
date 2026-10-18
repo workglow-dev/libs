@@ -7,7 +7,7 @@
 import type { ChatMessage } from "@workglow/ai";
 import { bootWebContainer } from "../core/webContainerPort";
 import { runSandboxAgent } from "../core/runSandboxAgent";
-import { createSandboxTools } from "../core/sandboxTools";
+import { createSandboxTools, listSandboxFiles } from "../core/sandboxTools";
 import type { SandboxPort } from "../core/sandboxPort";
 import { buildModelConfig, PROVIDER_CHOICES } from "./models";
 
@@ -33,17 +33,6 @@ function syncModelDefault(): void {
 providerSelect.addEventListener("change", syncModelDefault);
 syncModelDefault();
 
-async function listTree(port: SandboxPort, dir = ".", prefix = ""): Promise<string[]> {
-  const out: string[] = [];
-  for (const entry of [...(await port.readdir(dir))].sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.name === "node_modules" || entry.name === ".git") continue;
-    const path = dir === "." ? entry.name : `${dir}/${entry.name}`;
-    out.push(`${prefix}${entry.name}${entry.isDirectory ? "/" : ""}`);
-    if (entry.isDirectory) out.push(...(await listTree(port, path, `${prefix}  `)));
-  }
-  return out;
-}
-
 async function main(): Promise<void> {
   let port: SandboxPort;
   try {
@@ -67,7 +56,9 @@ async function main(): Promise<void> {
   });
 
   const refreshFiles = async (): Promise<void> => {
-    files.textContent = (await listTree(port)).join("\n") || "(no files yet)";
+    const { lines, truncated } = await listSandboxFiles(port);
+    files.textContent =
+      lines.length === 0 ? "(no files yet)" : lines.join("\n") + (truncated ? "\n…" : "");
   };
 
   runButton.addEventListener("click", async () => {

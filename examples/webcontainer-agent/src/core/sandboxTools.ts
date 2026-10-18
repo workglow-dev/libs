@@ -65,6 +65,35 @@ const MAX_READ_CHARS = 40_000;
 const MAX_LISTED_ENTRIES = 400;
 const SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set(["node_modules", ".git"]);
 
+export interface SandboxListing {
+  /** Paths under the root, directories with a trailing slash. */
+  readonly lines: readonly string[];
+  /** True when the entry cap stopped the walk. */
+  readonly truncated: boolean;
+}
+
+/**
+ * The project tree, bounded in depth and entries so a deeply nested or huge
+ * project (the model chooses the paths) cannot turn a listing into unbounded
+ * `readdir` calls. Shared by the `list_files` tool and any UI showing the tree.
+ */
+export async function listSandboxFiles(port: SandboxPort, root = "."): Promise<SandboxListing> {
+  const lines: string[] = [];
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    const entries = [...(await port.readdir(dir))].sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (lines.length >= MAX_LISTED_ENTRIES) return;
+      const full = dir === "." ? entry.name : `${dir}/${entry.name}`;
+      lines.push(entry.isDirectory ? `${full}/` : full);
+      if (entry.isDirectory && depth < 6 && !SKIPPED_DIRECTORIES.has(entry.name)) {
+        await walk(full, depth + 1);
+      }
+    }
+  };
+  await walk(root, 0);
+  return { lines, truncated: lines.length >= MAX_LISTED_ENTRIES };
+}
+
 function fail(message: string): never {
   throw new ToolCallError(message);
 }
@@ -239,27 +268,11 @@ export function createSandboxTools(
     requiresApproval: false,
     execute: async (input) => {
       const root = safePath(typeof input.path === "string" ? input.path : ".");
-      const lines: string[] = [];
-      const walk = async (dir: string, depth: number): Promise<void> => {
-        let entries: Awaited<ReturnType<SandboxPort["readdir"]>>;
-        try {
-          entries = await port.readdir(dir);
-        } catch (error) {
-          fail(`cannot list ${dir}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        const sorted = [...entries].sort((a, b) => a.name.localeCompare(b.name));
-        for (const entry of sorted) {
-          if (lines.length >= MAX_LISTED_ENTRIES) return;
-          const full = dir === "." ? entry.name : `${dir}/${entry.name}`;
-          lines.push(entry.isDirectory ? `${full}/` : full);
-          if (entry.isDirectory && depth < 6 && !SKIPPED_DIRECTORIES.has(entry.name)) {
-            await walk(full, depth + 1);
-          }
-        }
-      };
-      await walk(root, 0);
+      const { lines, truncated } = await listSandboxFiles(port, root).catch((error: unknown) =>
+        fail(`cannot list ${root}: ${error instanceof Error ? error.message : String(error)}`)
+      );
       if (lines.length === 0) return "(empty)";
-      return lines.length >= MAX_LISTED_ENTRIES
+      return truncated
         ? `${lines.join("\n")}\n[… listing stopped at ${MAX_LISTED_ENTRIES} entries]`
         : lines.join("\n");
     },

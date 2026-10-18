@@ -8,7 +8,7 @@ import type { ToolDefinition, ToolExecuteContext } from "@workglow/ai";
 import { describe, expect, it } from "vitest";
 import { resolveSandboxPath } from "../core/sandboxPort";
 import type { SandboxEntry, SandboxPort, SandboxProcess } from "../core/sandboxPort";
-import { createSandboxTools } from "../core/sandboxTools";
+import { createSandboxTools, listSandboxFiles } from "../core/sandboxTools";
 
 interface FakeProgram {
   /** Chunks the program prints, then its exit code; `undefined` never exits. */
@@ -128,6 +128,32 @@ describe("file tools", () => {
       /limit is 4/
     );
     await expect(call(tools, "read_file", { path: "nope" })).rejects.toThrow(/cannot read nope/);
+  });
+});
+
+describe("listSandboxFiles", () => {
+  it("stops at the entry cap and reports it", async () => {
+    const sandbox = new FakeSandbox();
+    for (let i = 0; i < 450; i++) sandbox.files.set(`f${String(i).padStart(3, "0")}`, "");
+    const { lines, truncated } = await listSandboxFiles(sandbox);
+    expect(lines).toHaveLength(400);
+    expect(truncated).toBe(true);
+  });
+
+  it("does not follow a path nested deeper than the depth limit", async () => {
+    const sandbox = new FakeSandbox();
+    const deep = Array.from({ length: 20 }, (_, i) => `d${i}`).join("/");
+    sandbox.files.set(`${deep}/leaf.txt`, "");
+    const { lines } = await listSandboxFiles(sandbox);
+    expect(lines.length).toBeLessThanOrEqual(8);
+    expect(lines).not.toContain(`${deep}/leaf.txt`);
+  });
+
+  it("skips node_modules", async () => {
+    const sandbox = new FakeSandbox();
+    sandbox.files.set("node_modules/x/index.js", "");
+    sandbox.files.set("a.js", "");
+    expect((await listSandboxFiles(sandbox)).lines).toEqual(["a.js", "node_modules/"]);
   });
 });
 
