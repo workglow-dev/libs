@@ -36,7 +36,7 @@ Everything under `src/core` is framework-free, so builder (or embarc) can import
 | File                       | Role                                                                                                           |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `core/sandboxPort.ts`      | `SandboxPort`: the slice of a sandbox the tools use, plus `resolveSandboxPath`.                                |
-| `core/sandboxTools.ts`     | `createSandboxTools(port, options)` → `ToolDefinition[]` + `dispose()`.                                        |
+| `core/sandboxTools.ts`     | `createSandboxTools(port, options)` → `{ tools, dispose }`. Create once per sandbox and keep it across turns.  |
 | `core/runSandboxAgent.ts`  | One `AgentTask` turn over those tools; reports tool calls, previews and message snapshots.                     |
 | `core/sandboxPrompt.ts`    | The system prompt that describes what a WebContainer is and is not.                                            |
 | `core/webContainerPort.ts` | `bootWebContainer()` and the adapter from `@webcontainer/api` to `SandboxPort`. The only file that imports it. |
@@ -47,14 +47,15 @@ Embedding it:
 ```ts
 const { port } = await bootWebContainer(); // or your own SandboxPort
 await registerAnthropicInline(); // providers are the host's to register
+const sandboxTools = createSandboxTools(port, { onPreview: (url) => (iframe.src = url) });
 const run = await runSandboxAgent({
+  sandboxTools, // kept across turns so previews stay live
   instruction: "a markdown previewer",
   model: { provider: "ANTHROPIC", provider_config: { model_name, api_key } },
   sandbox: port,
-  onEvent: (e) => e.type === "preview" && (iframe.src = e.url),
 });
 // ...later
-run.dispose(); // stops servers the project left running
+sandboxTools.dispose(); // when the sandbox is abandoned: stops servers the project left running
 ```
 
 ## Requirements

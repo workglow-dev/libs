@@ -10,7 +10,7 @@ import type { StreamEvent } from "@workglow/task-graph";
 import { globalServiceRegistry, ServiceRegistry } from "@workglow/util";
 import { SANDBOX_SYSTEM_PROMPT } from "./sandboxPrompt";
 import type { SandboxPort } from "./sandboxPort";
-import type { SandboxToolOptions } from "./sandboxTools";
+import type { SandboxToolOptions, SandboxTools } from "./sandboxTools";
 import { createSandboxTools } from "./sandboxTools";
 
 /** What the run reports as it goes, for a UI to draw. */
@@ -37,6 +37,13 @@ export interface SandboxAgentRun {
   readonly maxDurationMs?: number | undefined;
   readonly systemPrompt?: string | undefined;
   readonly tools?: Omit<SandboxToolOptions, "onPreview"> | undefined;
+  /**
+   * Tools created by the caller, kept across turns. A run given these never
+   * stops their servers, not even when it fails or is stopped, because the
+   * project (and the preview showing it) outlives any one turn. Without them
+   * the run makes its own, which `dispose` on the result ends.
+   */
+  readonly sandboxTools?: SandboxTools | undefined;
   readonly onEvent?: ((event: SandboxAgentEvent) => void) | undefined;
 }
 
@@ -65,13 +72,16 @@ export async function runSandboxAgent(
   run: SandboxAgentRun
 ): Promise<SandboxAgentResult & { dispose(): void }> {
   let previewUrl: string | undefined;
-  const sandboxTools = createSandboxTools(run.sandbox, {
-    ...run.tools,
-    onPreview: (url, port) => {
-      previewUrl = url;
-      run.onEvent?.({ type: "preview", url, port });
-    },
-  });
+  const owned = run.sandboxTools === undefined;
+  const sandboxTools =
+    run.sandboxTools ??
+    createSandboxTools(run.sandbox, {
+      ...run.tools,
+      onPreview: (url, port) => {
+        previewUrl = url;
+        run.onEvent?.({ type: "preview", url, port });
+      },
+    });
 
   // Every tool is a host function over the sandbox, so there is nothing for a
   // person to approve that the sandbox does not already contain.
@@ -127,7 +137,7 @@ export async function runSandboxAgent(
       dispose: sandboxTools.dispose,
     };
   } catch (error) {
-    sandboxTools.dispose();
+    if (owned) sandboxTools.dispose();
     throw error;
   } finally {
     off();

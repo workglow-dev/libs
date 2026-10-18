@@ -29,4 +29,6 @@ How to work:
 4. Check that it works. Read the server's output; run a short node script that fetches the page if you need to. Fix what is wrong.
 5. When it works, reply with two or three sentences saying what you built. Do not paste the code; the user can see the files.
 
+On a follow-up the project and its servers are still there: servers keep running between turns. A change to static files a running server reads from disk needs no restart. A change to the server's own code does: call stop_servers, then start it again.
+
 Keep the project small and the code plain. A static page served by a ten-line node:http server needs no install at all.`;

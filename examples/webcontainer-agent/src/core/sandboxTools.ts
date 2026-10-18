@@ -46,7 +46,7 @@ export interface SandboxToolOptions {
 
 export interface SandboxTools {
   readonly tools: ToolDefinition[];
-  /** Kills every background process. Call when the run is over. */
+  /** Kills every background process. Call when the sandbox is abandoned, not between turns. */
   dispose(): void;
 }
 
@@ -372,11 +372,27 @@ export function createSandboxTools(
     },
   };
 
+  const killBackground = (): number => {
+    const count = background.size;
+    for (const process of background) process.kill();
+    background.clear();
+    return count;
+  };
+
+  const stopServers: ToolDefinition = {
+    name: "stop_servers",
+    description:
+      "Stop every server left running by run_command. Servers keep running between your turns " +
+      "so the user's preview stays live; stop them before starting a server again on the same port.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    requiresApproval: false,
+    execute: async () => `Stopped ${killBackground()} server(s).`,
+  };
+
   return {
-    tools: [writeFile, readFile, listFiles, runCommand],
+    tools: [writeFile, readFile, listFiles, runCommand, stopServers],
     dispose(): void {
-      for (const process of background) process.kill();
-      background.clear();
+      killBackground();
     },
   };
 }

@@ -7,6 +7,7 @@
 import type { ChatMessage } from "@workglow/ai";
 import { bootWebContainer } from "../core/webContainerPort";
 import { runSandboxAgent } from "../core/runSandboxAgent";
+import { createSandboxTools } from "../core/sandboxTools";
 import type { SandboxPort } from "../core/sandboxPort";
 import { buildModelConfig, PROVIDER_CHOICES } from "./models";
 
@@ -56,7 +57,14 @@ async function main(): Promise<void> {
 
   let messages: readonly ChatMessage[] = [];
   let stopper: AbortController | undefined;
-  let dispose: (() => void) | undefined;
+  // One set of tools for the page: servers outlive a turn, so the preview stays live
+  // across follow-ups. The container goes away with the page.
+  const sandboxTools = createSandboxTools(port, {
+    onPreview: (url) => {
+      preview.src = url;
+      print(`preview: ${url}`);
+    },
+  });
 
   const refreshFiles = async (): Promise<void> => {
     files.textContent = (await listTree(port)).join("\n") || "(no files yet)";
@@ -72,11 +80,11 @@ async function main(): Promise<void> {
     status.textContent = "Working…";
     try {
       await choice.register();
-      dispose?.();
       const result = await runSandboxAgent({
         instruction: $<HTMLTextAreaElement>("prompt").value,
         model: buildModelConfig(choice, modelInput.value.trim(), apiKey),
         sandbox: port,
+        sandboxTools,
         messages,
         signal: stopper.signal,
         onEvent: (event) => {
@@ -84,14 +92,10 @@ async function main(): Promise<void> {
             print(`→ ${event.name}`);
           } else if (event.type === "tool-call" && event.status === "completed") {
             void refreshFiles();
-          } else if (event.type === "preview") {
-            preview.src = event.url;
-            print(`preview: ${event.url}`);
           }
         },
       });
       messages = result.messages;
-      dispose = result.dispose;
       print(`\n${result.text}\n[${result.stopReason}, ${result.rounds} rounds]`);
       status.textContent = "Done.";
     } catch (error) {

@@ -211,4 +211,15 @@ describe("run_command", () => {
       /limit is 1/
     );
   });
+
+  it("stop_servers kills the background servers and frees their slots", async () => {
+    const sandbox = new FakeSandbox({
+      node: { chunks: [], exitCode: undefined, listensOn: 3000 },
+    });
+    const { tools } = createSandboxTools(sandbox, { maxBackgroundProcesses: 1 });
+    await call(tools, "run_command", { command: "node", background: true });
+    expect(await call(tools, "stop_servers", {})).toBe("Stopped 1 server(s).");
+    expect(sandbox.killed).toEqual(["node"]);
+    await call(tools, "run_command", { command: "node", background: true });
+  });
 });
