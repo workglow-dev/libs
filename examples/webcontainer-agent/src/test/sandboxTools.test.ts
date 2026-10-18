@@ -222,4 +222,51 @@ describe("run_command", () => {
     expect(sandbox.killed).toEqual(["node"]);
     await call(tools, "run_command", { command: "node", background: true });
   });
+
+  it("kills a program whose run was cancelled while it was starting", async () => {
+    const sandbox = new FakeSandbox({ node: { chunks: [], exitCode: undefined } });
+    const slow = Object.create(sandbox) as FakeSandbox;
+    slow.spawn = async (command, args) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return sandbox.spawn(command, args);
+    };
+    const { tools } = createSandboxTools(slow);
+    const controller = new AbortController();
+    const pending = tool(tools, "run_command").execute!(
+      { command: "node" },
+      { toolUseId: "t", signal: controller.signal, deadline: undefined }
+    );
+    controller.abort();
+    expect(await pending).toContain("cancelled while the program was starting");
+    expect(sandbox.killed).toEqual(["node"]);
+  });
+
+  it("starts nothing for a run that was already cancelled", async () => {
+    const sandbox = new FakeSandbox();
+    const { tools } = createSandboxTools(sandbox);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      tool(tools, "run_command").execute!(
+        { command: "node" },
+        { toolUseId: "t", signal: controller.signal, deadline: undefined }
+      )
+    ).rejects.toThrow(/cancelled before/);
+    expect(sandbox.spawned).toEqual([]);
+  });
+
+  it("tells every onPreview subscriber of a server, until it unsubscribes", async () => {
+    const sandbox = new FakeSandbox({
+      node: { chunks: [], exitCode: undefined, listensOn: 3000 },
+    });
+    const { tools, onPreview } = createSandboxTools(sandbox);
+    const heard: string[] = [];
+    const off = onPreview((url) => void heard.push(url));
+    await call(tools, "run_command", { command: "node", background: true });
+    expect(heard).toEqual(["http://localhost:3000"]);
+    off();
+    await call(tools, "stop_servers", {});
+    await call(tools, "run_command", { command: "node", background: true });
+    expect(heard).toHaveLength(1);
+  });
 });

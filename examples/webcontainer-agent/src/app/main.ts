@@ -73,8 +73,12 @@ async function main(): Promise<void> {
   runButton.addEventListener("click", async () => {
     const choice = PROVIDER_CHOICES.find((c) => c.id === providerSelect.value)!;
     const apiKey = $<HTMLInputElement>("key").value.trim();
+    // Read now: provider and model are one choice, and registering below is async.
+    const model = modelInput.value.trim();
     if (apiKey === "") return void (status.textContent = "Enter an API key.");
     runButton.disabled = true;
+    providerSelect.disabled = true;
+    modelInput.disabled = true;
     stopButton.disabled = false;
     stopper = new AbortController();
     status.textContent = "Working…";
@@ -82,7 +86,7 @@ async function main(): Promise<void> {
       await choice.register();
       const result = await runSandboxAgent({
         instruction: $<HTMLTextAreaElement>("prompt").value,
-        model: buildModelConfig(choice, modelInput.value.trim(), apiKey),
+        model: buildModelConfig(choice, model, apiKey),
         sandbox: port,
         sandboxTools,
         messages,
@@ -103,6 +107,8 @@ async function main(): Promise<void> {
       print(error instanceof Error ? error.message : String(error));
     } finally {
       runButton.disabled = false;
+      providerSelect.disabled = false;
+      modelInput.disabled = false;
       stopButton.disabled = true;
       await refreshFiles();
     }

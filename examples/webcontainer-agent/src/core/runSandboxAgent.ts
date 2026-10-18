@@ -36,7 +36,7 @@ export interface SandboxAgentRun {
   readonly maxRounds?: number | undefined;
   readonly maxDurationMs?: number | undefined;
   readonly systemPrompt?: string | undefined;
-  readonly tools?: Omit<SandboxToolOptions, "onPreview"> | undefined;
+  readonly tools?: SandboxToolOptions | undefined;
   /**
    * Tools created by the caller, kept across turns. A run given these never
    * stops their servers, not even when it fails or is stopped, because the
@@ -73,15 +73,12 @@ export async function runSandboxAgent(
 ): Promise<SandboxAgentResult & { dispose(): void }> {
   let previewUrl: string | undefined;
   const owned = run.sandboxTools === undefined;
-  const sandboxTools =
-    run.sandboxTools ??
-    createSandboxTools(run.sandbox, {
-      ...run.tools,
-      onPreview: (url, port) => {
-        previewUrl = url;
-        run.onEvent?.({ type: "preview", url, port });
-      },
-    });
+  const sandboxTools = run.sandboxTools ?? createSandboxTools(run.sandbox, run.tools);
+  // Subscribed for this run only, so caller-owned tools report to whichever run is live.
+  const offPreview = sandboxTools.onPreview((url, port) => {
+    previewUrl = url;
+    run.onEvent?.({ type: "preview", url, port });
+  });
 
   // Every tool is a host function over the sandbox, so there is nothing for a
   // person to approve that the sandbox does not already contain.
@@ -141,5 +138,6 @@ export async function runSandboxAgent(
     throw error;
   } finally {
     off();
+    offPreview();
   }
 }

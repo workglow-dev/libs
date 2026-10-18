@@ -2,7 +2,7 @@
 
 A coding agent that writes a small web project and runs it **inside the browser tab**, in a
 [WebContainer](https://webcontainers.io) (Node.js compiled to run in the page). The model never
-gets a shell on a real machine: its four tools address the container only.
+gets a shell on a real machine: its tools address the container only.
 
 ```sh
 bun run dev        # http://localhost:3810
@@ -17,7 +17,7 @@ project.
 | Layer                                       | What it gives                                                                                                                                                                            |
 | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | WebContainer                                | The code runs in the tab's sandbox: no host filesystem, no host processes, no native binaries. Its network is the browser's, so it is subject to the browser's rules, not the machine's. |
-| Tools are host functions over `SandboxPort` | The model can only `write_file`, `read_file`, `list_files` and `run_command`. Paths are resolved inside the project root (`..` that leaves it is refused).                               |
+| Tools are host functions over `SandboxPort` | The model can only `write_file`, `read_file`, `list_files`, `run_command` and `stop_servers`. Paths are resolved inside the project root (`..` that leaves it is refused).               |
 | `run_command` has no shell                  | Program and arguments are separate, and the program must be on an allow-list (`DEFAULT_ALLOWED_COMMANDS`), so `a && b`, pipes and redirects do not exist.                                |
 | Bounds                                      | File size, output size (the tail is kept), a foreground timeout that kills the process, a cap on background servers, and `maxRounds` / `maxDurationMs` on the turn.                      |
 | Key handling                                | The API key lives in the page's memory and goes only to the provider's SDK call. Sandbox code runs in a separate origin and cannot read it.                                              |

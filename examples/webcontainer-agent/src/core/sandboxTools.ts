@@ -46,6 +46,8 @@ export interface SandboxToolOptions {
 
 export interface SandboxTools {
   readonly tools: ToolDefinition[];
+  /** Hears of each server that starts listening, across every run that uses these tools. */
+  onPreview(listener: (url: string, port: number) => void): () => void;
   /** Kills every background process. Call when the sandbox is abandoned, not between turns. */
   dispose(): void;
 }
@@ -161,6 +163,8 @@ export function createSandboxTools(
   const serverReadyTimeoutSec = options.serverReadyTimeoutSec ?? DEFAULTS.serverReadyTimeoutSec;
   const maxBackground = options.maxBackgroundProcesses ?? DEFAULTS.maxBackgroundProcesses;
   const background = new Set<SandboxProcess>();
+  const previewListeners = new Set<(url: string, port: number) => void>();
+  if (options.onPreview) previewListeners.add(options.onPreview);
 
   const writeFile: ToolDefinition = {
     name: "write_file",
@@ -307,14 +311,33 @@ export function createSandboxTools(
       const urls: string[] = [];
       const off = port.onServerReady((serverPort, url) => {
         urls.push(url);
-        options.onPreview?.(url, serverPort);
+        for (const listener of previewListeners) listener(url, serverPort);
       });
+      // Listening for the run's cancellation starts before the process does, or a
+      // Stop clicked while it is starting is missed and the program outlives the run.
+      const waiter = new AbortController();
+      const stop = (): void => waiter.abort();
+      const cleanup = (): void => {
+        context.signal.removeEventListener("abort", stop);
+        waiter.abort();
+        off();
+      };
+      if (context.signal.aborted) {
+        cleanup();
+        fail("the run was cancelled before the program started");
+      }
+      context.signal.addEventListener("abort", stop, { once: true });
       let process: SandboxProcess;
       try {
         process = await port.spawn(command, args);
       } catch (error) {
-        off();
+        cleanup();
         fail(`cannot start ${command}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (waiter.signal.aborted) {
+        process.kill();
+        cleanup();
+        return "[cancelled while the program was starting; it was killed]";
       }
       const pumped = pump(process, buffer);
       const exited = process.exit.then((code) => ({ code }));
@@ -324,9 +347,6 @@ export function createSandboxTools(
           ? budgetMs
           : Math.min(budgetMs, Math.max(0, context.deadline - Date.now()));
 
-      const waiter = new AbortController();
-      const stop = (): void => waiter.abort();
-      context.signal.addEventListener("abort", stop, { once: true });
       try {
         if (!wantsBackground) {
           const result = await Promise.race([exited, sleep(deadlineMs, waiter.signal)]);
@@ -365,9 +385,7 @@ export function createSandboxTools(
         }
         return `${buffer.read()}\n[no server was listening after ${deadlineMs / 1000}s; killed]`;
       } finally {
-        context.signal.removeEventListener("abort", stop);
-        waiter.abort();
-        off();
+        cleanup();
       }
     },
   };
@@ -391,6 +409,10 @@ export function createSandboxTools(
 
   return {
     tools: [writeFile, readFile, listFiles, runCommand, stopServers],
+    onPreview(listener): () => void {
+      previewListeners.add(listener);
+      return () => void previewListeners.delete(listener);
+    },
     dispose(): void {
       killBackground();
     },
