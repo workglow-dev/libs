@@ -69,7 +69,10 @@ describe("startAnthropicMock", () => {
     const first = await startAnthropicMock({ port: 0, commands: [] });
     try {
       const { port } = first.address() as AddressInfo;
-      await expect(startAnthropicMock({ port, commands: [] })).rejects.toThrow(/EADDRINUSE/);
+      // The code, not the message: Bun words it "Failed to start server. Is port N in use?"
+      await expect(startAnthropicMock({ port, commands: [] })).rejects.toMatchObject({
+        code: "EADDRINUSE",
+      });
     } finally {
       first.close();
     }
