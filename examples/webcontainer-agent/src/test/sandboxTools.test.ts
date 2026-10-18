@@ -261,6 +261,21 @@ describe("run_command", () => {
     expect(sandbox.spawned).toHaveLength(1);
   });
 
+  it("gives overlapping server starts their own preview URLs", async () => {
+    const sandbox = new FakeSandbox({
+      node: { chunks: [], exitCode: undefined, listensOn: 3000 },
+      npm: { chunks: [], exitCode: undefined, listensOn: 3001 },
+    });
+    const { tools } = createSandboxTools(sandbox);
+    const [a, b] = (await Promise.all([
+      call(tools, "run_command", { command: "node", background: true }),
+      call(tools, "run_command", { command: "npm", background: true }),
+    ])) as string[];
+    expect(a).toContain("http://localhost:3000");
+    expect(b).toContain("http://localhost:3001");
+    expect(b).not.toContain(":3000");
+  });
+
   it("stop_servers kills the background servers and frees their slots", async () => {
     const sandbox = new FakeSandbox({
       node: { chunks: [], exitCode: undefined, listensOn: 3000 },

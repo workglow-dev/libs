@@ -200,6 +200,8 @@ export function createSandboxTools(
   const background = new Set<SandboxProcess>();
   /** Background programs asked for whose spawn has not yet landed in `background`. */
   let startingServers = 0;
+  /** Settles when the background server being started, and those queued before it, are up. */
+  let serverStartups: Promise<void> = Promise.resolve();
   const previewListeners = new Set<(url: string, port: number) => void>();
   if (options.onPreview) previewListeners.add(options.onPreview);
 
@@ -342,16 +344,15 @@ export function createSandboxTools(
 
       const buffer = new TailBuffer(maxOutputChars);
       const urls: string[] = [];
-      const off = port.onServerReady((serverPort, url) => {
-        urls.push(url);
-        for (const listener of previewListeners) listener(url, serverPort);
-      });
+      let off: () => void = () => {};
+      let releaseStartup: () => void = () => {};
       // Listening for the run's cancellation starts before the process does, or a
       // Stop clicked while it is starting is missed and the program outlives the run.
       const waiter = new AbortController();
       const stop = (): void => waiter.abort();
       const cleanup = (): void => {
         releaseSlot();
+        releaseStartup();
         context.signal.removeEventListener("abort", stop);
         waiter.abort();
         off();
@@ -361,6 +362,22 @@ export function createSandboxTools(
         fail("the run was cancelled before the program started");
       }
       context.signal.addEventListener("abort", stop, { once: true });
+      if (wantsBackground) {
+        // The container announces a listening port without saying whose it is, so only
+        // one server starts at a time: an announcement during this startup is this one's.
+        const prior = serverStartups;
+        const mine = new Promise<void>((resolve) => (releaseStartup = resolve));
+        serverStartups = Promise.all([prior, mine]).then(() => {});
+        await prior;
+        if (waiter.signal.aborted) {
+          cleanup();
+          return "[cancelled before the program started]";
+        }
+      }
+      off = port.onServerReady((serverPort, url) => {
+        urls.push(url);
+        for (const listener of previewListeners) listener(url, serverPort);
+      });
       let process: SandboxProcess;
       try {
         process = await port.spawn(command, args);
