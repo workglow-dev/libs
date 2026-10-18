@@ -226,8 +226,11 @@ export default defineConfig({
     // inherits `process.env` — which is the whole point: the credential store
     // is decrypted once here instead of once per test file. Absolute, like
     // every other path in this file, since a relative one resolves against
-    // each project's own root.
-    globalSetup: [abs("vitest.globalSetup.ts")],
+    // each project's own root. A `--typecheck.only` run executes no test and
+    // needs no keys, and is run after `build:types` alone: the hydrate imports
+    // `@workglow/storage` source, whose `@workglow/util` import resolves to a
+    // `dist/node.js` that build never wrote.
+    globalSetup: typecheckCli.only ? [] : [abs("vitest.globalSetup.ts")],
     projects,
     coverage: {
       provider: "v8", // or 'istanbul'
