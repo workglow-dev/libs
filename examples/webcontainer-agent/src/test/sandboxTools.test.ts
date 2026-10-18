@@ -140,6 +140,15 @@ describe("listSandboxFiles", () => {
     expect(truncated).toBe(true);
   });
 
+  it("reports truncation only when something was left out", async () => {
+    const exact = new FakeSandbox();
+    for (let i = 0; i < 400; i++) exact.files.set(`f${String(i).padStart(3, "0")}`, "");
+    expect((await listSandboxFiles(exact)).truncated).toBe(false);
+    const over = new FakeSandbox();
+    for (let i = 0; i < 401; i++) over.files.set(`f${String(i).padStart(3, "0")}`, "");
+    expect((await listSandboxFiles(over)).truncated).toBe(true);
+  });
+
   it("does not follow a path nested deeper than the depth limit", async () => {
     const sandbox = new FakeSandbox();
     const deep = Array.from({ length: 20 }, (_, i) => `d${i}`).join("/");
@@ -147,6 +156,7 @@ describe("listSandboxFiles", () => {
     const { lines } = await listSandboxFiles(sandbox);
     expect(lines.length).toBeLessThanOrEqual(8);
     expect(lines).not.toContain(`${deep}/leaf.txt`);
+    expect((await listSandboxFiles(sandbox)).truncated).toBe(true);
   });
 
   it("skips node_modules", async () => {
@@ -236,6 +246,19 @@ describe("run_command", () => {
     await expect(call(tools, "run_command", { command: "node", background: true })).rejects.toThrow(
       /limit is 1/
     );
+  });
+
+  it("holds a background slot while the program is still spawning", async () => {
+    const sandbox = new FakeSandbox({
+      node: { chunks: [], exitCode: undefined, listensOn: 3000 },
+    });
+    const { tools } = createSandboxTools(sandbox, { maxBackgroundProcesses: 1 });
+    const results = await Promise.allSettled([
+      call(tools, "run_command", { command: "node", background: true }),
+      call(tools, "run_command", { command: "node", background: true }),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    expect(sandbox.spawned).toHaveLength(1);
   });
 
   it("stop_servers kills the background servers and frees their slots", async () => {

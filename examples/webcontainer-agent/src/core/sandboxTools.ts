@@ -63,12 +63,13 @@ const DEFAULTS = {
 /** Past this a read is a dump, not a look at a file. */
 const MAX_READ_CHARS = 40_000;
 const MAX_LISTED_ENTRIES = 400;
+const MAX_LISTED_DEPTH = 6;
 const SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set(["node_modules", ".git"]);
 
 export interface SandboxListing {
   /** Paths under the root, directories with a trailing slash. */
   readonly lines: readonly string[];
-  /** True when the entry cap stopped the walk. */
+  /** True when the entry cap or the depth limit left something out. */
   readonly truncated: boolean;
 }
 
@@ -79,19 +80,24 @@ export interface SandboxListing {
  */
 export async function listSandboxFiles(port: SandboxPort, root = "."): Promise<SandboxListing> {
   const lines: string[] = [];
+  let truncated = false;
   const walk = async (dir: string, depth: number): Promise<void> => {
     const entries = [...(await port.readdir(dir))].sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
-      if (lines.length >= MAX_LISTED_ENTRIES) return;
+      if (lines.length >= MAX_LISTED_ENTRIES) {
+        truncated = true;
+        return;
+      }
       const full = dir === "." ? entry.name : `${dir}/${entry.name}`;
       lines.push(entry.isDirectory ? `${full}/` : full);
-      if (entry.isDirectory && depth < 6 && !SKIPPED_DIRECTORIES.has(entry.name)) {
-        await walk(full, depth + 1);
+      if (entry.isDirectory && !SKIPPED_DIRECTORIES.has(entry.name)) {
+        if (depth < MAX_LISTED_DEPTH) await walk(full, depth + 1);
+        else truncated = true;
       }
     }
   };
   await walk(root, 0);
-  return { lines, truncated: lines.length >= MAX_LISTED_ENTRIES };
+  return { lines, truncated };
 }
 
 function fail(message: string): never {
@@ -192,6 +198,8 @@ export function createSandboxTools(
   const serverReadyTimeoutSec = options.serverReadyTimeoutSec ?? DEFAULTS.serverReadyTimeoutSec;
   const maxBackground = options.maxBackgroundProcesses ?? DEFAULTS.maxBackgroundProcesses;
   const background = new Set<SandboxProcess>();
+  /** Background programs asked for whose spawn has not yet landed in `background`. */
+  let startingServers = 0;
   const previewListeners = new Set<(url: string, port: number) => void>();
   if (options.onPreview) previewListeners.add(options.onPreview);
 
@@ -273,7 +281,7 @@ export function createSandboxTools(
       );
       if (lines.length === 0) return "(empty)";
       return truncated
-        ? `${lines.join("\n")}\n[… listing stopped at ${MAX_LISTED_ENTRIES} entries]`
+        ? `${lines.join("\n")}\n[… listing cut short at ${MAX_LISTED_ENTRIES} entries or ${MAX_LISTED_DEPTH} levels deep]`
         : lines.join("\n");
     },
   };
@@ -316,9 +324,21 @@ export function createSandboxTools(
       }
       const args = rawArgs as string[];
       const wantsBackground = input.background === true;
-      if (wantsBackground && background.size >= maxBackground) {
-        fail(`${background.size} servers are already running; the limit is ${maxBackground}.`);
+      // The slot is claimed here, with no await between the check and the claim, and
+      // held until the process is registered in `background`: parallel tool calls
+      // would otherwise all see room before any of them had spawned.
+      if (wantsBackground && background.size + startingServers >= maxBackground) {
+        fail(
+          `${background.size + startingServers} servers are already running; the limit is ${maxBackground}.`
+        );
       }
+      let slotHeld = wantsBackground;
+      if (slotHeld) startingServers++;
+      const releaseSlot = (): void => {
+        if (!slotHeld) return;
+        slotHeld = false;
+        startingServers--;
+      };
 
       const buffer = new TailBuffer(maxOutputChars);
       const urls: string[] = [];
@@ -331,6 +351,7 @@ export function createSandboxTools(
       const waiter = new AbortController();
       const stop = (): void => waiter.abort();
       const cleanup = (): void => {
+        releaseSlot();
         context.signal.removeEventListener("abort", stop);
         waiter.abort();
         off();
@@ -386,6 +407,7 @@ export function createSandboxTools(
           waiter.signal.addEventListener("abort", () => clearInterval(poll), { once: true });
         });
         background.add(process);
+        releaseSlot();
         void exited.finally(() => background.delete(process));
         const result = await Promise.race([ready, exited, sleep(deadlineMs, waiter.signal)]);
         if (result === "ready") {

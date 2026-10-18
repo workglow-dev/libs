@@ -56,9 +56,13 @@ async function main(): Promise<void> {
   });
 
   const refreshFiles = async (): Promise<void> => {
-    const { lines, truncated } = await listSandboxFiles(port);
-    files.textContent =
-      lines.length === 0 ? "(no files yet)" : lines.join("\n") + (truncated ? "\n…" : "");
+    try {
+      const { lines, truncated } = await listSandboxFiles(port);
+      files.textContent =
+        lines.length === 0 ? "(no files yet)" : lines.join("\n") + (truncated ? "\n…" : "");
+    } catch {
+      // A program in the sandbox can remove a directory mid-walk; the next refresh shows the result.
+    }
   };
 
   runButton.addEventListener("click", async () => {
