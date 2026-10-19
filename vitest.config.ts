@@ -268,9 +268,9 @@ export default defineConfig({
         // odd non-`.test.` helper the filename rules below cannot catch.
         "examples/*/src/test/**",
         // Workspaces that publish nothing (`publishConfig.access: "none"`):
-        // today only `examples/web`, a Vite app behind no published entry
-        // point, whose UI wiring would move the headline number without saying
-        // anything about the libraries. The gate is `access: "none"` and not
+        // `examples/web` and `examples/webcontainer-agent`, Vite apps behind no
+        // published entry point, whose UI wiring would move the headline number
+        // without saying anything about the libraries. The gate is `access: "none"` and not
         // `private`, which `packages/test`, `providers/aws` and
         // `providers/cloudflare` all are while carrying source that counts.
         ...workspacePackages
