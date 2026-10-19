@@ -200,6 +200,8 @@ export function createSandboxTools(
   const background = new Set<SandboxProcess>();
   /** Background programs asked for whose spawn has not yet landed in `background`. */
   let startingServers = 0;
+  /** Bumped by every stop, so a start that began before it can tell it was stopped. */
+  let stopEpoch = 0;
   /** Settles when the background server being started, and those queued before it, are up. */
   let serverStartups: Promise<void> = Promise.resolve();
   const previewListeners = new Set<(url: string, port: number) => void>();
@@ -334,6 +336,7 @@ export function createSandboxTools(
           `${background.size + startingServers} servers are already running; the limit is ${maxBackground}.`
         );
       }
+      const epoch = stopEpoch;
       let slotHeld = wantsBackground;
       if (slotHeld) startingServers++;
       const releaseSlot = (): void => {
@@ -369,9 +372,9 @@ export function createSandboxTools(
         const mine = new Promise<void>((resolve) => (releaseStartup = resolve));
         serverStartups = Promise.all([prior, mine]).then(() => {});
         await prior;
-        if (waiter.signal.aborted) {
+        if (waiter.signal.aborted || stopEpoch !== epoch) {
           cleanup();
-          return "[cancelled before the program started]";
+          return "[not started: the run was cancelled or stop_servers was called first]";
         }
       }
       off = port.onServerReady((serverPort, url) => {
@@ -385,10 +388,10 @@ export function createSandboxTools(
         cleanup();
         fail(`cannot start ${command}: ${error instanceof Error ? error.message : String(error)}`);
       }
-      if (waiter.signal.aborted) {
+      if (waiter.signal.aborted || (wantsBackground && stopEpoch !== epoch)) {
         process.kill();
         cleanup();
-        return "[cancelled while the program was starting; it was killed]";
+        return "[cancelled or stopped while the program was starting; it was killed]";
       }
       const pumped = pump(process, buffer);
       const exited = process.exit.then((code) => ({ code }));
@@ -443,7 +446,9 @@ export function createSandboxTools(
   };
 
   const killBackground = (): number => {
-    const count = background.size;
+    // Starts still queued or spawning count too: they see the new epoch and stand down.
+    const count = background.size + startingServers;
+    stopEpoch++;
     for (const process of background) process.kill();
     background.clear();
     return count;

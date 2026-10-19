@@ -276,6 +276,32 @@ describe("run_command", () => {
     expect(b).not.toContain(":3000");
   });
 
+  it("stop_servers also stops a background start that has not finished spawning", async () => {
+    const sandbox = new FakeSandbox({
+      node: { chunks: [], exitCode: undefined, listensOn: 3000 },
+    });
+    const slow = Object.create(sandbox) as FakeSandbox;
+    slow.spawn = async (command, args) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return sandbox.spawn(command, args);
+    };
+    const { tools } = createSandboxTools(slow);
+    const starting = call(tools, "run_command", { command: "node", background: true });
+    await new Promise((resolve) => setTimeout(resolve, 5)); // now inside spawn
+    expect(await call(tools, "stop_servers", {})).toBe("Stopped 1 server(s).");
+    expect(await starting).toContain("cancelled or stopped while the program was starting");
+    expect(sandbox.killed).toEqual(["node"]);
+  });
+
+  it("stop_servers stops a background start that has not reached spawn", async () => {
+    const sandbox = new FakeSandbox({ node: { chunks: [], exitCode: undefined } });
+    const { tools } = createSandboxTools(sandbox);
+    const starting = call(tools, "run_command", { command: "node", background: true });
+    expect(await call(tools, "stop_servers", {})).toBe("Stopped 1 server(s).");
+    expect(await starting).toContain("not started");
+    expect(sandbox.spawned).toEqual([]);
+  });
+
   it("stop_servers kills the background servers and frees their slots", async () => {
     const sandbox = new FakeSandbox({
       node: { chunks: [], exitCode: undefined, listensOn: 3000 },
@@ -301,7 +327,7 @@ describe("run_command", () => {
       { toolUseId: "t", signal: controller.signal, deadline: undefined }
     );
     controller.abort();
-    expect(await pending).toContain("cancelled while the program was starting");
+    expect(await pending).toContain("cancelled or stopped while the program was starting");
     expect(sandbox.killed).toEqual(["node"]);
   });
 
