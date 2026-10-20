@@ -24,6 +24,7 @@ import {
   mergeUsage,
   REFUSAL_CATEGORY_OUTPUT_KEY,
   REFUSAL_OUTPUT_KEY,
+  retractText,
   USAGE_OUTPUT_KEY,
 } from "./StreamTypes";
 import { TaskAbortedError, TaskError } from "./TaskError";
@@ -180,11 +181,14 @@ export class StreamProcessor<Input extends TaskInput, Output extends TaskOutput>
     // output at the port slot. The codec (chosen by the sink's mode) turns each
     // text/object/binary delta into the ordered bytes the sink persists.
     const routers = new Map<string, { router: BinaryStreamRouter; codec: StreamPortCodec }>();
+    // Ports whose router was failed by a `text-retract` (see that case below);
+    // they never get a router again in this run.
+    const detachedPorts = new Set<string>();
     const ensureRouter = (
       port: string
     ): { router: BinaryStreamRouter; codec: StreamPortCodec } | undefined => {
       const sink = sinks?.get(port);
-      if (!sink) return undefined;
+      if (!sink || detachedPorts.has(port)) return undefined;
       let r = routers.get(port);
       if (!r) {
         r = {
@@ -294,6 +298,37 @@ export class StreamProcessor<Input extends TaskInput, Output extends TaskOutput>
             if (deps.edgeBackpressure) await deps.edgeBackpressure(event.port);
             break;
           }
+          case "text-retract": {
+            if (!streamingStarted) {
+              streamingStarted = true;
+              this.task.status = TaskStatus.STREAMING;
+              this.task.emit("status", this.task.status);
+            }
+            if (accumulated) {
+              const text = accumulated.get(event.port);
+              if (text !== undefined) accumulated.set(event.port, retractText(text, event.length));
+            }
+            // Bytes already teed to a cache sink cannot be taken back, and a
+            // ref minted from them would settle the port on text the producer
+            // withdrew. So the port's router is failed (its sink discards the
+            // partial write) and the port gets no router again this run: later
+            // deltas go to the accumulator alone, and the port settles inline.
+            // With no accumulator either, nothing here can say what the port
+            // holds now; the finish handler refuses that unless the producer
+            // states the port's value itself.
+            const routed = routers.get(event.port);
+            if (routed && event.length > 0) {
+              routed.router.fail(
+                new TaskError(
+                  `Task ${this.task.type} retracted text already written to the cache for port "${event.port}"; discarding that write.`
+                )
+              );
+              routers.delete(event.port);
+              detachedPorts.add(event.port);
+            }
+            this.task.emit("stream_chunk", event as StreamEvent);
+            break;
+          }
           case "object-delta": {
             if (!streamingStarted) {
               streamingStarted = true;
@@ -382,6 +417,17 @@ export class StreamProcessor<Input extends TaskInput, Output extends TaskOutput>
             // provider reported. Spread conditionally: an unreported usage must
             // leave no key at all rather than an explicit `usage: undefined`.
             const usageOnEvent = event.usage ? { usage: event.usage } : {};
+            if (!accumulated) {
+              const stated = (event.data ?? {}) as Record<string, unknown>;
+              for (const port of detachedPorts) {
+                if (!(port in stated)) {
+                  throw new TaskError(
+                    `Task ${this.task.type} retracted text on port "${port}" after it was ` +
+                      `written to the cache, and this run keeps no other copy of the port.`
+                  );
+                }
+              }
+            }
             // `accumulated` witnesses all three accumulator maps — they are
             // created together under one `ctx.shouldAccumulate` ternary.
             const hasEnrichment = accumulated !== undefined || routers.size > 0;

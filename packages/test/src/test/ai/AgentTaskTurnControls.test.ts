@@ -45,10 +45,12 @@ interface Round {
   readonly usage?: Usage;
   /** Thrown instead of answering. */
   readonly error?: Error;
-  /** Streamed before `error` is thrown, as a provider failing mid-stream does. */
+  /** Streamed before `error` is thrown or the hang, as a provider failing mid-stream does. */
   readonly partial?: string;
   /** Never answers: waits until the call is abandoned. */
   readonly hang?: boolean;
+  /** Awaited after `text` is streamed and before the round answers. */
+  readonly afterText?: () => Promise<void>;
 }
 
 function usage(input: number, cached: number, output: number): Usage {
@@ -69,10 +71,8 @@ function script(rounds: readonly Round[]): () => number {
   const runFn: AiProviderRunFn = async (_input, _model, signal, emit) => {
     const round = rounds[Math.min(called, rounds.length - 1)]!;
     called++;
-    if (round.error) {
-      if (round.partial) emit({ type: "text-delta", port: "text", textDelta: round.partial });
-      throw round.error;
-    }
+    if (round.partial) emit({ type: "text-delta", port: "text", textDelta: round.partial });
+    if (round.error) throw round.error;
     if (round.hang) {
       await new Promise<never>((_resolve, reject) => {
         if (signal.aborted) reject(signal.reason);
@@ -80,6 +80,7 @@ function script(rounds: readonly Round[]): () => number {
       });
     }
     if (round.text) emit({ type: "text-delta", port: "text", textDelta: round.text });
+    await round.afterText?.();
     if (round.calls?.length) {
       emit({ type: "object-delta", port: "toolCalls", objectDelta: [...round.calls] });
     }
@@ -124,6 +125,33 @@ const ECHO: ToolDefinition = {
   inputSchema: { type: "object", properties: { text: { type: "string" } } },
   execute: async (input) => String((input as { text?: string }).text ?? ""),
 };
+
+type TextEvent = { delta: string } | { retract: number };
+
+/** The `text` port's deltas and retractions, in the order the turn sent them. */
+function listenText(task: AgentTask): TextEvent[] {
+  const events: TextEvent[] = [];
+  task.subscribe("stream_chunk", (event) => {
+    if (event.type === "text-delta" && event.port === "text") {
+      events.push({ delta: event.textDelta });
+    } else if (event.type === "text-retract" && event.port === "text") {
+      events.push({ retract: event.length });
+    }
+  });
+  return events;
+}
+
+/** What a host folding the wire reads, retractions applied. */
+function foldText(events: readonly TextEvent[]): string {
+  let text = "";
+  for (const event of events) {
+    text =
+      "delta" in event
+        ? text + event.delta
+        : text.slice(0, Math.max(0, text.length - event.retract));
+  }
+  return text;
+}
 
 function toolResults(messages: readonly { role: string; content: readonly unknown[] }[]) {
   return messages
@@ -522,16 +550,41 @@ describe("AgentTask turn controls", () => {
       expect(output.steps[0]!.attempts).toBe(2);
     });
 
-    it("does not duplicate a failed attempt's streamed text on the retry", async () => {
+    it("streams a round's text before the round settles", async () => {
+      const task = new AgentTask();
+      let streamed = "";
+      const sawText = Promise.withResolvers<void>();
+      task.subscribe("stream_chunk", (event) => {
+        if (event.type !== "text-delta") return;
+        streamed += event.textDelta;
+        sawText.resolve();
+      });
+      let streamedBeforeAnswer: string | undefined;
+      script([
+        {
+          text: "Hello",
+          afterText: async () => {
+            // Bounded, so a turn that held its text fails here rather than hanging.
+            await Promise.race([sawText.promise, new Promise((r) => setTimeout(r, 2_000))]);
+            streamedBeforeAnswer = streamed;
+          },
+        },
+      ]);
+      const output = await task.run(
+        { model: MODEL, prompt: "?", tools: [], approval: "never" },
+        { registry }
+      );
+      expect(streamedBeforeAnswer).toBe("Hello");
+      expect(output.text).toBe("Hello");
+    });
+
+    it("streams a failed attempt's text live, then takes it back before the retry", async () => {
       script([
         { partial: "Hello ", error: new RetryableJobError("overloaded", new Date(Date.now())) },
         { text: "Hello world", usage: usage(10, 0, 2) },
       ]);
       const task = new AgentTask();
-      let streamed = "";
-      task.subscribe("stream_chunk", (event) => {
-        if (event.type === "text-delta") streamed += event.textDelta;
-      });
+      const events = listenText(task);
       const output = await task.run(
         { model: MODEL, prompt: "?", tools: [], approval: "never" },
         { registry }
@@ -539,7 +592,69 @@ describe("AgentTask turn controls", () => {
       expect(output.steps[0]!.attempts).toBe(2);
       expect(output.text).toBe("Hello world");
       expect(output.steps[0]!.text).toBe("Hello world");
-      expect(streamed).toBe(output.text);
+      // The partial reached the wire as it was written, and exactly it was retracted.
+      expect(events).toEqual([{ delta: "Hello " }, { retract: 6 }, { delta: "Hello world" }]);
+      expect(foldText(events)).toBe(output.text);
+    });
+
+    it("retracts only the failed attempt's tail, leaving earlier rounds' text", async () => {
+      script([
+        { text: "Checking. ", calls: [{ id: "c1", name: "echo", input: { text: "hi" } }] },
+        { partial: "Oops", error: new RetryableJobError("overloaded", new Date(Date.now())) },
+        { text: "Done." },
+      ]);
+      const task = new AgentTask();
+      const events = listenText(task);
+      const output = await task.run(
+        { model: MODEL, prompt: "?", tools: [ECHO], approval: "never" },
+        { registry }
+      );
+      expect(output.steps.map((step) => step.attempts)).toEqual([1, 2]);
+      expect(output.text).toBe("Checking. Done.");
+      expect(events).toEqual([
+        { delta: "Checking. " },
+        { delta: "Oops" },
+        { retract: 4 },
+        { delta: "Done." },
+      ]);
+      expect(foldText(events)).toBe(output.text);
+    });
+
+    it("takes back a timed-out attempt's text before the retry", async () => {
+      script([{ partial: "Hel", hang: true }, { text: "Hello" }]);
+      const task = new AgentTask();
+      const events = listenText(task);
+      const output = await task.run(
+        { model: MODEL, prompt: "?", tools: [], roundTimeoutMs: 50, approval: "never" },
+        { registry }
+      );
+      expect(output.text).toBe("Hello");
+      expect(events).toEqual([{ delta: "Hel" }, { retract: 3 }, { delta: "Hello" }]);
+    });
+
+    it("takes back a failed attempt's text when the turn ends on it", async () => {
+      // The retry wait would pass the deadline, so the turn ends "budget" instead.
+      script([
+        { partial: "Half", error: new RetryableJobError("x", new Date(Date.now() + 30_000)) },
+      ]);
+      const budget = new AgentTask();
+      const budgetEvents = listenText(budget);
+      const output = await budget.run(
+        { model: MODEL, prompt: "?", tools: [], maxDurationMs: 5_000, approval: "never" },
+        { registry }
+      );
+      expect(output.stopReason).toBe("budget");
+      expect(output.text).toBe("");
+      expect(budgetEvents).toEqual([{ delta: "Half" }, { retract: 4 }]);
+
+      getAiProviderRegistry().unregisterProvider(PROVIDER);
+      script([{ partial: "Half", error: new PermanentJobError("401 bad key") }]);
+      const failed = new AgentTask();
+      const failedEvents = listenText(failed);
+      await expect(
+        failed.run({ model: MODEL, prompt: "?", tools: [], approval: "never" }, { registry })
+      ).rejects.toThrow(/401/);
+      expect(failedEvents).toEqual([{ delta: "Half" }, { retract: 4 }]);
     });
 
     it("fails at once on a permanent failure, or when retries are off", async () => {

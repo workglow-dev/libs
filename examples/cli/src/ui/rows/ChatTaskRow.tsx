@@ -83,7 +83,8 @@ export function ChatTaskRow({ task, line }: TaskRowProps): React.ReactElement {
     () => messagesFromTask(task)
   );
   // `streamed` is the in-progress assistant text (and thinking, kept apart by
-  // port) for the *current* turn. Appends on every text-delta; resets whenever
+  // port) for the *current* turn. Appends on every text-delta, drops the tail a
+  // text-retract takes back (a failed attempt's partial); resets whenever
   // history grows (meaning the previous turn's assistant message just landed,
   // or a new user turn has started), and on stream_end.
   const [streamed, setStreamed] = useState<StreamedText>(EMPTY_STREAMED_TEXT);
@@ -91,7 +92,7 @@ export function ChatTaskRow({ task, line }: TaskRowProps): React.ReactElement {
 
   useEffect(() => {
     const onChunk = (event: StreamEvent): void => {
-      if (event.type === "text-delta") {
+      if (event.type === "text-delta" || event.type === "text-retract") {
         setStreamed((prev) => foldTextDelta(prev, event));
       } else if (event.type === "object-delta" && event.port === "messages") {
         // Each object-delta marks a turn boundary — clear the per-turn

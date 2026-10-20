@@ -202,14 +202,24 @@ async function runTurn(
     // here it would read as part of the answer.
     if (event.type === "text-delta" && (event.port ?? "text") === "text") {
       transcript.delta(event.textDelta);
+    } else if (
+      event.type === "text-retract" &&
+      (event.port ?? "text") === "text" &&
+      event.length > 0
+    ) {
+      // An attempt that failed partway takes its text back. What it printed is
+      // already in the scrollback and cannot be erased, so say it no longer
+      // counts; the retry's reply follows on a line of its own.
+      transcript.note("  · that attempt failed; the partial reply above is discarded");
     }
   });
   const offProgress = task.subscribe("progress", (_progress, message) => {
-    // Only the tool lines are worth a row: "Thinking" is what the blank space
-    // between the prompt and the first token already says.
+    // Only the tool and retry lines are worth a row: "Thinking" is what the
+    // blank space between the prompt and the first token already says.
     if (!message || message === phase) return;
     phase = message;
     if (message.startsWith("Running ")) transcript.note(`  · ${message.slice("Running ".length)}`);
+    else if (message.startsWith("Retrying ")) transcript.note(`  · ${message.toLowerCase()}`);
   });
 
   try {

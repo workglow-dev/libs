@@ -119,6 +119,17 @@ export function TaskNode(props: NodeProps<Node<TaskNodeData, string>>) {
             streamingTextRef.current += event.textDelta;
             setStreamingText(streamingTextRef.current);
           }
+        } else if (event.type === "text-retract") {
+          // A failed attempt takes back what it streamed, from the same port.
+          const keep = (text: string): string =>
+            text.slice(0, Math.max(0, text.length - event.length));
+          if (event.port === "reasoning") {
+            reasoningTextRef.current = keep(reasoningTextRef.current);
+            setReasoningText(reasoningTextRef.current);
+          } else {
+            streamingTextRef.current = keep(streamingTextRef.current);
+            setStreamingText(streamingTextRef.current);
+          }
         } else if (event.type === "snapshot") {
           const text = typeof event.data === "string" ? event.data : JSON.stringify(event.data);
           streamingTextRef.current = text;

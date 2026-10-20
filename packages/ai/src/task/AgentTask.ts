@@ -1059,10 +1059,10 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       context.own(turn);
       abandon = () => turn.abort();
       off = turn.subscribe("stream_chunk", (event: StreamEvent) => {
-        if (event.type !== "text-delta") return;
+        if (event.type !== "text-delta" && event.type !== "text-retract") return;
         const port = event.port ?? "text";
         if (port !== "text" && port !== "reasoning") return;
-        queue.push({ type: "text-delta", port, textDelta: event.textDelta });
+        queue.push({ ...event, port });
       });
       runRound = () => turn.run(roundInput);
     }
@@ -1091,25 +1091,58 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     // unhandled; it is re-thrown below, once the events already produced have
     // reached the caller.
     run.catch(() => {});
-    // Held until the attempt settles: the stream accumulates every delta it is
-    // handed into the task's text and reasoning ports and offers no way to take
-    // one back, so either forwarded from an attempt that then fails and is
-    // retried would be joined to the retry's. A failed attempt throws here and
-    // its text and reasoning are dropped together.
-    const held: StreamEvent<AgentTaskOutput>[] = [];
-    for await (const event of queue.iterable) held.push(event);
-    await run;
-    let separated = !reasonedBefore;
-    for (const event of held) {
-      // Rounds are told apart on the wire exactly as in the settled output, and
-      // only once this round has something to say: a separator ahead of nothing
-      // would leave the streamed reasoning ending differently than the final one.
-      if (!separated && event.type === "text-delta" && event.port === "reasoning") {
-        if (event.textDelta.length === 0) continue;
-        yield { type: "text-delta", port: "reasoning", textDelta: REASONING_ROUND_SEPARATOR };
-        separated = true;
+    // Forwarded as they arrive, so a host sees the reply as it is written. What
+    // this attempt forwarded is counted per port, because the stream folds
+    // every delta into the task's text and reasoning ports: an attempt that
+    // fails takes exactly that much back with a `text-retract`, and a retry or
+    // the next round appends after the earlier rounds as if it never ran.
+    let textSent = 0;
+    let reasoningSent = 0;
+    // Rounds are told apart on the wire exactly as in the settled output, and
+    // only once this round has something to say: a separator ahead of nothing
+    // would leave the streamed reasoning ending differently than the final one.
+    let separatorSent = false;
+    try {
+      for await (const event of queue.iterable) {
+        if (event.type === "text-retract") {
+          if (event.port === "text") {
+            const length = Math.min(Math.max(0, event.length), textSent);
+            textSent -= length;
+            if (length > 0) yield { type: "text-retract", port: "text", length };
+          } else {
+            let length = Math.min(Math.max(0, event.length), reasoningSent);
+            reasoningSent -= length;
+            // Everything this round reasoned was taken back, so the separator
+            // ahead of it goes too.
+            if (reasoningSent === 0 && separatorSent) {
+              length += REASONING_ROUND_SEPARATOR.length;
+              separatorSent = false;
+            }
+            if (length > 0) yield { type: "text-retract", port: "reasoning", length };
+          }
+          continue;
+        }
+        if (event.type !== "text-delta" || event.textDelta.length === 0) continue;
+        if (event.port === "text") {
+          textSent += event.textDelta.length;
+        } else {
+          if (reasonedBefore && !separatorSent) {
+            yield { type: "text-delta", port: "reasoning", textDelta: REASONING_ROUND_SEPARATOR };
+            separatorSent = true;
+          }
+          reasoningSent += event.textDelta.length;
+        }
+        yield event;
       }
-      yield event;
+      await run;
+    } catch (err) {
+      if (textSent > 0) yield { type: "text-retract", port: "text", length: textSent };
+      const reasoningLength =
+        reasoningSent + (separatorSent ? REASONING_ROUND_SEPARATOR.length : 0);
+      if (reasoningLength > 0) {
+        yield { type: "text-retract", port: "reasoning", length: reasoningLength };
+      }
+      throw err;
     }
   }
 

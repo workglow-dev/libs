@@ -15,8 +15,9 @@ export interface AgentRoundContext {
   readonly onTextDelta: (delta: string) => void;
   /**
    * The round's reasoning as it streams, re-emitted as the turn's own on its
-   * `reasoning` port. Held with the round's text until the attempt settles, so
-   * a round that fails and is retried contributes neither.
+   * `reasoning` port. Forwarded live like the round's text, and both are taken
+   * back with a `text-retract` if the attempt fails, so a round that is retried
+   * contributes only its retry's.
    */
   readonly onReasoningDelta: (delta: string) => void;
   /**

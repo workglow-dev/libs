@@ -11,7 +11,7 @@ import type {
   StreamEvent,
   TaskConfig,
 } from "@workglow/task-graph";
-import { CreateWorkflow, Workflow } from "@workglow/task-graph";
+import { CreateWorkflow, retractText, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema } from "@workglow/util/schema";
 import type { Capability } from "../capability/Capabilities";
 import type { AiJobInput } from "../job/AiJob";
@@ -282,6 +282,8 @@ export class TextGenerationTask extends StreamingAiTask<
       for await (const event of super.executeStream(input, context)) {
         if (event.type === "text-delta" && (event.port ?? "text") === "text") {
           text += event.textDelta;
+        } else if (event.type === "text-retract" && (event.port ?? "text") === "text") {
+          text = retractText(text, event.length);
         }
         if (event.type === "finish") {
           await this.finalizeCheckpoint(input, text);

@@ -229,6 +229,18 @@ export function reduceRunEvent(
       if (!row) return state;
       return withRow(state, event.id, { reasoningText: row.reasoningText + event.delta });
     }
+    case "retract": {
+      const row = state.rows.get(event.id);
+      if (!row) return state;
+      const held = event.port === "text" ? row.streamText : row.reasoningText;
+      const kept = held.slice(0, Math.max(0, held.length - event.length));
+      if (kept === held) return state;
+      return withRow(
+        state,
+        event.id,
+        event.port === "text" ? { streamText: kept } : { reasoningText: kept }
+      );
+    }
     case "messages":
       return withRow(state, event.id, { messages: event.messages });
     case "usage":

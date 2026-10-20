@@ -348,11 +348,15 @@ All streaming data flows through the `StreamEvent` discriminated union type:
 ```typescript
 type StreamEvent<Output = Record<string, any>> =
   | StreamTextDelta
+  | StreamTextRetract
   | StreamObjectDelta
   | StreamSnapshot<Output>
   | StreamFinish<Output>
   | StreamError;
 ```
+
+(Abridged: the union also carries `binary-delta`, `refusal`, `usage`, `phase` and `tool-call`
+events; see `StreamTypes.ts`.)
 
 ### StreamTextDelta
 
@@ -365,6 +369,28 @@ interface StreamTextDelta {
 ```
 
 Used with `x-stream: "append"`. Each event carries a fragment of text that should be appended to the accumulated result for the named port.
+
+### StreamTextRetract
+
+```typescript
+interface StreamTextRetract {
+  type: "text-retract";
+  port: string; // Output port name
+  length: number; // UTF-16 code units to take back
+}
+```
+
+Append mode only. Removes the last `length` characters streamed on `port` in this run, clamped at
+the start; later `text-delta`s append after what remains. Every consumer folding a port's text
+truncates (`retractText(acc, length)`, or `acc.slice(0, Math.max(0, acc.length - length))`). A
+producer that streams text it may yet abandon uses it: `AgentTask` forwards each round live and,
+when an attempt fails and is retried, takes back exactly what that attempt sent, so the folded port
+reads as if the attempt never ran. Dataflow edges carrying the port carry the retraction too.
+
+A port whose text was already teed to a cache sink cannot be truncated there: the processor fails
+that port's sink (discarding the partial write) and settles the port inline from the accumulator
+for the rest of the run. With no accumulator either, the run fails at `finish` unless the finish
+payload states the port's value itself.
 
 ### StreamObjectDelta
 
@@ -450,6 +476,11 @@ text-delta:
   - Accumulate text per-port (if shouldAccumulate)
   - Emit "stream_chunk" on the task
   - Update progress (asymptotic curve: 1 - e^(-0.05*chunkCount))
+
+text-retract:
+  - Truncate the port's accumulated text (if shouldAccumulate)
+  - Fail that port's cache sink, if one was teed (see StreamTextRetract)
+  - Emit "stream_chunk" on the task
 
 object-delta:
   - Accumulate per-port (if shouldAccumulate)

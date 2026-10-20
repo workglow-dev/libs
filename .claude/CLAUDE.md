@@ -244,8 +244,9 @@ put to a person still runs one at a time, and results return in the order asked)
 `maxRoundRetries` (default 2, for a `RetryableJobError`, waiting as the provider's
 retry-after says within 1–60 s), `roundTimeoutMs` (a provider can accept a request and never answer;
 past it the round is abandoned as a retryable failure, so the retries cover it; a round's text and
-reasoning are forwarded only once the attempt settles, since a failed attempt's partial cannot be
-taken back from the accumulated port; reasoning goes out on the turn's own `reasoning` port, a
+reasoning are forwarded live, and an attempt that fails takes back exactly what it forwarded with a
+`text-retract` per port, so the folded ports read as if it never ran and earlier rounds are untouched;
+reasoning goes out on the turn's own `reasoning` port, a
 blank line between rounds, and is absent from the output when no round returned any), and
 budgets — `maxInputTokens`, `maxCostUsd` (refused without a price card,
 since a budget it cannot measure never stops anything, and failing closed for a round that reports no usage: it cannot be priced, so the turn ends `"budget"` after it),

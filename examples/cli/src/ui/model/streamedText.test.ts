@@ -48,6 +48,34 @@ describe("foldTextDelta", () => {
   });
 });
 
+describe("foldTextDelta on a text-retract", () => {
+  it("takes back the tail of its own port, so the retry appends after what remains", () => {
+    const out = fold([
+      { type: "text-delta", port: "reasoning", textDelta: "Thinking" },
+      { type: "text-delta", port: "text", textDelta: "First. " },
+      { type: "text-delta", port: "text", textDelta: "Oops" },
+      { type: "text-retract", port: "text", length: 4 },
+      { type: "text-delta", port: "text", textDelta: "Second." },
+    ]);
+    expect(out).toEqual({ text: "First. Second.", reasoning: "Thinking" });
+  });
+
+  it("retracts reasoning on its own port, and clamps at the start", () => {
+    const out = fold([
+      { type: "text-delta", port: "reasoning", textDelta: "abc" },
+      { type: "text-delta", port: "text", textDelta: "kept" },
+      { type: "text-retract", port: "reasoning", length: 10 },
+    ]);
+    expect(out).toEqual({ text: "kept", reasoning: "" });
+  });
+
+  it("returns the same object when there is nothing to take back", () => {
+    const prev: StreamedText = { text: "a", reasoning: "" };
+    expect(foldTextDelta(prev, { type: "text-retract", port: "text", length: 0 })).toBe(prev);
+    expect(foldTextDelta(prev, { type: "text-retract", port: "reasoning", length: 3 })).toBe(prev);
+  });
+});
+
 describe("visibleReasoning", () => {
   it("shows thinking until the answer starts", () => {
     expect(visibleReasoning({ text: "", reasoning: "hmm" })).toBe("hmm");

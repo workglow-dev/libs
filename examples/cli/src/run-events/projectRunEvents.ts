@@ -5,7 +5,7 @@
  */
 
 import type { ITask, StreamEvent, TaskGraph, TaskIdType, Usage } from "@workglow/task-graph";
-import { classifyTextDelta } from "../ui/model/streamedText";
+import { classifyTextDelta, classifyTextRetract } from "../ui/model/streamedText";
 import { cliTaskLabel } from "../ui/taskGraphCliSubscriptions";
 import { projectTaskSubtree } from "./projectSubtrees";
 import type { RunEventSink } from "./runEventChannel";
@@ -128,6 +128,16 @@ export function projectRunEvents(
           k: classified.port === "text" ? "text" : "reasoning",
           id: String(taskId),
           delta: classified.delta,
+        });
+      }
+    } else if (event.type === "text-retract") {
+      const classified = classifyTextRetract(event);
+      if (classified) {
+        sink.emit({
+          k: "retract",
+          id: String(taskId),
+          port: classified.port,
+          length: classified.length,
         });
       }
     } else if (event.type === "object-delta" && (event as { port?: string }).port === "messages") {

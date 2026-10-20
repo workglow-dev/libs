@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Task, Workflow, type IExecuteContext } from "@workglow/task-graph";
+import { Task, Workflow, type IExecuteContext, type StreamEvent } from "@workglow/task-graph";
 import type { DataPortSchema } from "@workglow/util/schema";
 import { describe, expect, it } from "vitest";
 import type { RunEvent } from "./RunEventTypes";
@@ -94,7 +94,41 @@ class ThinkingTask extends Task<Record<string, never>, { text: string; reasoning
   }
 }
 
+/** Streams a partial, takes it back, then streams the reply, as a retried `AgentTask` round does. */
+class RetractingTask extends Task<Record<string, never>, { text: string; reasoning: string }> {
+  static override readonly type = "RetractingTask";
+  static override readonly title = "Retracting task";
+  static override readonly category = "Test";
+  static override readonly cacheable = false;
+  static override inputSchema(): DataPortSchema {
+    return EMPTY;
+  }
+  static override outputSchema(): DataPortSchema {
+    return STREAMED_PORTS;
+  }
+  async *executeStream(): AsyncIterable<StreamEvent<{ text: string; reasoning: string }>> {
+    yield { type: "text-delta" as const, port: "text", textDelta: "Oops" };
+    yield { type: "text-retract" as const, port: "text", length: 4 };
+    yield { type: "text-delta" as const, port: "text", textDelta: "Hello." };
+    yield { type: "finish" as const, data: {} as { text: string; reasoning: string } };
+  }
+}
+
 describe("projectRunEvents streamed text", () => {
+  it("reports a retraction as its own kind, naming the port", async () => {
+    const { events, sink } = collector();
+    const workflow = new Workflow();
+    workflow.pipe(new RetractingTask() as never);
+    const stop = projectRunEvents(workflow.graph, sink);
+    await workflow.run({});
+    stop();
+
+    const text = events.flatMap((e) =>
+      e.k === "text" ? [e.delta] : e.k === "retract" ? [`-${e.port}:${e.length}`] : []
+    );
+    expect(text).toEqual(["Oops", "-text:4", "Hello."]);
+  });
+
   it("reports a task's text and reasoning as separate kinds", async () => {
     const { events, sink } = collector();
     const workflow = new Workflow();

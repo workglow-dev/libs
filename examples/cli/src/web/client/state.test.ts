@@ -72,6 +72,19 @@ describe("reduceRunEvent", () => {
     expect(state.rows.get("t1")!.streamText).toBe("Hello");
   });
 
+  it("takes back the tail a retraction names, on its own port", () => {
+    const state = apply([
+      added("t1"),
+      { k: "reasoning", id: "t1", delta: "Hmm" },
+      { k: "text", id: "t1", delta: "First. Oops" },
+      { k: "retract", id: "t1", port: "text", length: 4 },
+      { k: "text", id: "t1", delta: "Second." },
+      { k: "retract", id: "t1", port: "reasoning", length: 99 },
+    ]);
+    expect(state.rows.get("t1")!.streamText).toBe("First. Second.");
+    expect(state.rows.get("t1")!.reasoningText).toBe("");
+  });
+
   it("drops a row the run released", () => {
     const state = apply([added("t1"), { k: "task_removed", id: "t1" }]);
     expect(state.rows.has("t1")).toBe(false);

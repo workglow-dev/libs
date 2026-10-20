@@ -167,6 +167,12 @@ async function runEval(kind: EvalKind, flags: RunFlags, stores: EvalStores): Pro
   const onStreamChunk: ((event: StreamEvent) => void) | undefined = flags.stream
     ? (event) => {
         if (event.type === "text-delta") process.stderr.write(event.textDelta);
+        else if (event.type === "text-retract" && event.length > 0) {
+          // Already written, so it cannot be erased: say it no longer counts.
+          process.stderr.write(
+            `\n[attempt failed; the last ${event.length} characters are withdrawn]\n`
+          );
+        }
       }
     : undefined;
   // Through `withCli`, the seam that decides what a run does with itself. It

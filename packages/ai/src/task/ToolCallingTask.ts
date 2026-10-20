@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { CreateWorkflow, getTaskConstructors, Workflow } from "@workglow/task-graph";
+import { CreateWorkflow, getTaskConstructors, retractText, Workflow } from "@workglow/task-graph";
 
 import type {
   CachePolicy,
@@ -615,6 +615,10 @@ export class ToolCallingTask extends StreamingAiTask<
           text += event.textDelta;
         } else if (event.type === "text-delta" && event.port === "reasoning") {
           reasoning += event.textDelta;
+        } else if (event.type === "text-retract" && (event.port ?? "text") === "text") {
+          text = retractText(text, event.length);
+        } else if (event.type === "text-retract" && event.port === "reasoning") {
+          reasoning = retractText(reasoning, event.length);
         } else if (event.type === "object-delta" && event.port === "nativeTurn") {
           nativeTurn = event.objectDelta as unknown as ToolCallingTaskOutput["nativeTurn"];
         } else if (event.type === "object-delta" && event.port === "toolCalls") {
