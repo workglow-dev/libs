@@ -46,7 +46,12 @@ describe("Hugging Face Inference effort", () => {
   });
 });
 
-describe("Hugging Face Inference text generation effort", () => {
+/** Capabilities whose run-fn asks the model for text, and so takes the effort dial. */
+const GENERATIVE = new Set(["text.generation", "text.rewriter", "text.summary"]);
+
+const generative = _testOnly.HFI_RUN_FNS.filter((r) => r.serves.some((c) => GENERATIVE.has(c)));
+
+describe("Hugging Face Inference effort reaches every generative run-fn", () => {
   let sent: Record<string, unknown>[] = [];
   class CapturingClient {
     chatCompletionStream(params: Record<string, unknown>) {
@@ -66,16 +71,31 @@ describe("Hugging Face Inference text generation effort", () => {
     _testOnly._setHfInferenceSDKForTesting(undefined);
   });
 
-  it("sends the model's effort on a plain text-generation request", async () => {
-    const runFn = _testOnly.HFI_RUN_FNS.find(
-      (r) => [...r.serves].sort().join(",") === "text.generation"
-    )!.runFn;
-    const withKey = (effort?: string) => ({
-      ...model(effort),
-      provider_config: { model_name: "openai/gpt-oss-120b", api_key: "k" },
-    });
-    await runFn({ prompt: "hi" } as any, withKey("high"), new AbortController().signal, () => {});
-    await runFn({ prompt: "hi" } as any, withKey(), new AbortController().signal, () => {});
-    expect(sent.map((params) => params.reasoning_effort)).toEqual(["high", undefined]);
+  const withKey = (effort?: string) => ({
+    ...model(effort),
+    provider_config: { model_name: "openai/gpt-oss-120b", api_key: "k" },
   });
+
+  it("covers every generative registration", () => {
+    expect(generative.map((r) => [...r.serves].sort().join(",")).sort()).toEqual(
+      expect.arrayContaining([
+        "text.generation",
+        "text.generation,tool-use",
+        "text.rewriter",
+        "text.summary",
+      ])
+    );
+  });
+
+  it.each(generative.map((r) => [[...r.serves].join(","), r.runFn] as const))(
+    "%s sends reasoning_effort for a set effort and nothing when unset",
+    async (_serves, runFn) => {
+      const input = { prompt: "hi", text: "some text", tools: [] } as any;
+      const signal = new AbortController().signal;
+      await runFn(input, withKey("high"), signal, () => {}, undefined, undefined);
+      await runFn(input, withKey(), signal, () => {}, undefined, undefined);
+      expect(sent.map((params) => params.reasoning_effort)).toEqual(["high", undefined]);
+      expect("reasoning_effort" in sent[1]!).toBe(false);
+    }
+  );
 });
