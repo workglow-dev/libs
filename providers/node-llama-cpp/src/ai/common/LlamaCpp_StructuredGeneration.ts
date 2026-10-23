@@ -11,6 +11,7 @@ import type {
 } from "@workglow/ai";
 import { createEstimatedOutputUsageReporter } from "@workglow/ai/provider-utils";
 import { createPartialJsonStream } from "@workglow/util/worker";
+import { llamaCppThoughtBudgetOption } from "./LlamaCpp_EffortPolicy";
 import type { LlamaCppModelConfig } from "./LlamaCpp_ModelSchema";
 import {
   createDisposableTextContext,
@@ -80,6 +81,7 @@ export const LlamaCpp_StructuredGeneration_Stream: AiProviderRunFn<
               },
               ...(input.temperature !== undefined && { temperature: input.temperature }),
               ...(input.maxTokens !== undefined && { maxTokens: input.maxTokens }),
+              ...llamaCppThoughtBudgetOption(model),
             })
             .then(() => {
               isComplete = true;
