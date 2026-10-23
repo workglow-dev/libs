@@ -109,7 +109,7 @@ export const Anthropic_TextGeneration_Stream: AiProviderRunFn<
     // This run-fn rebuilds the caller's own history (it emits no native turn
     // to replay), but a checkpoint prefix replays its signed thinking. A
     // request that runs without thinking cannot carry those blocks.
-    omitThinkingUnlessReplayAllowed(params);
+    omitThinkingUnlessReplayAllowed(params, model);
 
     /** Whether anything has reached the consumer, since a retry after output would repeat it. */
     let emitted = false;

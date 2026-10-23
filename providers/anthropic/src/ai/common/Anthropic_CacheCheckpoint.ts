@@ -99,11 +99,11 @@ export function buildAnthropicCheckpointParams(
     prefix.messages && prefix.messages.length > 0
       ? buildAnthropicMessages(prefix.messages, "", `anthropic:${modelName}`)
       : [];
-  // A warm-up that runs without thinking cannot carry signed thinking blocks,
-  // so they go rather than fail it — the same rule a consuming call applies,
-  // which keeps the cached prefix the one that call sends. Without a model the
-  // thinking fields are unknown and the replay is preserved.
-  if (model !== undefined && messages.length > 0 && !requestAllowsThinkingReplay(params)) {
+  // A warm-up known to run without thinking cannot carry signed thinking
+  // blocks, so they go rather than fail it — the same rule a consuming call
+  // applies, which keeps the cached prefix the one that call sends. Without a
+  // model nothing is known and the replay is preserved.
+  if (messages.length > 0 && !requestAllowsThinkingReplay(params, model)) {
     messages = withoutThinking(messages) ?? messages;
   }
   if (messages.length > 0) {

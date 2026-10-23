@@ -151,7 +151,7 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
   // legacy extended thinking, or before the setting changed), and the
   // checkpoint prefix may too. Sending them is a 400 the signature retry below
   // does not handle, so they go before the request.
-  omitThinkingUnlessReplayAllowed(params);
+  omitThinkingUnlessReplayAllowed(params, model);
 
   /** Whether anything has reached the consumer, since a retry after output would repeat it. */
   let emitted = false;
