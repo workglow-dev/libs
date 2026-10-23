@@ -51,6 +51,11 @@ import {
 } from "./common/WebBrowser_ModelProfiles";
 import { WebBrowser_StructuredGeneration } from "./common/WebBrowser_StructuredGeneration";
 import { WebBrowser_ToolCalling } from "./common/WebBrowser_ToolCalling";
+import {
+  chromeCallUsage,
+  initialPromptTexts,
+  measurePromptTokens,
+} from "./common/WebBrowser_Usage";
 import { WebBrowserProvider } from "./WebBrowserProvider";
 
 /**
@@ -89,6 +94,11 @@ export const _testOnly = {
   probe: {
     probeWebBrowserCapabilities,
     _resetProbeCache,
+  },
+  usage: {
+    measurePromptTokens,
+    chromeCallUsage,
+    initialPromptTexts,
   },
   // idle-evict session store (model-level lifecycle, used by ModelDispose)
   WEB_BROWSER_SESSION_IDLE_MS,
