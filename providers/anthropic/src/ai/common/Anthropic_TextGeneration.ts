@@ -18,10 +18,14 @@ import {
 } from "./Anthropic_CacheCheckpoint";
 import { getClient, getMaxTokens, getModelName } from "./Anthropic_Client";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
+import {
+  buildAnthropicMessages,
+  omitThinkingUnlessReplayAllowed,
+  sendWithThinkingRetry,
+} from "./Anthropic_NativeTurn";
 import { maybeEmitAnthropicRefusal } from "./Anthropic_Refusal";
 import { applyAnthropicSamplingParams } from "./Anthropic_RequestParams";
 import { applyAnthropicThinkingParams } from "./Anthropic_Thinking";
-import { buildAnthropicMessages } from "./Anthropic_ToolCalling";
 import { createAnthropicUsageCollector } from "./Anthropic_Usage";
 
 /**
@@ -102,30 +106,48 @@ export const Anthropic_TextGeneration_Stream: AiProviderRunFn<
       }
     }
 
-    const stream = (client.messages.stream as (p: unknown, o: unknown) => AsyncIterable<unknown>)(
-      params,
-      { signal }
-    );
+    // This run-fn rebuilds the caller's own history (it emits no native turn
+    // to replay), but a checkpoint prefix replays its signed thinking. A
+    // request that runs without thinking cannot carry those blocks.
+    omitThinkingUnlessReplayAllowed(params);
 
-    const usageCollector = createAnthropicUsageCollector();
-    const snapshotUsage = createUsageSnapshotEmitter(emit);
-    for await (const event of stream) {
-      usageCollector.observe(event);
-      snapshotUsage(usageCollector.result());
-      const e = event as {
-        type: string;
-        delta?: { type?: string; text?: string };
-      };
-      if (e.type === "content_block_delta" && e.delta?.type === "text_delta") {
-        emit({ type: "text-delta", port: "text", textDelta: e.delta.text ?? "" });
+    /** Whether anything has reached the consumer, since a retry after output would repeat it. */
+    let emitted = false;
+    const emitTracked: typeof emit = (event) => {
+      emitted = true;
+      emit(event);
+    };
+
+    const consume = async (requestParams: Record<string, unknown>): Promise<void> => {
+      const stream = (client.messages.stream as (p: unknown, o: unknown) => AsyncIterable<unknown>)(
+        requestParams,
+        { signal }
+      );
+
+      const usageCollector = createAnthropicUsageCollector();
+      const snapshotUsage = createUsageSnapshotEmitter(emitTracked);
+      for await (const event of stream) {
+        usageCollector.observe(event);
+        snapshotUsage(usageCollector.result());
+        const e = event as {
+          type: string;
+          delta?: { type?: string; text?: string };
+        };
+        if (e.type === "content_block_delta" && e.delta?.type === "text_delta") {
+          emitTracked({ type: "text-delta", port: "text", textDelta: e.delta.text ?? "" });
+        }
+        maybeEmitAnthropicRefusal(event, emitTracked);
       }
-      maybeEmitAnthropicRefusal(event, emit);
-    }
-    emit({
-      type: "finish",
-      data: {} as TextGenerationTaskOutput,
-      usage: usageCollector.result(),
-    });
+      emitTracked({
+        type: "finish",
+        data: {} as TextGenerationTaskOutput,
+        usage: usageCollector.result(),
+      });
+    };
+
+    // A replayed prefix thinking block whose signature no longer matches is a
+    // 400 decided before any output; it is sent once more without thinking.
+    await sendWithThinkingRetry(params, consume, () => emitted, modelName);
   } finally {
     logger.timeEnd(timerLabel, { model: getModelName(model) });
   }

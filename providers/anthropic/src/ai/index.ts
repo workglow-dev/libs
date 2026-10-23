@@ -19,6 +19,11 @@ import { ANTHROPIC_RUN_FN_SPECS } from "./common/Anthropic_Capabilities";
 import { _testOnly as clientTestOnly } from "./common/Anthropic_Client";
 import { ANTHROPIC_RUN_FNS } from "./common/Anthropic_JobRunFns";
 import {
+  isThinkingSignatureError,
+  requestAllowsThinkingReplay,
+  THINKING_SIGNATURE_ERROR_TEXT,
+} from "./common/Anthropic_NativeTurn";
+import {
   anthropicSupportsOutputFormat,
   resolveAnthropicOutputFormatSupport,
   toAnthropicOutputSchema,
@@ -58,4 +63,7 @@ export const _testOnly = {
   setAnthropicClientForTests: clientTestOnly.setAnthropicClientForTests,
   createAnthropicUsageCollector,
   mapAnthropicUsage,
+  requestAllowsThinkingReplay,
+  isThinkingSignatureError,
+  THINKING_SIGNATURE_ERROR_TEXT,
 } as const;
