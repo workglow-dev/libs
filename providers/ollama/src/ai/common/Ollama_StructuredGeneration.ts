@@ -12,6 +12,7 @@ import type {
 } from "@workglow/ai";
 import { createEstimatedOutputUsageReporter } from "@workglow/ai/provider-utils";
 import { createPartialJsonStream } from "@workglow/util/worker";
+import { ollamaThinkParam } from "./Ollama_EffortPolicy";
 import type { OllamaModelConfig } from "./Ollama_ModelSchema";
 import { getOllamaModelName } from "./Ollama_ModelUtil";
 import { mapOllamaUsage } from "./Ollama_Usage";
@@ -52,6 +53,9 @@ export function createOllamaStructuredGenerationStream(
       model: modelName,
       messages: [{ role: "user", content: input.prompt }],
       format: schema,
+      // With `think` set, Ollama returns the thinking on `message.thinking`,
+      // apart from the `content` parsed below, so it never reaches the object.
+      ...ollamaThinkParam(model),
       options: {
         temperature: input.temperature,
         num_predict: input.maxTokens,
