@@ -31,9 +31,10 @@ export const Anthropic_TextRewriter_Stream: AiProviderRunFn<
   // stays out of the text.
   applyAnthropicThinkingParams(params, model);
 
-  const stream = (
-    client.messages.stream as (p: unknown, o: unknown) => ReturnType<typeof client.messages.stream>
-  )(params, { signal });
+  const stream = (client.messages.stream as (p: unknown, o: unknown) => AsyncIterable<unknown>)(
+    params,
+    { signal }
+  );
 
   const usageCollector = createAnthropicUsageCollector();
   const snapshotUsage = createUsageSnapshotEmitter(emit);
@@ -41,8 +42,9 @@ export const Anthropic_TextRewriter_Stream: AiProviderRunFn<
     usageCollector.observe(event);
     snapshotUsage(usageCollector.result());
     maybeEmitAnthropicRefusal(event, emit);
-    if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-      emit({ type: "text-delta", port: "text", textDelta: event.delta.text });
+    const e = event as { type: string; delta?: { type?: string; text?: string } };
+    if (e.type === "content_block_delta" && e.delta?.type === "text_delta") {
+      emit({ type: "text-delta", port: "text", textDelta: e.delta.text ?? "" });
     }
   }
   emit({ type: "finish", data: {} as TextRewriterTaskOutput, usage: usageCollector.result() });
