@@ -127,6 +127,35 @@ export function buildAnthropicThinkingParams(
 }
 
 /**
+ * Legacy `thinking.type = "enabled"` cannot be combined with a forced tool
+ * choice. `{type:"auto"}` is not forced, and the adaptive path is unaffected.
+ * Testing the built result rather than the model version also covers a
+ * native `provider_config.thinking`.
+ */
+function forcedChoiceSuppresses(
+  params: Readonly<Record<string, unknown>>,
+  built: AnthropicThinkingParams
+): boolean {
+  const choice = params.tool_choice as { type?: string } | undefined;
+  const forcedTool = choice?.type === "tool" || choice?.type === "any";
+  return forcedTool && (built.thinking as { type?: string } | undefined)?.type === "enabled";
+}
+
+/**
+ * Whether {@link applyAnthropicThinkingParams} leaves every thinking field off
+ * this request because its forced `tool_choice` cannot carry the legacy
+ * extended thinking the model is configured for — a request that then runs
+ * without thinking.
+ */
+export function anthropicForcedChoiceSuppressesThinking(
+  params: Readonly<Record<string, unknown>>,
+  model: AnthropicModelConfig | undefined
+): boolean {
+  const maxTokens = typeof params.max_tokens === "number" ? params.max_tokens : 0;
+  return forcedChoiceSuppresses(params, buildAnthropicThinkingParams(model, maxTokens));
+}
+
+/**
  * Merges thinking / output_config / padded max_tokens onto an Anthropic request
  * body. Call this after `tool_choice` is on `params` and before sampling params
  * — both of the guards below read what has already been built.
@@ -138,13 +167,8 @@ export function applyAnthropicThinkingParams(
   if (typeof params.max_tokens !== "number") return;
   const built = buildAnthropicThinkingParams(model, params.max_tokens);
 
-  // Legacy `thinking.type = "enabled"` cannot be combined with a forced tool
-  // choice. `{type:"auto"}` is not forced, and the adaptive path is unaffected.
-  // Testing the built result rather than the model version also covers a
-  // native `provider_config.thinking`.
-  const choice = params.tool_choice as { type?: string } | undefined;
-  const forcedTool = choice?.type === "tool" || choice?.type === "any";
-  if (forcedTool && (built.thinking as { type?: string } | undefined)?.type === "enabled") {
+  if (forcedChoiceSuppresses(params, built)) {
+    const choice = params.tool_choice as { type?: string } | undefined;
     getLogger().warn("Anthropic forced tool choice cannot carry extended thinking; skipping it.", {
       model: (model?.provider_config as AnthropicThinkingProviderConfig | undefined)?.model_name,
       tool_choice: choice?.type,

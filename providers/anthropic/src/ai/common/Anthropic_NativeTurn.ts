@@ -6,6 +6,9 @@
 
 import type { ChatMessage } from "@workglow/ai";
 import { getLogger } from "@workglow/util/worker";
+import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
+import { parsedModelName } from "./Anthropic_RequestParams";
+import { anthropicForcedChoiceSuppressesThinking } from "./Anthropic_Thinking";
 
 /**
  * Anthropic rejects empty text blocks and empty content arrays on non-final
@@ -265,19 +268,35 @@ export function withoutThinking(messages: readonly any[]): any[] | undefined {
 
 /**
  * Whether the request, with its thinking fields already applied, may carry
- * signed thinking blocks from earlier turns. A request that runs without
- * thinking cannot take them: Anthropic answers a replayed block with a 400.
+ * signed thinking blocks from earlier turns. Blocks are removed only from a
+ * request known to run without thinking, where Anthropic answers a replayed
+ * block with a 400; when that is uncertain they are sent, since a thinking run
+ * needs the block ahead of a pending `tool_use` and loses its reasoning
+ * without the rest.
  *
- * Thinking is off when `thinking` is explicitly `disabled`, or when it is
- * absent and no `output_config.effort` is set either — which is also what is
- * left when a forced `tool_choice` suppressed legacy extended thinking.
- * Effort alone counts as on, because a Claude 5+ model runs adaptive thinking
- * when `thinking` is omitted and effort is how that run is tuned.
+ * - `thinking` present: replay unless its type is `disabled`.
+ * - `thinking` absent with `output_config.effort` set: replay — a Claude 5+
+ *   model runs adaptive thinking when `thinking` is omitted.
+ * - Both absent: strip only when the request is known to run without thinking:
+ *   the model's id parses as a generation before 5, where omitting `thinking`
+ *   means none, or a forced `tool_choice` suppressed the legacy extended
+ *   thinking the model is configured for. An id that does not parse (an alias,
+ *   a fine-tune) may be a model that thinks by default, and with no model at
+ *   all nothing is known; both replay.
  */
-export function requestAllowsThinkingReplay(params: Readonly<Record<string, unknown>>): boolean {
+export function requestAllowsThinkingReplay(
+  params: Readonly<Record<string, unknown>>,
+  model: AnthropicModelConfig | undefined
+): boolean {
   const thinking = params.thinking as { type?: unknown } | undefined;
   if (thinking !== undefined) return thinking.type !== "disabled";
-  return (params.output_config as { effort?: unknown } | undefined)?.effort !== undefined;
+  if ((params.output_config as { effort?: unknown } | undefined)?.effort !== undefined) {
+    return true;
+  }
+  if (model === undefined) return true;
+  const parsed = parsedModelName(model);
+  if (parsed !== undefined && parsed.major < 5) return false;
+  return !anthropicForcedChoiceSuppressesThinking(params, model);
 }
 
 /**
@@ -286,8 +305,11 @@ export function requestAllowsThinkingReplay(params: Readonly<Record<string, unkn
  * Call it once the messages are final — prefix replay included — so every
  * block the request would send is covered.
  */
-export function omitThinkingUnlessReplayAllowed(params: Record<string, unknown>): void {
-  if (requestAllowsThinkingReplay(params) || !Array.isArray(params.messages)) return;
+export function omitThinkingUnlessReplayAllowed(
+  params: Record<string, unknown>,
+  model: AnthropicModelConfig | undefined
+): void {
+  if (requestAllowsThinkingReplay(params, model) || !Array.isArray(params.messages)) return;
   const stripped = withoutThinking(params.messages);
   if (stripped !== undefined) params.messages = stripped;
 }

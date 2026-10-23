@@ -21,10 +21,20 @@ const {
   THINKING_SIGNATURE_ERROR_TEXT,
 } = _testOnly;
 
-/** A generation-4 id: it accepts a forced tool choice, so the choice is sent as asked. */
+/**
+ * A generation-4 id: omitting `thinking` there means none, and it accepts a
+ * forced tool choice, so the choice is sent as asked.
+ */
 const MODEL_NAME = "claude-haiku-4-5";
 const NATIVE_KEY = `anthropic:${MODEL_NAME}`;
+/**
+ * An id the parser cannot read (an alias, a gateway or fine-tune name): it may
+ * be a model that thinks when `thinking` is omitted. It also takes a forced
+ * tool choice, the route an unreadable id defaults to.
+ */
+const UNPARSED_NAME = "house-model-alias";
 
+type ModelSetting = "pre-5" | "unparsed";
 type ThinkingSetting = "unset" | "disabled" | "enabled" | "adaptive";
 type EffortSetting = "set" | "unset";
 type ChoiceSetting = "auto" | "any" | "tool";
@@ -43,14 +53,23 @@ const CHOICE_INPUT: Record<ChoiceSetting, string | undefined> = {
   tool: "look",
 };
 
-function modelWith(thinking: ThinkingSetting, effort: EffortSetting): never {
+const MODEL_NAMES: Record<ModelSetting, string> = {
+  "pre-5": MODEL_NAME,
+  unparsed: UNPARSED_NAME,
+};
+
+function modelWith(
+  thinking: ThinkingSetting,
+  effort: EffortSetting,
+  name: string = MODEL_NAME
+): never {
   return {
-    model_id: MODEL_NAME,
+    model_id: name,
     title: "",
     description: "",
     provider: ANTHROPIC,
     provider_config: {
-      model_name: MODEL_NAME,
+      model_name: name,
       api_key: "test-key",
       ...(THINKING[thinking] !== undefined ? { thinking: THINKING[thinking] } : {}),
       ...(effort === "set" ? { output_config: { effort: "high" } } : {}),
@@ -121,12 +140,14 @@ function runFnServing(capability: string): AiProviderRunFn {
 }
 
 /**
- * Whether signed thinking may go out, per setting, as Anthropic answers it:
- * explicitly disabled thinking takes none; absent thinking takes them only when
- * effort is set (a Claude 5+ model thinks then); legacy `enabled` is dropped
- * from a forced choice, effort included, so that request runs without thinking.
+ * Whether signed thinking goes out, per setting. Blocks are removed only from
+ * a request known to run without thinking: explicitly disabled thinking;
+ * legacy `enabled` dropped from a forced choice (effort included); or absent
+ * thinking and effort on an id known to predate Claude 5. Absent thinking on an
+ * id that does not parse keeps them, since that model may think by default.
  */
 function expectedReplay(
+  model: ModelSetting,
   thinking: ThinkingSetting,
   effort: EffortSetting,
   choice: ChoiceSetting
@@ -139,26 +160,39 @@ function expectedReplay(
     case "enabled":
       return choice === "auto";
     case "unset":
-      return effort === "set";
+      return effort === "set" || model === "unparsed";
   }
 }
 
+const MODEL_SETTINGS: readonly ModelSetting[] = ["pre-5", "unparsed"];
 const THINKING_SETTINGS: readonly ThinkingSetting[] = ["unset", "disabled", "enabled", "adaptive"];
 const EFFORT_SETTINGS: readonly EffortSetting[] = ["set", "unset"];
 const CHOICE_SETTINGS: readonly ChoiceSetting[] = ["auto", "any", "tool"];
 
-const TOOL_CALLING_TABLE = THINKING_SETTINGS.flatMap((thinking) =>
-  EFFORT_SETTINGS.flatMap((effort) =>
-    CHOICE_SETTINGS.map(
-      (choice) => [thinking, effort, choice, expectedReplay(thinking, effort, choice)] as const
+const TOOL_CALLING_TABLE = MODEL_SETTINGS.flatMap((model) =>
+  THINKING_SETTINGS.flatMap((thinking) =>
+    EFFORT_SETTINGS.flatMap((effort) =>
+      CHOICE_SETTINGS.map(
+        (choice) =>
+          [
+            model,
+            thinking,
+            effort,
+            choice,
+            expectedReplay(model, thinking, effort, choice),
+          ] as const
+      )
     )
   )
 );
 
 /** The checkpoint warm-up always declares `tool_choice: auto`. */
-const CHECKPOINT_TABLE = THINKING_SETTINGS.flatMap((thinking) =>
-  EFFORT_SETTINGS.map(
-    (effort) => [thinking, effort, expectedReplay(thinking, effort, "auto")] as const
+const CHECKPOINT_TABLE = MODEL_SETTINGS.flatMap((model) =>
+  THINKING_SETTINGS.flatMap((thinking) =>
+    EFFORT_SETTINGS.map(
+      (effort) =>
+        [model, thinking, effort, expectedReplay(model, thinking, effort, "auto")] as const
+    )
   )
 );
 
@@ -199,14 +233,14 @@ describe("Anthropic thinking replay policy", () => {
 
   describe("tool calling", () => {
     it.each(TOOL_CALLING_TABLE)(
-      "thinking %s, effort %s, tool_choice %s: signed blocks sent = %s",
-      async (thinking, effort, choice, sent) => {
-        const model = modelWith(thinking, effort);
+      "%s model, thinking %s, effort %s, tool_choice %s: signed blocks sent = %s",
+      async (modelSetting, thinking, effort, choice, sent) => {
+        const model = modelWith(thinking, effort, MODEL_NAMES[modelSetting]);
         await runFnServing("tool-use")(
           {
             model,
             prompt: "",
-            messages: signedTurn(NATIVE_KEY),
+            messages: signedTurn(`anthropic:${MODEL_NAMES[modelSetting]}`),
             tools: lookTool,
             toolChoice: CHOICE_INPUT[choice],
           } as never,
@@ -216,7 +250,7 @@ describe("Anthropic thinking replay policy", () => {
         );
         expect(calls).toHaveLength(1);
         expect(calls[0]!.tool_choice.type).toBe(choice);
-        expect(requestAllowsThinkingReplay(calls[0]!)).toBe(sent);
+        expect(requestAllowsThinkingReplay(calls[0]!, model)).toBe(sent);
         const assistant = (calls[0]!.messages as Array<{ role: string; content: unknown }>).find(
           (m) => m.role === "assistant"
         )!;
@@ -275,15 +309,17 @@ describe("Anthropic thinking replay policy", () => {
 
   describe("checkpoint warm-up", () => {
     it.each(CHECKPOINT_TABLE)(
-      "thinking %s, effort %s: signed blocks sent = %s",
-      (thinking, effort, sent) => {
+      "%s model, thinking %s, effort %s: signed blocks sent = %s",
+      (modelSetting, thinking, effort, sent) => {
+        const name = MODEL_NAMES[modelSetting];
+        const model = modelWith(thinking, effort, name);
         const params = buildAnthropicCheckpointParams(
-          { tools: lookTool as never, messages: signedTurn(NATIVE_KEY) as never },
-          MODEL_NAME,
-          modelWith(thinking, effort)
+          { tools: lookTool as never, messages: signedTurn(`anthropic:${name}`) as never },
+          name,
+          model
         );
         expect(params.tool_choice).toEqual({ type: "auto" });
-        expect(requestAllowsThinkingReplay(params)).toBe(sent);
+        expect(requestAllowsThinkingReplay(params, model)).toBe(sent);
         expect(hasThinking(params.messages as never)).toBe(sent);
       }
     );
@@ -298,7 +334,10 @@ describe("Anthropic thinking replay policy", () => {
   });
 
   describe("text generation", () => {
-    const run = async (model: never): Promise<Array<Record<string, any>>> => {
+    const run = async (
+      model: never,
+      nativeKey: string = NATIVE_KEY
+    ): Promise<Array<Record<string, any>>> => {
       const events: Array<Record<string, any>> = [];
       await runFnServing("text.generation")(
         { model, prompt: "tail" } as never,
@@ -306,15 +345,25 @@ describe("Anthropic thinking replay policy", () => {
         undefined as never,
         ((event: Record<string, any>) => events.push(event)) as never,
         undefined,
-        { sessionId: "ckpt", prefix: { messages: signedTurn(NATIVE_KEY) as never } }
+        { sessionId: "ckpt", prefix: { messages: signedTurn(nativeKey) as never } }
       );
       return events;
     };
 
-    it("removes a checkpoint prefix's signed thinking from a request without thinking", async () => {
+    it("removes a checkpoint prefix's signed thinking from a pre-5 model without thinking", async () => {
       await run(modelWith("unset", "unset"));
       expect(calls).toHaveLength(1);
       expect(hasThinking(calls[0]!.messages)).toBe(false);
+    });
+
+    it("removes it when thinking is explicitly disabled", async () => {
+      await run(modelWith("disabled", "unset", UNPARSED_NAME), `anthropic:${UNPARSED_NAME}`);
+      expect(hasThinking(calls[0]!.messages)).toBe(false);
+    });
+
+    it("keeps it for an unparsed id with no thinking fields, which may think by default", async () => {
+      await run(modelWith("unset", "unset", UNPARSED_NAME), `anthropic:${UNPARSED_NAME}`);
+      expect(hasThinking(calls[0]!.messages)).toBe(true);
     });
 
     it("replays a checkpoint prefix's signed thinking on a request with thinking", async () => {
@@ -362,17 +411,34 @@ describe("Anthropic thinking replay policy", () => {
 });
 
 describe("requestAllowsThinkingReplay", () => {
+  const preFive = modelWith("unset", "unset");
+  const unparsed = modelWith("unset", "unset", UNPARSED_NAME);
+  const unparsedLegacy = modelWith("enabled", "unset", UNPARSED_NAME);
+  const forced = { max_tokens: 64, tool_choice: { type: "any" } };
+
   it.each([
-    [{}, false],
-    [{ output_config: { effort: "low" } }, true],
-    [{ output_config: { format: { type: "json_schema" } } }, false],
-    [{ thinking: { type: "disabled" } }, false],
-    [{ thinking: { type: "disabled" }, output_config: { effort: "high" } }, false],
-    [{ thinking: { type: "enabled", budget_tokens: 1024 } }, true],
-    [{ thinking: { type: "adaptive" } }, true],
-    [{ thinking: { type: "between_tools" } }, true],
-  ] as const)("%j allows replay: %s", (params, allowed) => {
-    expect(requestAllowsThinkingReplay(params)).toBe(allowed);
+    ["no model", {}, undefined, true],
+    ["pre-5", {}, preFive, false],
+    ["unparsed", {}, unparsed, true],
+    ["pre-5", { output_config: { effort: "low" } }, preFive, true],
+    ["pre-5", { output_config: { format: { type: "json_schema" } } }, preFive, false],
+    ["unparsed", { output_config: { format: { type: "json_schema" } } }, unparsed, true],
+    ["no model", { thinking: { type: "disabled" } }, undefined, false],
+    ["unparsed", { thinking: { type: "disabled" } }, unparsed, false],
+    [
+      "unparsed",
+      { thinking: { type: "disabled" }, output_config: { effort: "high" } },
+      unparsed,
+      false,
+    ],
+    ["pre-5", { thinking: { type: "enabled", budget_tokens: 1024 } }, preFive, true],
+    ["pre-5", { thinking: { type: "adaptive" } }, preFive, true],
+    ["pre-5", { thinking: { type: "between_tools" } }, preFive, true],
+    ["unparsed, legacy thinking, forced choice", forced, unparsedLegacy, false],
+    ["unparsed, legacy thinking, auto choice", { max_tokens: 64 }, unparsedLegacy, true],
+    ["unparsed, no thinking configured, forced choice", forced, unparsed, true],
+  ] as const)("%s: %j allows replay: %s", (_label, params, model, allowed) => {
+    expect(requestAllowsThinkingReplay(params, model)).toBe(allowed);
   });
 });
 
