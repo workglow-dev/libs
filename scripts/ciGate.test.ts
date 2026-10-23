@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { evaluateCiRuns, type WorkflowRun } from "./lib/ciGate";
+import { evaluateCiRuns, evaluateNightlyGuard, type WorkflowRun } from "./lib/ciGate";
 
 const run = (over: Partial<WorkflowRun> = {}): WorkflowRun => ({
   databaseId: 1,
@@ -68,5 +68,36 @@ describe("evaluateCiRuns", () => {
       );
       expect(verdict.ok).toBe(false);
     });
+  });
+});
+
+describe("evaluateNightlyGuard", () => {
+  const GUARD = "nightly-typecheck.yml";
+
+  it("passes when the latest run is green", () => {
+    expect(evaluateNightlyGuard([run(), run({ conclusion: "failure" })], GUARD).ok).toBe(true);
+  });
+
+  it("refuses when the latest run is red, naming it and how to re-run the guard", () => {
+    const verdict = evaluateNightlyGuard([run({ conclusion: "failure" }), run()], GUARD);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.ok === false && verdict.reason).toContain("actions/runs/1");
+    expect(verdict.ok === false && verdict.reason).toContain(`gh workflow run ${GUARD}`);
+  });
+
+  it("reads past a run in flight or cancelled to the newest that finished", () => {
+    // Neither says whether main is broken; skipping them for the last verdict
+    // is what keeps a cancelled re-run from hiding a red night.
+    const runs = [
+      run({ status: "in_progress", conclusion: "" }),
+      run({ conclusion: "cancelled" }),
+      run({ conclusion: "failure" }),
+    ];
+    expect(evaluateNightlyGuard(runs, GUARD).ok).toBe(false);
+  });
+
+  it("refuses nothing when the guard has never finished a run", () => {
+    const verdict = evaluateNightlyGuard([], GUARD);
+    expect(verdict).toEqual({ ok: true, run: undefined });
   });
 });

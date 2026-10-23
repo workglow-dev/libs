@@ -765,6 +765,20 @@ download models or call live APIs); `WORKGLOW_TEST_TARGET=dist` turns the rewrit
 exercise the bundles instead, and refuses coverage there. The include/exclude globs are
 repo-root-relative, so coverage and `--project` cannot be combined.
 
+**A red `main` opens an issue.** `.github/workflows/ci-alert.yml` runs on `workflow_run`
+for `Build & Test`, `CodeQL` and both nightly workflows, and `scripts/ci-alert.ts` keeps
+ONE open issue per workflow, labelled `ci-nightly` and titled `CI red on main: <name>`: a
+failed run opens it (run URL, commit, failed jobs), each further failure comments on it, the
+next green run closes it. Only `push` / `schedule` / `workflow_dispatch` runs of this
+repository's `main` count — never a PR, never a cancellation (`Build & Test` cancels an
+in-flight `main` run on the next push). Without it a red schedule is a row in the Actions
+tab: the type-drift guard was once red for a month unseen. `workflow_run` matches by
+`name:`, so renaming a watched workflow means editing that list;
+`scripts/ciAlert.test.ts` fails on a listed name no workflow has, or a `schedule`
+workflow left off it. It runs from the default branch only, so a change to it cannot be
+tried on a PR. `require-green-ci` also refuses a release while the latest finished
+type-drift guard run on `main` is red.
+
 ## Developing without building
 
 `bun run use-source` makes every package resolve to its source. It does **not** touch
