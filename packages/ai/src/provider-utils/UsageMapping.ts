@@ -19,6 +19,8 @@ import { getLogger } from "@workglow/util";
  *
  * Usage is always read from the provider's own terminal frame — never derived
  * by counting emitted output, which would drift from what the provider bills.
+ * The one exception is a runtime that reports nothing at all, and its counts
+ * are flagged `estimated` ({@link estimateCallUsage}).
  */
 
 /**
@@ -273,6 +275,38 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 export function estimateTokenCount(text: string): number {
   if (!text) return 0;
   return Math.ceil(text.length / CHARS_PER_TOKEN_ESTIMATE);
+}
+
+/**
+ * The `finish.usage` of a call on a runtime that reports no token counts of
+ * its own (an on-device model, a WASM engine), so a caller budgeting tokens
+ * has something to count rather than nothing.
+ *
+ * `prompt` is either a count the runtime measured itself (its own tokenizer)
+ * or the text it was sent, estimated with {@link estimateTokenCount}; the
+ * output is always estimated from the text generated. Any counter taken from
+ * text marks the whole usage `estimated`, which keeps it out of cost math and
+ * out of the persisted run total while still binding an input-token budget.
+ * Undefined when neither side is known.
+ */
+export function estimateCallUsage(
+  prompt: number | string | undefined,
+  outputText: string | undefined
+): Usage | undefined {
+  const input = typeof prompt === "string" ? estimateTokenCount(prompt) : toUsageCount(prompt);
+  const output = outputText === undefined ? undefined : estimateTokenCount(outputText);
+  if (input === undefined && output === undefined) return undefined;
+  const estimated = typeof prompt === "string" || output !== undefined;
+  return {
+    input,
+    output,
+    cached: undefined,
+    cacheWrite: undefined,
+    reasoning: undefined,
+    total: undefined,
+    extra: undefined,
+    ...(estimated ? { estimated: true as const } : {}),
+  };
 }
 
 /** Reports provisional prompt + output token spend for OpenAI-shaped streams. */

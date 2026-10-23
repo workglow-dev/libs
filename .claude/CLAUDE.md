@@ -248,8 +248,13 @@ reasoning are forwarded only once the attempt settles, since a failed attempt's 
 taken back from the accumulated port; reasoning goes out on the turn's own `reasoning` port, a
 blank line between rounds, and is absent from the output when no round returned any), and
 budgets — `maxInputTokens`, `maxCostUsd` (refused without a price card,
-since a budget it cannot measure never stops anything, and failing closed for a round that reports no usage: it cannot be priced, so the turn ends `"budget"` after it),
-`maxDurationMs` — each ending the turn `"budget"`, never between a `tool_use` and its result.
+since a budget it cannot measure never stops anything), `maxDurationMs` — each ending the turn
+`"budget"`, never between a `tool_use` and its result. **Both token and cost budgets fail closed
+on a round they cannot measure**: a round reporting no prompt count (no usage, or output only)
+ends a `maxInputTokens` turn `"budget"` after it, and a round that cannot be priced (no usage, or
+an `estimated` one) ends a `maxCostUsd` turn the same way — counting it as 0 would let a capped
+turn run to `maxRounds` for free. An estimated usage does count against `maxInputTokens`, which
+is why runtimes that report nothing (Cactus, Chrome AI) emit one on `finish`.
 Every round leaves an `AgentStep` on `steps` (timings, attempts, each tool's outcome and
 size, usage, cost) and rides on the `snapshot` beside `messages`; `costUsd` totals them when
 every round could be priced.
@@ -301,6 +306,13 @@ for the same reason as `AGENT_APPROVAL_OPT_OUT`: where a turn's model calls go i
 Conversation helpers for a host keeping its own message list, none of which run inside a
 task: `normalizeHistoryForModel` / `trimHistoryForModel` (`ChatHistory.ts`), and
 `collectToolUseIds` / `uniquifyToolCallIds` / `repairDuplicateToolCallIds` (`ToolCallIds.ts`).
+
+`AgentTask.ts` keeps only the loop's orchestration; each concern it drives is its own module,
+unit-tested in `packages/ai/src/task/__tests__/`: `AgentTurnBudget` (tokens, cost, deadline —
+`exhausted()` answers the answer path, `mustStopLoop()` the loop, so changing what an answered
+turn reports cannot move where the loop stops), `AgentRoundAttempt` (one round's retries,
+timeout and held deltas), `AgentTurnPolicy` (submit tool, reminders, review, time-left notice)
+and `AgentToolRound` (dispatching a round's calls and building their results).
 
 `validateModelAuthoredSchema` (`ModelAuthoredSchema.ts`) bounds a JSON Schema a model wrote
 before a host renders a form from it, beside `sanitizeToolArgs`, which bounds the arguments.
@@ -450,7 +462,10 @@ Rules for writing a run-fn:
   Helpers: `createDecodeUsageReporter` (`HFT_Streaming.ts`, wired into `createStreamingTextStreamer`)
   and `createEstimatedOutputUsageReporter` (`provider-utils/UsageMapping.ts`) for
   OpenAI-compatible APIs that only bill on the final chunk. Provisional estimates are for
-  the progress counter only — `finish.usage` supersedes them for cost math.
+  the progress counter only — `finish.usage` supersedes them for cost math. A runtime that
+  counts nothing at all (Cactus, Chrome AI) puts `estimateCallUsage` on `finish.usage`
+  instead of leaving it absent: flagged `estimated`, it is never priced or persisted as
+  spend, but an agent's `maxInputTokens` has something to count.
 - **Deltas do not drive progress.** `StreamProcessor` translates only `phase` events into
   `updateProgress`, and `StreamingAiTask` emits one `Generating` phase latched on the
   first delta — so a run-fn that says nothing renders as one static line.

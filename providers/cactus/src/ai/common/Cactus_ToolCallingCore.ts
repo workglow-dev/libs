@@ -11,7 +11,7 @@ import type {
   ToolCalls,
   ToolDefinition,
 } from "@workglow/ai";
-import { extractMessageText } from "@workglow/ai/provider-utils";
+import { estimateCallUsage, extractMessageText } from "@workglow/ai/provider-utils";
 import { filterValidToolCalls } from "@workglow/ai/worker";
 import type { NeedleEngine } from "./Cactus_LoadEngine";
 import type { CactusModelConfig } from "./Cactus_ModelSchema";
@@ -173,8 +173,16 @@ export function createCactusToolCalling(
     if (validToolCalls.length > 0) {
       emit({ type: "object-delta", port: "toolCalls", objectDelta: [...validToolCalls] });
     }
+    // The engine reports no token counts, so the usage is estimated from what it
+    // read (the query and the tool declarations) and everything it generated. A
+    // turn capping its input tokens then has a figure to count rather than none.
+    const usage = estimateCallUsage(`${query}\n${toolsJson}`, raw);
     // The deltas above are the output; `TaskRunner` accumulates them. Repeating
     // them here would hand the accumulator a second, competing copy.
-    emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput });
+    emit({
+      type: "finish",
+      data: { text: "", toolCalls: [] } as ToolCallingTaskOutput,
+      ...(usage === undefined ? {} : { usage }),
+    });
   };
 }

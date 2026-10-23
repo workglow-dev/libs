@@ -5,6 +5,7 @@
  */
 
 import {
+  estimateCallUsage,
   mapOpenAIChatUsage,
   mapOpenAIImageUsage,
   mapOpenAIResponsesUsage,
@@ -407,6 +408,72 @@ describe("TypeSafe usage accumulates across a fan-out", () => {
   it("leaves a run in which nothing was reported unreported", () => {
     expect(addTypeSafeAiUsage(undefined, undefined)).toBeUndefined();
   });
+});
+
+/**
+ * Cactus and Chrome AI report no token counts, so their finish usage is built
+ * by {@link estimateCallUsage} from a prompt (a count the runtime measured, or
+ * the text sent) and the text generated. Adapted to the contract's frame shape
+ * as `{ prompt, output }`.
+ */
+function mapEstimatedUsage(raw: unknown): ReturnType<typeof estimateCallUsage> {
+  if (raw === null || typeof raw !== "object") return undefined;
+  const { prompt, output } = raw as { prompt?: unknown; output?: unknown };
+  return estimateCallUsage(
+    typeof prompt === "number" || typeof prompt === "string" ? prompt : undefined,
+    typeof output === "string" ? output : undefined
+  );
+}
+
+usageNormalizationBlock({
+  provider: "Estimated (Cactus, Chrome AI)",
+  mapUsage: mapEstimatedUsage,
+  sparseFrame: { prompt: 40, output: "twelve chars" },
+  sparseReports: ["input", "output"],
+  zeroFrame: { prompt: 0, output: "" },
+  cases: [
+    {
+      name: "a prompt measured by the runtime and an estimated reply",
+      frame: { prompt: 52, output: "Paris it is." },
+      expected: {
+        input: 52,
+        output: 3,
+        cached: undefined,
+        cacheWrite: undefined,
+        reasoning: undefined,
+        total: undefined,
+        extra: undefined,
+        estimated: true,
+      },
+    },
+    {
+      name: "a prompt estimated from its text",
+      frame: { prompt: "abcdefghi", output: "ok" },
+      expected: {
+        input: 3,
+        output: 1,
+        cached: undefined,
+        cacheWrite: undefined,
+        reasoning: undefined,
+        total: undefined,
+        extra: undefined,
+        estimated: true,
+      },
+    },
+    {
+      name: "a measured prompt alone as stated, not estimated",
+      frame: { prompt: 7 },
+      expected: {
+        input: 7,
+        output: undefined,
+        cached: undefined,
+        cacheWrite: undefined,
+        reasoning: undefined,
+        total: undefined,
+        extra: undefined,
+      },
+    },
+  ],
 });
 
 describe("usage normalization rejects non-numeric wire values", () => {
