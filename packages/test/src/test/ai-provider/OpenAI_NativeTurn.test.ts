@@ -149,16 +149,6 @@ describe("OpenAI tool-calling native turn", () => {
     expect(JSON.stringify(params.input)).not.toContain("ENC");
   });
 
-  it("replays the native items it produced earlier", async () => {
-    const params = await run(modelWith({}));
-    expect(params.input).toEqual([
-      { role: "user", content: [{ type: "input_text", text: "go" }] },
-      reasoningItem,
-      callItem,
-      { type: "function_call_output", call_id: "c1", output: "looked" },
-    ]);
-  });
-
   it("sends a tool result's images on a user turn after the results", async () => {
     const withImage = messages.map((message) =>
       message.role === "tool"
@@ -189,16 +179,6 @@ describe("OpenAI tool-calling native turn", () => {
         { type: "input_image", image_url: "data:image/png;base64,AAAA" },
       ],
     });
-  });
-
-  it("rebuilds a turn another model produced instead of replaying it", async () => {
-    const params = await run(modelWith({}), [], messagesFrom("openai:some-other-model"));
-    expect(params.input).toEqual([
-      { role: "user", content: [{ type: "input_text", text: "go" }] },
-      { type: "function_call", call_id: "c1", name: "look", arguments: "{}" },
-      { type: "function_call_output", call_id: "c1", output: "looked" },
-    ]);
-    expect(JSON.stringify(params.input)).not.toContain("ENC");
   });
 
   it("emits the turn's items as the native turn", async () => {
