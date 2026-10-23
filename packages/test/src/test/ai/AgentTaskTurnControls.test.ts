@@ -472,6 +472,92 @@ describe("AgentTask turn controls", () => {
       expect(output.costUsd).toBeUndefined();
     });
 
+    it("does not let rounds that report no usage run past maxInputTokens", async () => {
+      // A provider that counts nothing would otherwise add 0 a round and run to
+      // maxRounds under a cap the caller set to stop it.
+      const called = script([{ calls: [{ id: "c", name: "echo", input: { text: "again" } }] }]);
+      const output = await new AgentTask().run(
+        {
+          model: MODEL,
+          prompt: "?",
+          tools: [ECHO],
+          maxInputTokens: 1_000_000,
+          maxRounds: 6,
+          approval: "never",
+        },
+        { registry }
+      );
+      expect(called()).toBe(1);
+      expect(output.stopReason).toBe("budget");
+      expect(output.steps[0]!.usage).toBeUndefined();
+      const uses = output.messages.flatMap((message) =>
+        message.content.filter((block) => block.type === "tool_use")
+      );
+      expect(uses).toHaveLength(1);
+      expect(toolResults(output.messages)).toHaveLength(uses.length);
+    });
+
+    it("treats a usage that counts no prompt tokens as unreported under maxInputTokens", async () => {
+      const outputOnly: Usage = {
+        input: undefined,
+        output: 10,
+        cached: undefined,
+        cacheWrite: undefined,
+        reasoning: undefined,
+        total: undefined,
+        extra: undefined,
+      };
+      const called = script([
+        { calls: [{ id: "c", name: "echo", input: { text: "again" } }], usage: outputOnly },
+      ]);
+      const output = await new AgentTask().run(
+        {
+          model: MODEL,
+          prompt: "?",
+          tools: [ECHO],
+          maxInputTokens: 1_000_000,
+          maxRounds: 6,
+          approval: "never",
+        },
+        { registry }
+      );
+      expect(called()).toBe(1);
+      expect(output.stopReason).toBe("budget");
+    });
+
+    it("lets a usage-less provider run its rounds when no budget is set", async () => {
+      const called = script([{ calls: [{ id: "c", name: "echo", input: { text: "again" } }] }]);
+      const output = await new AgentTask().run(
+        { model: MODEL, prompt: "?", tools: [ECHO], maxRounds: 3, approval: "never" },
+        { registry }
+      );
+      expect(called()).toBe(3);
+      expect(output.stopReason).toBe("max-rounds");
+    });
+
+    it("counts an estimated usage against maxInputTokens rather than stopping on it", async () => {
+      // An estimate is something to count: the cap binds on it as on a stated
+      // figure, where a round that reported nothing at all ends the turn.
+      const estimated: Usage = { ...usage(1_000, 0, 10), estimated: true };
+      const called = script([
+        { calls: [{ id: "c", name: "echo", input: { text: "again" } }], usage: estimated },
+      ]);
+      const output = await new AgentTask().run(
+        {
+          model: MODEL,
+          prompt: "?",
+          tools: [ECHO],
+          maxInputTokens: 2_500,
+          maxRounds: 10,
+          approval: "never",
+        },
+        { registry }
+      );
+      expect(called()).toBe(3);
+      expect(output.stopReason).toBe("budget");
+      expect(output.steps.every((step) => step.usage?.estimated === true)).toBe(true);
+    });
+
     it("refuses maxCostUsd for a model with no price card", async () => {
       script([forever]);
       await expect(

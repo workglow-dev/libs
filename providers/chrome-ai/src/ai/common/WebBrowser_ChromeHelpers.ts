@@ -270,13 +270,14 @@ export async function queryWebBrowserModelStatus(
  *
  * Identical consecutive snapshots emit no delta. The caller is responsible
  * for emitting its own `finish` event after this returns — this helper
- * never emits `finish`.
+ * never emits `finish`. Resolves to the last snapshot, the text the call
+ * ended with, which is what a caller estimating its output size counts.
  */
 export async function snapshotStreamToTextDeltas<Output>(
   stream: ReadableStream<string>,
   port: string,
   emit: (event: StreamEvent<Output>) => void
-): Promise<void> {
+): Promise<string> {
   const reader = stream.getReader();
   let accumulatedText = "";
   try {
@@ -302,6 +303,7 @@ export async function snapshotStreamToTextDeltas<Output>(
   } finally {
     reader.releaseLock();
   }
+  return accumulatedText;
 }
 
 /**

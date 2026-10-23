@@ -18,6 +18,7 @@ import {
   snapshotStreamToTextDeltas,
 } from "./WebBrowser_ChromeHelpers";
 import type { WebBrowserModelConfig } from "./WebBrowser_ModelSchema";
+import { chromeCallUsage, measurePromptTokens } from "./WebBrowser_Usage";
 
 /**
  * Single-shot text generation. `TextGenerationTask` doesn't allocate a
@@ -45,12 +46,22 @@ export const WebBrowser_TextGeneration: AiProviderRunFn<
     monitor: createDownloadMonitor(emit),
   });
   try {
+    // Measured before prompting: the session's count grows once the prompt runs.
+    const measuredPrompt = await measurePromptTokens(session, input.prompt, signal);
     const stream = session.promptStreaming(input.prompt, { signal });
-    await snapshotStreamToTextDeltas<TextGenerationTaskOutput>(stream, "text", emit);
-    // No `usage`: the Chrome built-in AI API reports no token counts (it exposes
-    // only quota measures such as `inputUsage`, which are not billing counters).
-    // Absent is the honest answer — a zero here would read as "cost nothing".
-    emit({ type: "finish", data: {} as TextGenerationTaskOutput });
+    const outputText = await snapshotStreamToTextDeltas<TextGenerationTaskOutput>(
+      stream,
+      "text",
+      emit
+    );
+    // Chrome reports no token counts, so the usage is flagged estimated: it
+    // reads as a figure to count, never as "cost nothing", and is never priced.
+    const usage = chromeCallUsage(measuredPrompt, [input.prompt], outputText);
+    emit({
+      type: "finish",
+      data: {} as TextGenerationTaskOutput,
+      ...(usage === undefined ? {} : { usage }),
+    });
   } finally {
     session.destroy();
   }

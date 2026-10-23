@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { estimateTokenCount } from "@workglow/ai/provider-utils";
 import { _testOnly } from "@workglow/cactus/ai";
-import type { StreamEvent } from "@workglow/task-graph";
+import type { StreamEvent, Usage } from "@workglow/task-graph";
 import { expectNoFinishAccumulation } from "@workglow/test-contract/ai-provider";
 import { afterEach, describe, expect, it } from "vitest";
 import { runFnFor } from "./test-utils";
@@ -721,5 +722,49 @@ describe("Cactus_ToolCalling emits <think> text on the reasoning port", () => {
       run: () => `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`,
     });
     expect(events.some((e) => e.type === "text-delta" && e.port === "reasoning")).toBe(false);
+  });
+});
+
+describe("Cactus_ToolCalling reports an estimated usage", () => {
+  function finishUsage(events: readonly StreamEvent<never>[]): Usage | undefined {
+    const finish = events.find((event) => event.type === "finish");
+    return finish?.type === "finish" ? finish.usage : undefined;
+  }
+
+  it("estimates the query and tool declarations it read and everything it generated", async () => {
+    const generated = `<tool_call>[{"name":"lookup_weather","arguments":{"city":"Paris"}}]</tool_call>`;
+    let read = "";
+    const { events } = await runToolCalling({
+      run: (query, toolsJson) => {
+        read = `${query}\n${toolsJson}`;
+        return generated;
+      },
+    });
+    const usage = finishUsage(events);
+    // The engine counts nothing, so a turn capping its input tokens would
+    // otherwise have no figure for this round.
+    expect(usage).toEqual({
+      input: estimateTokenCount(read),
+      output: estimateTokenCount(generated),
+      cached: undefined,
+      cacheWrite: undefined,
+      reasoning: undefined,
+      total: undefined,
+      extra: undefined,
+      estimated: true,
+    });
+    expect(usage!.input).toBeGreaterThan(0);
+  });
+
+  it("counts reasoning in the output, since the engine generated it", async () => {
+    const generated = "<think>pick weather</think>Done.";
+    const { events } = await runToolCalling({
+      run: () => "unused",
+      run_stream: async (_q, _t, cb) => {
+        cb(generated);
+        return generated;
+      },
+    });
+    expect(finishUsage(events)?.output).toBe(estimateTokenCount(generated));
   });
 });

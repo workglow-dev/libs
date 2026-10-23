@@ -36,6 +36,7 @@ import {
   agentModelPricing,
   isRetryableRoundError,
   promptTokens,
+  reportsPromptTokens,
   retryDelayMs,
   roundCostUsd,
   sleepUnlessAborted,
@@ -187,7 +188,7 @@ export const AgentInputSchema = {
       type: "integer",
       title: "Max Input Tokens",
       description:
-        "Prompt tokens, cached or not, summed over the turn's rounds, after which it stops with stopReason budget",
+        "Prompt tokens, cached or not, summed over the turn's rounds, after which it stops with stopReason budget. An estimate counts like a stated figure. Fails closed: a round whose provider reported no prompt count cannot be counted, so the turn stops with stopReason budget after that round",
       minimum: 1,
       "x-ui-group": "Configuration",
     },
@@ -195,7 +196,7 @@ export const AgentInputSchema = {
       type: "number",
       title: "Max Cost (USD)",
       description:
-        "Estimated spend after which the turn stops with stopReason budget. Needs a price card for the model. Fails closed: a round whose usage the provider did not report cannot be priced, so the turn stops with stopReason budget after that round",
+        "Estimated spend after which the turn stops with stopReason budget. Needs a price card for the model. Fails closed: a round whose usage the provider did not report, or reported only as an estimate, cannot be priced, so the turn stops with stopReason budget after that round",
       exclusiveMinimum: 0,
       "x-ui-group": "Configuration",
     },
@@ -666,10 +667,12 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
     let spentTokens = 0;
     let spentUsd = 0;
     let costKnown = true;
-    // A round that reported no usage cannot be priced, and adding nothing for it
-    // would let a capped turn run every round for free. With maxCostUsd set it
-    // counts as spending the cap: the turn stops after that round.
-    let unmeteredRound = false;
+    // A round that reported no usage cannot be priced, and one that reported no
+    // prompt count cannot be counted; adding nothing for either would let a
+    // capped turn run every round for free. Under the budget it cannot measure,
+    // such a round counts as spending the cap: the turn stops after it.
+    let unpricedRound = false;
+    let uncountedRound = false;
     let reminders = 0;
     let reviewed = false;
 
@@ -711,8 +714,9 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       },
     });
     const overBudget = (): boolean =>
-      (input.maxInputTokens !== undefined && spentTokens >= input.maxInputTokens) ||
-      (input.maxCostUsd !== undefined && (unmeteredRound || spentUsd >= input.maxCostUsd));
+      (input.maxInputTokens !== undefined &&
+        (uncountedRound || spentTokens >= input.maxInputTokens)) ||
+      (input.maxCostUsd !== undefined && (unpricedRound || spentUsd >= input.maxCostUsd));
     yield transcript();
 
     for (let round = 0; round < maxRounds; round++) {
@@ -800,9 +804,10 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
           costUsd,
         });
         spentTokens += promptTokens(usage);
+        if (!reportsPromptTokens(usage)) uncountedRound = true;
         if (costUsd === undefined) {
           costKnown = false;
-          unmeteredRound = true;
+          unpricedRound = true;
         } else spentUsd += costUsd;
       };
 
