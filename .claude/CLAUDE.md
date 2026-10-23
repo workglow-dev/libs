@@ -487,6 +487,9 @@ history has no tool messages and no reasoning yet, where it loses nothing. Tool-
 in a user message after the tool message (OpenAI, xAI, OpenRouter, HF Inference, Ollama); Gemini 3+ takes them in
 `functionResponse.parts`, and older models, which reject that with HTTP 400, get a user turn of
 their own — beside the response they leak their thinking into the answer.
+`runToolTurnConformance` (`@workglow/test-contract/ai-provider`) pins these rules per provider
+over its own transport answering from a script (`*_ToolTurn.test.ts`): a provider declares how it
+streams and replays reasoning and where a tool's images go, and an opt-out carries its reason.
 
 ### `examples/cli` — the CLI and its web console
 

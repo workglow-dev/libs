@@ -133,21 +133,81 @@ Capability flags:
 
 ## Available suites
 
-| Contract                                | Suite                                             | Adapters                                                                                              |
-| --------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `AiProvider`                            | `@workglow/test-contract/ai-provider`             | Anthropic, OpenAI, Gemini, Ollama, HF Inference, HF Transformers, LlamaCpp                            |
-| `IMigrationRunner`                      | `@workglow/test-contract/storage-migrations`      | Postgres, SQLite, IndexedDB                                                                           |
-| Tabular schema migrations               | `@workglow/test-contract/tabular-migrations`      | InMemory, IndexedDB, Postgres, SQLite, FsFolder                                                       |
-| `ITabularStorage`                       | `@workglow/test-contract/tabular-storage`         | InMemory, SharedInMemory, IndexedDB, Postgres, SQLite, DuckDB, Supabase, Cached, Telemetry, FsFolder  |
-| `ITabularStorage.join`                  | `@workglow/test-contract/tabular-storage`         | InMemory, SharedInMemory, IndexedDB, Postgres, SQLite, DuckDB, Supabase, Cached, Telemetry, HttpProxy |
-| `ITabularStorage` (rest of the surface) | `@workglow/test-contract/tabular-storage`         | InMemory, IndexedDB, Postgres, SQLite, Supabase, FsFolder, HuggingFace                                |
-| `IQueueStorage` + `IRateLimiterStorage` | `@workglow/test-contract/job-queue`               | InMemory, IndexedDB, Postgres, SQLite, Supabase                                                       |
-| `IVectorStorage`                        | `@workglow/test-contract/vector-storage`          | InMemory, SQLite, Postgres, IndexedDB, Scoped, Telemetry                                              |
-| `IEntitlementProfile`                   | `@workglow/test-contract/entitlement-profile`     | Browser, Desktop, Server, Custom                                                                      |
-| `IBrowserContext`                       | `@workglow/test-contract/browser-context`         | Mock, Playwright, BunWebView, Electron                                                                |
-| `IHumanConnector`                       | `@workglow/test-contract/human-connector`         | Mock, Mock (no followUp), McpElicitation, Prompt, Ink, RunEvent                                       |
-| `IWebSearchProvider`                    | `@workglow/test-contract/web-search`              | Brave, Tavily, SearXNG, Anthropic, OpenAI, OpenRouter, Gemini                                         |
-| Worker-proxy parity                     | `@workglow/test-contract/worker-proxy`            | _harness only — no adapters wired yet_                                                                |
+| Contract                                | Suite                                         | Adapters                                                                                              |
+| --------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `AiProvider`                            | `@workglow/test-contract/ai-provider`         | Anthropic, OpenAI, Gemini, Ollama, HF Inference, HF Transformers, LlamaCpp                            |
+| `AiProvider` tool turn (mocked)         | `@workglow/test-contract/ai-provider`         | Anthropic, OpenAI, OpenRouter, Gemini 3, Gemini 2.5, Ollama, HF Transformers, llama.cpp server        |
+| `IMigrationRunner`                      | `@workglow/test-contract/storage-migrations`  | Postgres, SQLite, IndexedDB                                                                           |
+| Tabular schema migrations               | `@workglow/test-contract/tabular-migrations`  | InMemory, IndexedDB, Postgres, SQLite, FsFolder                                                       |
+| `ITabularStorage`                       | `@workglow/test-contract/tabular-storage`     | InMemory, SharedInMemory, IndexedDB, Postgres, SQLite, DuckDB, Supabase, Cached, Telemetry, FsFolder  |
+| `ITabularStorage.join`                  | `@workglow/test-contract/tabular-storage`     | InMemory, SharedInMemory, IndexedDB, Postgres, SQLite, DuckDB, Supabase, Cached, Telemetry, HttpProxy |
+| `ITabularStorage` (rest of the surface) | `@workglow/test-contract/tabular-storage`     | InMemory, IndexedDB, Postgres, SQLite, Supabase, FsFolder, HuggingFace                                |
+| `IQueueStorage` + `IRateLimiterStorage` | `@workglow/test-contract/job-queue`           | InMemory, IndexedDB, Postgres, SQLite, Supabase                                                       |
+| `IVectorStorage`                        | `@workglow/test-contract/vector-storage`      | InMemory, SQLite, Postgres, IndexedDB, Scoped, Telemetry                                              |
+| `IEntitlementProfile`                   | `@workglow/test-contract/entitlement-profile` | Browser, Desktop, Server, Custom                                                                      |
+| `IBrowserContext`                       | `@workglow/test-contract/browser-context`     | Mock, Playwright, BunWebView, Electron                                                                |
+| `IHumanConnector`                       | `@workglow/test-contract/human-connector`     | Mock, Mock (no followUp), McpElicitation, Prompt, Ink, RunEvent                                       |
+| `IWebSearchProvider`                    | `@workglow/test-contract/web-search`          | Brave, Tavily, SearXNG, Anthropic, OpenAI, OpenRouter, Gemini                                         |
+| Worker-proxy parity                     | `@workglow/test-contract/worker-proxy`        | _harness only — no adapters wired yet_                                                                |
+
+## Tool-turn round trip: `runToolTurnConformance`
+
+`runAiProviderConformance` drives a live model and is skipped without a key.
+What a tool-calling run-fn owes the conversation around it — where a round's
+thinking goes, how it reaches the next round, how a tool's result goes back on
+the wire — is not something a live model breaks visibly, so it is asserted
+here against the provider's own transport answering from a script, and runs
+on every build.
+
+A provider's shim supplies a **harness**, built fresh per test:
+
+    runToolTurnConformance({
+      name: "Anthropic",
+      createHarness: () => ({
+        respond: (reply) => ...,        // queue a ScriptedReply, written as the vendor streams it
+        run: (request, emit) => ...,    // call the tool-calling run-fn with the shim's model
+        sent: () => ...,                // every request body sent, as the vendor received it
+        dispose: () => ...,
+      }),
+      turns: (request) => ...,          // split a request into WireTurns: system | user | assistant | tool
+      reasoningStream: "reasoning-port",
+      reasoningReplay: { kind: "native", vendor: "anthropic", model: "...", wireForm: JSON.parse },
+      toolResultImages: { kind: "in-result" },
+    });
+
+A `ScriptedReply` is vendor-neutral (`reasoning`, `text`, `toolCalls`); the
+harness writes it as its vendor's stream, signatures and encrypted content
+included, so the run-fn reads what the real API would send. The suite never
+names a vendor field: it finds the fixture's marker strings in the captured
+request, and compares requests with each other — a turn the host changed must
+be sent exactly as the same turn with no native payload kept, which holds for
+every vendor without the suite knowing what a rebuilt turn looks like.
+
+| Block                     | Rule                                                                                                                                                                                                                                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reasoningPortBlock`      | Thinking goes on the `reasoning` port only, never on `text` — also when the provider forwards it nowhere.                                                                                                                                                                            |
+| `nativeTurnBlock`         | A `native` provider emits one `nativeTurn` per round, keyed `<vendor>:<model>`, before `finish`; any other provider emits none.                                                                                                                                                      |
+| `reasoningRoundTripBlock` | `native`: an unchanged turn carries `wireForm(payload)` verbatim; one whose call id, name or input changed, whose call was dropped, or that another model produced is rebuilt. `text`: the reasoning comes back on the assistant turn. `call-signature`: each call's signature does. |
+| `toolResultImageBlock`    | A tool's image goes where `toolResultImages` says: `in-result`, `user-turn-after` (the result itself text-only), or nowhere for `text-only`.                                                                                                                                         |
+| `emptyToolResultBlock`    | A tool that returned nothing still answers its call, by id or by name.                                                                                                                                                                                                               |
+
+Every provider states each declaration, so an opt-out is a reason written
+down rather than a field left out. Which provider replays what:
+
+| Provider         | `reasoningStream`                     | `reasoningReplay`                                    | `toolResultImages` |
+| ---------------- | ------------------------------------- | ---------------------------------------------------- | ------------------ |
+| Anthropic        | reasoning port                        | `native` (`anthropic:<model>`, content blocks)       | `in-result`        |
+| OpenAI           | not forwarded (summaries are ignored) | `native` (`openai:<model>`, Responses output items)  | `user-turn-after`  |
+| OpenRouter       | reasoning port                        | `native` (`openrouter:<model>`, `reasoning_details`) | `user-turn-after`  |
+| Gemini 3+        | reasoning port                        | `call-signature` (`thoughtSignature`)                | `in-result`        |
+| Gemini 2.5       | reasoning port                        | `call-signature` (`thoughtSignature`)                | `user-turn-after`  |
+| Ollama           | reasoning port                        | `text` (`thinking`)                                  | `user-turn-after`  |
+| HF Transformers  | reasoning port                        | `text` (`reasoning_content`)                         | `text-only`        |
+| llama.cpp server | reasoning port                        | `text` (`reasoning_content`)                         | `user-turn-after`  |
+
+The shims are `packages/test/src/test/ai-provider*/*_ToolTurn.test.ts`; a
+provider's own test file keeps only what is specific to it (the payload's
+exact encoding, its retry on a rejected signature, its labels).
 
 ## Billing failures: skipped on CI, failed locally
 
