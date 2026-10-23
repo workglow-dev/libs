@@ -29,6 +29,11 @@ import {
   resolveAnthropicProfile,
 } from "./common/Anthropic_ModelProfiles";
 import {
+  isThinkingSignatureError,
+  requestAllowsThinkingReplay,
+  THINKING_SIGNATURE_ERROR_TEXT,
+} from "./common/Anthropic_NativeTurn";
+import {
   anthropicSupportsOutputFormat,
   resolveAnthropicOutputFormatSupport,
   toAnthropicOutputSchema,
@@ -78,4 +83,7 @@ export const _testOnly = {
   setAnthropicClientForTests: clientTestOnly.setAnthropicClientForTests,
   createAnthropicUsageCollector,
   mapAnthropicUsage,
+  requestAllowsThinkingReplay,
+  isThinkingSignatureError,
+  THINKING_SIGNATURE_ERROR_TEXT,
 } as const;

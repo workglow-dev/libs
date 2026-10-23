@@ -6,7 +6,6 @@
 
 import type {
   AiProviderRunFn,
-  ChatMessage,
   ToolCall,
   ToolCallingTaskInput,
   ToolCallingTaskOutput,
@@ -25,6 +24,13 @@ import {
 } from "./Anthropic_CacheCheckpoint";
 import { getClient, getMaxTokens, getModelName } from "./Anthropic_Client";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
+import type { NativeBlock } from "./Anthropic_NativeTurn";
+import {
+  buildAnthropicMessages,
+  omitThinkingUnlessReplayAllowed,
+  sendWithThinkingRetry,
+  serializeNativeTurn,
+} from "./Anthropic_NativeTurn";
 import { maybeEmitAnthropicRefusal } from "./Anthropic_Refusal";
 import {
   anthropicAcceptsForcedToolChoice,
@@ -32,194 +38,6 @@ import {
 } from "./Anthropic_RequestParams";
 import { applyAnthropicThinkingParams } from "./Anthropic_Thinking";
 import { createAnthropicUsageCollector } from "./Anthropic_Usage";
-
-/**
- * Anthropic rejects empty text blocks and empty content arrays on non-final
- * messages, and hand-built or previously recorded checkpoint prefixes may
- * still carry them: drop empty text blocks while converting, and skip any
- * message whose content ends up empty.
- */
-function isEmptyTextBlock(block: { type?: unknown; text?: unknown }): boolean {
-  return block.type === "text" && (block.text === undefined || block.text === "");
-}
-
-/**
- * Whether a stored block is one of the kinds this provider captures, with the
- * fields Anthropic requires of it. An empty text block is refused outright, and
- * one cannot be dropped from a signed turn, so a payload holding one (never
- * emitted here) is rebuilt instead; so is a tool_use without an input object.
- */
-function isReplayableBlock(block: unknown): boolean {
-  if (block === null || typeof block !== "object" || Array.isArray(block)) return false;
-  const b = block as Record<string, unknown>;
-  switch (b.type) {
-    case "text":
-      return typeof b.text === "string" && !isEmptyTextBlock(b);
-    case "thinking":
-      return (
-        typeof b.thinking === "string" && typeof b.signature === "string" && b.signature !== ""
-      );
-    case "redacted_thinking":
-      return typeof b.data === "string" && b.data !== "";
-    case "tool_use":
-      return (
-        typeof b.id === "string" &&
-        typeof b.name === "string" &&
-        b.input !== null &&
-        typeof b.input === "object" &&
-        !Array.isArray(b.input)
-      );
-    default:
-      return false;
-  }
-}
-
-/**
- * The turn a model produced, as the blocks the API returned in the order it
- * returned them — or `undefined` when the payload is unusable or the host
- * changed the turn's tool calls (an id, a name or an input) or its text, in
- * which case it is rebuilt from the message.
- */
-function parseOwnTurn(payload: string, content: ChatMessage["content"]): any[] | undefined {
-  let blocks: unknown;
-  try {
-    blocks = JSON.parse(payload);
-  } catch {
-    return undefined;
-  }
-  // Every block must be one this provider writes, carrying what Anthropic
-  // requires of it; anything else would be a 400 rather than a rebuilt turn.
-  if (!Array.isArray(blocks) || !blocks.every(isReplayableBlock)) return undefined;
-  // The payload's calls must be the message's calls exactly — id, name and
-  // input — or the replay would send a call the host has since changed.
-  const sent = blocks.filter((b) => b?.type === "tool_use") as Array<{
-    id?: unknown;
-    name?: unknown;
-    input?: unknown;
-  }>;
-  const calls = content.filter((b) => b.type === "tool_use");
-  if (sent.length !== calls.length) return undefined;
-  const same = sent.every(
-    (block, i) =>
-      block.id === calls[i]!.id &&
-      block.name === calls[i]!.name &&
-      JSON.stringify(block.input) === JSON.stringify(calls[i]!.input ?? {})
-  );
-  if (!same) return undefined;
-  // And its text must be the message's text: the turn's text arrives as its
-  // text blocks run together, so an edited reply rebuilds rather than replays.
-  const sentText = blocks
-    .filter((b) => b?.type === "text" && typeof b.text === "string")
-    .map((b) => (b as { text: string }).text)
-    .join("");
-  const messageText = content
-    .filter((b) => b.type === "text")
-    .map((b) => (b as { text: string }).text)
-    .join("");
-  if (sentText !== messageText) return undefined;
-  return blocks.length > 0 ? blocks : undefined;
-}
-
-/**
- * `nativeTurnProvider` is the key a reasoning block must carry to be replayed;
- * without it every assistant turn is rebuilt from its text and tool calls.
- */
-export function buildAnthropicMessages(
-  messages: ReadonlyArray<ChatMessage> | undefined,
-  prompt: unknown,
-  nativeTurnProvider: string | undefined
-): any[] {
-  if (!messages || messages.length === 0) {
-    return [{ role: "user", content: prompt }];
-  }
-  const out: any[] = [];
-  for (const msg of messages) {
-    if (msg.role === "user") {
-      const blocks = msg.content
-        .filter((b) => b.type !== "reasoning")
-        .map((b) => {
-          if (b.type === "text") return { type: "text", text: b.text };
-          if (b.type === "image") {
-            return {
-              type: "image",
-              source: { type: "base64", media_type: b.mimeType, data: b.data },
-            };
-          }
-          return b;
-        })
-        .filter((b) => !isEmptyTextBlock(b));
-      if (blocks.length === 0) continue;
-      out.push({ role: "user", content: blocks });
-    } else if (msg.role === "assistant") {
-      // The model's own turn, replayed exactly as it produced it: a thinking
-      // block's signature binds it to the conversation before it, so its text,
-      // the tool inputs and the block order are sent unchanged — and only while
-      // the calls still match, since a host that renamed one changed the turn.
-      const own =
-        nativeTurnProvider === undefined
-          ? undefined
-          : msg.content.find(
-              (b): b is Extract<ChatMessage["content"][number], { type: "reasoning" }> =>
-                b.type === "reasoning" &&
-                b.provider === nativeTurnProvider &&
-                b.payload !== undefined
-            );
-      const replayed = own ? parseOwnTurn(own.payload!, msg.content) : undefined;
-      if (replayed) {
-        out.push({ role: "assistant", content: replayed });
-        continue;
-      }
-      // Reasoning another provider streamed as text has no Anthropic form (its
-      // thinking blocks are signed), and an unknown block is a 400.
-      const blocks = msg.content
-        .filter((b) => b.type !== "reasoning")
-        .map((b) => {
-          if (b.type === "text") return { type: "text", text: b.text };
-          if (b.type === "tool_use") {
-            return { type: "tool_use", id: b.id, name: b.name, input: b.input };
-          }
-          return b;
-        })
-        .filter((b) => !isEmptyTextBlock(b));
-      if (blocks.length === 0) continue;
-      out.push({ role: "assistant", content: blocks });
-    } else if (msg.role === "tool") {
-      const blocks = msg.content
-        .filter(
-          (b): b is Extract<ChatMessage["content"][number], { type: "tool_result" }> =>
-            b.type === "tool_result"
-        )
-        .map((b) => {
-          const content = b.content
-            .map((inner) => {
-              if (inner.type === "text") return { type: "text", text: inner.text };
-              if (inner.type === "image") {
-                return {
-                  type: "image",
-                  source: { type: "base64", media_type: inner.mimeType, data: inner.data },
-                };
-              }
-              return inner;
-            })
-            .filter((inner) => !isEmptyTextBlock(inner));
-          // A tool that returned nothing still answers its call: `content` is
-          // optional on a tool_result, where an empty text block is a 400.
-          return {
-            type: "tool_result",
-            tool_use_id: b.tool_use_id,
-            ...(content.length > 0 ? { content } : {}),
-            ...(b.is_error ? { is_error: true } : {}),
-          };
-        });
-      if (blocks.length === 0) continue;
-      out.push({ role: "user", content: blocks });
-    } else if (msg.role === "system") {
-      // System prompts are handled separately via params.system; skip here.
-      continue;
-    }
-  }
-  return out;
-}
 
 /**
  * Per content-block streaming state. A tool-use block owns an incremental JSON
@@ -234,84 +52,6 @@ type AnthropicBlockMeta =
       readonly json: PartialJsonStream;
     }
   | { readonly type: "text" };
-
-/** A content block as the API produced it, accumulated for replay. */
-type NativeBlock =
-  | { type: "thinking"; thinking: string; signature: string }
-  | { type: "redacted_thinking"; data: string }
-  | { type: "text"; text: string }
-  | { type: "tool_use"; id: string; name: string; raw: string };
-
-const THINKING_BLOCK_TYPES: ReadonlySet<string> = new Set(["thinking", "redacted_thinking"]);
-
-/** Anthropic's 400 for a replayed thinking block whose signature no longer matches. */
-function isThinkingSignatureError(err: unknown): boolean {
-  const e = err as { status?: unknown; message?: unknown } | undefined;
-  return (
-    e?.status === 400 &&
-    typeof e.message === "string" &&
-    e.message.includes("Invalid `signature` in `thinking` block")
-  );
-}
-
-/**
- * The messages with every thinking block removed (a message left empty is
- * dropped), or `undefined` when there was none to remove — a request without
- * thinking cannot have been rejected for it, so there is nothing to retry.
- */
-function withoutThinking(messages: readonly any[]): any[] | undefined {
-  const out: any[] = [];
-  let removed = false;
-  for (const msg of messages) {
-    if (msg?.role !== "assistant" || !Array.isArray(msg.content)) {
-      out.push(msg);
-      continue;
-    }
-    const content = msg.content.filter((b: any) => !THINKING_BLOCK_TYPES.has(b?.type));
-    if (content.length !== msg.content.length) removed = true;
-    if (content.length > 0) out.push({ ...msg, content });
-  }
-  return removed ? out : undefined;
-}
-
-/**
- * The reply's blocks in index order as the API produced them, or `undefined`
- * when there is nothing to replay or the turn cannot be replayed verbatim: a
- * tool input that cannot be parsed from its raw JSON, a thinking block that
- * never received its signature, or an empty text block that must be dropped
- * ahead of a thinking block (the signature binds the blocks before it). The
- * replay must carry exactly what the model wrote, so a guess is worse than
- * rebuilding the turn.
- */
-function serializeNativeTurn(native: ReadonlyMap<number, NativeBlock>): string | undefined {
-  const ordered = [...native.entries()].sort((a, b) => a[0] - b[0]).map(([, block]) => block);
-  let lastThinking = -1;
-  ordered.forEach((block, i) => {
-    if (THINKING_BLOCK_TYPES.has(block.type)) lastThinking = i;
-  });
-  const blocks: unknown[] = [];
-  for (const [i, block] of ordered.entries()) {
-    if (block.type === "tool_use") {
-      let input: unknown;
-      try {
-        input = block.raw ? JSON.parse(block.raw) : {};
-      } catch {
-        return undefined;
-      }
-      blocks.push({ type: "tool_use", id: block.id, name: block.name, input });
-    } else if (block.type === "text") {
-      // The API rejects an empty text block, so one is dropped — which is only
-      // faithful when no thinking block follows it.
-      if (block.text !== "") blocks.push(block);
-      else if (i < lastThinking) return undefined;
-    } else if (block.type === "thinking" && block.signature === "") {
-      return undefined;
-    } else {
-      blocks.push(block);
-    }
-  }
-  return blocks.length > 0 ? JSON.stringify(blocks) : undefined;
-}
 
 function mapAnthropicToolChoice(
   toolChoice: string | undefined
@@ -372,25 +112,6 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
   applyAnthropicThinkingParams(params, model);
   applyAnthropicSamplingParams(params, input, model);
 
-  // A forced tool choice suppresses legacy extended thinking (Anthropic rejects
-  // the combination), but the history may hold signed thinking blocks from an
-  // earlier auto-choice turn for this same model. Sending those blocks without
-  // thinking enabled is a 400 the signature retry below does not handle, so
-  // strip them up front. Scoped to the suppression case — thinking absent or
-  // explicitly disabled, with no effort configured either — so an adaptive run
-  // (thinking or output_config.effort present) keeps replaying its turn
-  // verbatim.
-  const thinkingType = (params.thinking as { type?: string } | undefined)?.type;
-  if (
-    (toolChoice?.type === "any" || toolChoice?.type === "tool") &&
-    (params.thinking === undefined || thinkingType === "disabled") &&
-    (params.output_config as { effort?: unknown } | undefined)?.effort === undefined &&
-    Array.isArray(params.messages)
-  ) {
-    const stripped = withoutThinking(params.messages);
-    if (stripped !== undefined) params.messages = stripped;
-  }
-
   if (input.systemPrompt) {
     params.system = input.systemPrompt;
   }
@@ -423,6 +144,14 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
       annotateLastBlock(params.messages[params.messages.length - 1]);
     }
   }
+
+  // A request that runs without thinking cannot carry signed thinking blocks:
+  // the history may hold them from an earlier round of this same model that
+  // ran with thinking (an auto-choice round, before a forced choice suppressed
+  // legacy extended thinking, or before the setting changed), and the
+  // checkpoint prefix may too. Sending them is a 400 the signature retry below
+  // does not handle, so they go before the request.
+  omitThinkingUnlessReplayAllowed(params);
 
   /** Whether anything has reached the consumer, since a retry after output would repeat it. */
   let emitted = false;
@@ -566,18 +295,8 @@ export const Anthropic_ToolCalling_Stream: AiProviderRunFn<
     });
   };
 
-  try {
-    await consume(params);
-  } catch (err) {
-    // A replayed thinking block whose signature no longer matches is a 400
-    // decided before any output; the documented recovery is to send the turn
-    // without its thinking, once.
-    if (emitted || !isThinkingSignatureError(err) || !Array.isArray(params.messages)) throw err;
-    const stripped = withoutThinking(params.messages);
-    if (stripped === undefined) throw err;
-    getLogger().warn("Anthropic rejected replayed thinking; retrying without it.", {
-      model: modelName,
-    });
-    await consume({ ...params, messages: stripped });
-  }
+  // A replayed thinking block whose signature no longer matches is a 400
+  // decided before any output; the documented recovery is to send the turn
+  // without its thinking, once.
+  await sendWithThinkingRetry(params, consume, () => emitted, modelName);
 };
