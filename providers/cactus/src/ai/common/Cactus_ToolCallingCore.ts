@@ -6,6 +6,7 @@
 
 import type {
   AiProviderRunFn,
+  ChatMessage,
   ToolCallingTaskInput,
   ToolCallingTaskOutput,
   ToolCalls,
@@ -39,45 +40,55 @@ function buildToolsJson(tools: ReadonlyArray<ToolDefinition>): string {
  * within the same request can lean on the prompt (a review asking the model to
  * check its answer against what it was asked), so the prompt goes ahead of it
  * whenever the two differ. Earlier requests in the history are left out, but
- * everything after the latest user turn (tool results, assistant text) is kept:
- * the engine is stateless, so that tail is its only record of tool output.
+ * everything after the latest user turn (calls, their results, assistant text)
+ * is kept: the engine is stateless, so that tail is its only record of tool output.
  */
 function promptText(input: ToolCallingTaskInput): string {
   const query = queryText(input);
   return input.systemPrompt ? `${input.systemPrompt}\n\n${query}` : query;
 }
 
-function toolResultText(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") continue;
-    const record = block as {
-      readonly type?: unknown;
-      readonly content?: unknown;
-      readonly text?: unknown;
-    };
-    if (record.type === "tool_result" && Array.isArray(record.content)) {
-      for (const inner of record.content) {
-        if (
-          inner &&
-          typeof inner === "object" &&
-          (inner as { readonly type?: unknown }).type === "text"
-        ) {
-          const text = (inner as { readonly text?: unknown }).text;
-          if (typeof text === "string" && text.length > 0) parts.push(text);
-        }
+/** What a `tool_result` reads as when the tool returned nothing at all. */
+const NO_CONTENT = "(no content returned)";
+
+/**
+ * The tail after the latest user turn, one paragraph per piece: assistant text
+ * as written, each call as `Tool call: name(args)`, and each result labelled
+ * with the call it answers. The engine keeps no conversation, so this prose is
+ * its only record that a call was made and what came back — an unlabelled
+ * result reads as more question, and a result that returned nothing would
+ * otherwise vanish, leaving a query identical to the one that asked for the
+ * call, which asks for it again. An image is named, since the query is text.
+ */
+function renderToolExchange(tail: ReadonlyArray<ChatMessage>): string[] {
+  const names = new Map<string, string>();
+  const paragraphs: string[] = [];
+  for (const message of tail) {
+    if (message.role !== "assistant" && message.role !== "tool") continue;
+    for (const block of message.content) {
+      if (block.type === "text") {
+        if (message.role === "assistant" && block.text.length > 0) paragraphs.push(block.text);
+      } else if (block.type === "tool_use") {
+        names.set(block.id, block.name);
+        paragraphs.push(`Tool call: ${block.name}(${JSON.stringify(block.input ?? {})})`);
+      } else if (block.type === "tool_result") {
+        const body = block.content
+          .map((inner) =>
+            inner.type === "text"
+              ? inner.text
+              : inner.type === "image"
+                ? `[image content (${inner.mimeType}), not representable in this query]`
+                : JSON.stringify(inner)
+          )
+          .filter((text) => text.length > 0)
+          .join("\n");
+        const label = block.is_error === true ? "Tool error from" : "Tool result from";
+        const name = names.get(block.tool_use_id) ?? "tool";
+        paragraphs.push(`${label} ${name}: ${body.length > 0 ? body : NO_CONTENT}`);
       }
     }
   }
-  return parts.join("\n");
-}
-
-/** Text the engine should see from one history message after the latest user turn. */
-function tailMessageText(message: NonNullable<ToolCallingTaskInput["messages"]>[number]): string {
-  if (message.role === "tool") return toolResultText(message.content);
-  if (message.role === "assistant") return extractMessageText(message.content);
-  return "";
+  return paragraphs;
 }
 
 function queryText(input: ToolCallingTaskInput): string {
@@ -93,14 +104,11 @@ function queryText(input: ToolCallingTaskInput): string {
       if (messages[i].role !== "user") continue;
       const latest = extractMessageText(messages[i].content);
       const base = prompt !== "" && latest !== prompt ? `${prompt}\n\n${latest}` : latest;
-      // Stateless engine: everything after the latest user turn (tool results,
-      // assistant text) is the only record of what the tools returned. Without
-      // it a round after a tool runs repeats the original question alone and
-      // can repeat the same call instead of answering from its result.
-      const tail = messages
-        .slice(i + 1)
-        .map(tailMessageText)
-        .filter((text) => text !== "");
+      // Stateless engine: everything after the latest user turn (calls, their
+      // results, assistant text) is the only record of what the tools returned.
+      // Without it a round after a tool runs repeats the original question alone
+      // and can repeat the same call instead of answering from its result.
+      const tail = renderToolExchange(messages.slice(i + 1));
       if (tail.length === 0) return base;
       return base !== "" ? `${base}\n\n${tail.join("\n\n")}` : tail.join("\n\n");
     }

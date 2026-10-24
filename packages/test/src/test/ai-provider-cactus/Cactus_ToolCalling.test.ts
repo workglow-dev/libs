@@ -623,10 +623,39 @@ describe("Cactus_ToolCalling answers the latest user turn in light of the prompt
     expect(query).toBe("first\n\nsecond");
   });
 
-  it("sends the tool results after the latest user message", async () => {
+  it("sends the calls and their labelled results after the latest user message", async () => {
     expect(await queryFor({ messages: [user("first"), toolUse, toolResult] })).toBe(
-      "first\n\nsunny"
+      'first\n\nTool call: lookup_weather({"city":"Paris"})\n\nTool result from lookup_weather: sunny'
     );
+  });
+
+  it("says a call returned nothing rather than repeating the first round's query", async () => {
+    const empty = {
+      role: "tool",
+      content: [{ type: "tool_result", tool_use_id: "c1", content: [] }],
+    };
+    const query = await queryFor({ messages: [user("first"), toolUse, empty] });
+    expect(query).not.toBe(await queryFor({ messages: [user("first")] }));
+    expect(query).toContain("Tool result from lookup_weather: (no content returned)");
+  });
+
+  it("names an image a tool returned instead of dropping it", async () => {
+    const withImage = {
+      role: "tool",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "c1",
+          is_error: true,
+          content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+        },
+      ],
+    };
+    const query = await queryFor({ messages: [user("first"), toolUse, withImage] });
+    expect(query).toContain(
+      "Tool error from lookup_weather: [image content (image/png), not representable in this query]"
+    );
+    expect(query).not.toContain("AAAA");
   });
 
   it("leaves an earlier request in the chat history out of the query", async () => {
