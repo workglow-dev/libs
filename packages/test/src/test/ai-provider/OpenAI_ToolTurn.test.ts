@@ -19,14 +19,19 @@ const model = {
   title: MODEL_NAME,
   description: "",
   provider: OPENAI,
-  provider_config: { model_name: MODEL_NAME, api_key: "test-key", reasoning: { effort: "high" } },
+  provider_config: {
+    model_name: MODEL_NAME,
+    api_key: "test-key",
+    reasoning: { effort: "high", summary: "auto" },
+  },
   capabilities: ["text.generation", "tool-use"],
   metadata: {},
 } as never;
 
 /**
- * The reply as the Responses API streams it with encrypted reasoning asked
- * for: a reasoning item carrying its summary and `encrypted_content`, a message
+ * The reply as the Responses API streams it with encrypted reasoning and a
+ * reasoning summary asked for: a reasoning item carrying its summary and
+ * `encrypted_content`, a message
  * item, then each function call, each item finished by `output_item.done`.
  */
 function responsesEvents(reply: ScriptedReply): unknown[] {
@@ -36,7 +41,9 @@ function responsesEvents(reply: ScriptedReply): unknown[] {
     events.push(
       {
         type: "response.reasoning_summary_text.delta",
+        item_id: "rs_1",
         output_index: outputIndex,
+        summary_index: 0,
         delta: reply.reasoning,
       },
       {
@@ -158,10 +165,7 @@ runToolTurnConformance({
     };
   },
   turns,
-  reasoningStream: {
-    notForwarded:
-      "the Responses adapter ignores reasoning-summary events, so a summary reaches no port",
-  },
+  reasoningStream: "reasoning-port",
   reasoningReplay: {
     kind: "native",
     vendor: "openai",

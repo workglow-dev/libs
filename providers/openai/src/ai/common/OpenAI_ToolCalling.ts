@@ -20,14 +20,20 @@ import {
 } from "@workglow/ai/provider-utils";
 import { filterValidToolCalls, toOpenAIMessages } from "@workglow/ai/worker";
 import { mergeOpenAICheckpointPrefix, openAIConversationOptions } from "./OpenAI_CacheCheckpoint";
-import { finalizeResponsesRequest, getClient, getModelName } from "./OpenAI_Client";
+import {
+  finalizeResponsesRequest,
+  getClient,
+  getModelName,
+  requestReasoningSummary,
+} from "./OpenAI_Client";
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
 
 /**
  * Streaming run-fn for `["text.generation", "tool-use"]`. Calls the OpenAI
  * Responses endpoint with `stream: true` and forwards delta events via
  * {@link accumulateOpenAIResponsesStream}, which emits `text-delta` and tool-call
- * `object-delta` events plus a final empty `finish`. The turn's own output
+ * `object-delta` events plus a final empty `finish`. A reasoning summary, asked
+ * for only through `provider_config.reasoning.summary`, streams on `reasoning`. The turn's own output
  * items go back on the `nativeTurn` port only when the request asked for
  * encrypted reasoning, since a replayed reasoning item without it is looked up
  * by id and fails where the response is not stored.
@@ -75,6 +81,9 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
   if (input.maxTokens !== undefined) params.max_output_tokens = input.maxTokens;
   if (input.temperature !== undefined) params.temperature = input.temperature;
   finalizeResponsesRequest(model, params);
+  // A summary of the round's reasoning, when the model record opted into one,
+  // streams on the `reasoning` port.
+  requestReasoningSummary(model, params);
   // A reasoning model starts its thinking over every round unless it is handed
   // its encrypted reasoning back; the items come back on `nativeTurn`. The
   // input is written the way the checkpoint warm-up writes it, so a prefix
@@ -108,7 +117,7 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
       }
       emit(event);
     },
-    { promptText, nativeTurnProvider: nativeKey }
+    { promptText, nativeTurnProvider: nativeKey, forwardReasoning: true }
   );
   emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput, usage });
 };
