@@ -16,6 +16,7 @@ import type {
 import {
   createEstimatedOutputUsageReporter,
   extractMessageText,
+  textOnlyToolResult,
   toolChoiceForcesToolCall,
 } from "@workglow/ai/provider-utils";
 import { filterValidToolCalls, sanitizeToolArgs } from "@workglow/ai/worker";
@@ -169,18 +170,7 @@ function messagesToPureChatHistory(
           // The result is a string, so an image cannot ride along. Say it was
           // dropped rather than inlining its base64 into the prompt, in the place
           // it held among the result's blocks.
-          const lines: string[] = [];
-          for (const inner of block.content) {
-            if (inner.type === "text") {
-              if (inner.text) lines.push(inner.text);
-            } else if (inner.type === "image") {
-              lines.push(`[${inner.mimeType} image returned; this model reads text only]`);
-            } else {
-              // Any other block is data the tool returned; it goes as JSON.
-              lines.push(JSON.stringify(inner));
-            }
-          }
-          fnCall.result = lines.join("\n");
+          fnCall.result = textOnlyToolResult(block.content);
         }
       }
       continue;
