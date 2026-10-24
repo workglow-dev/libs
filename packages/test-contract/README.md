@@ -197,7 +197,7 @@ down rather than a field left out. Which provider replays what:
 | Provider         | `reasoningStream`                     | `reasoningReplay`                                          | `toolResultImages` |
 | ---------------- | ------------------------------------- | ---------------------------------------------------------- | ------------------ |
 | Anthropic        | reasoning port                        | `native` (`anthropic:<model>`, content blocks)             | `in-result`        |
-| OpenAI           | not forwarded (summaries are ignored) | `native` (`openai:<model>`, Responses output items)        | `user-turn-after`  |
+| OpenAI           | reasoning port, when a summary is set | `native` (`openai:<model>`, Responses output items)        | `user-turn-after`  |
 | OpenRouter       | reasoning port                        | `native` (`openrouter:<model>`, `reasoning_details`)       | `user-turn-after`  |
 | Gemini 3+        | reasoning port                        | `call-signature` (`thoughtSignature`)                      | `in-result`        |
 | Gemini 2.5       | reasoning port                        | `call-signature` (`thoughtSignature`)                      | `user-turn-after`  |

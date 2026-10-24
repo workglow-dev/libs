@@ -20,6 +20,7 @@ import {
   _testOnly as clientTestOnly,
   finalizeResponsesRequest,
   getReasoningConfig,
+  requestReasoningSummary,
   resolvePromptCacheKey,
 } from "./common/OpenAI_Client";
 import { OPENAI_RUN_FNS } from "./common/OpenAI_JobRunFns";
@@ -42,6 +43,7 @@ export const _testOnly = {
   OPENAI_RUN_FNS,
   finalizeResponsesRequest,
   getReasoningConfig,
+  requestReasoningSummary,
   resolvePromptCacheKey,
   resolveOpenAiTemperatureWithReasoning,
   isStrictCompatibleSchema,
