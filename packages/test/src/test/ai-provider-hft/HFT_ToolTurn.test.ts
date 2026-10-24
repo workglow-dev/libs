@@ -98,6 +98,7 @@ runToolTurnConformance({
   reasoningReplay: { kind: "text" },
   toolResultImages: {
     kind: "text-only",
-    reason: "the ONNX text-generation pipeline renders a chat template, which takes no images",
+    reason:
+      "the ONNX text-generation pipeline renders a chat template, which takes no images, so the result names the image in its place",
   },
 });

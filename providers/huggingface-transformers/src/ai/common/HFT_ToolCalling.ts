@@ -22,6 +22,7 @@ import {
   getAvailableParsers,
   getGenerationPrefix,
   parseToolCalls,
+  textOnlyToolResult,
 } from "@workglow/ai/provider-utils";
 import {
   buildToolDescription,
@@ -157,7 +158,8 @@ function resolveHFTToolsAndMessages(
  * Unlike `toTextFlatMessages` (which flattens everything to `{role, content}`
  * strings), this preserves tool_calls on assistant messages and the tool name
  * on tool-result messages — both required by HFT chat templates that support
- * tool calling. An assistant turn's reasoning rides as `reasoning_content`,
+ * tool calling. A tool result is text only, an image in it named by
+ * {@link textOnlyToolResult}. An assistant turn's reasoning rides as `reasoning_content`,
  * which Qwen3-style templates read to keep the thinking of the current tool
  * loop in the rendered history; templates that do not know it ignore it.
  */
@@ -219,14 +221,12 @@ export function buildHFTMessages(
     } else if (msg.role === "tool") {
       for (const b of msg.content) {
         if (b.type !== "tool_result") continue;
-        const text = b.content
-          .filter((inner) => inner.type === "text")
-          .map((inner) => (inner as { type: "text"; text: string }).text)
-          .join("");
+        // A chat template takes a tool result as text, so an image the tool
+        // returned is named in its place rather than left out without a word.
         const name = toolNames.get(b.tool_use_id);
         out.push({
           role: "tool",
-          content: text,
+          content: textOnlyToolResult(b.content),
           tool_call_id: b.tool_use_id,
           ...(name !== undefined ? { name } : {}),
         });
