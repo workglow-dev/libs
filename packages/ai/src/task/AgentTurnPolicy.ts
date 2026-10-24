@@ -46,6 +46,14 @@ export interface AgentTurnPolicyOptions {
   readonly turnSoFar: () => AgentTurnSoFar;
 }
 
+/**
+ * What follows a round in which the model answered without a tool: another
+ * message to it, or the end of the turn and how it is reported.
+ */
+export type AgentFollowUp =
+  | { readonly kind: "send"; readonly message: ChatMessage }
+  | { readonly kind: "end"; readonly stopReason: "answered" | "budget" };
+
 /** The time a turn has left, as the model is shown it: whole seconds, rounded down. */
 export function timeLeftNotice(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -89,32 +97,36 @@ export class AgentTurnPolicy {
 
   /**
    * After a round with no tool call: the user message to send before another
-   * round, or undefined to end the turn. A review is skipped on a turn with an
-   * `outputSchema` (that is `checkSubmission`'s job) and when no round, budget
-   * or time is left to act on it; a reminder only while the budget is not spent.
+   * round, or how the turn ends.
+   *
+   * The model has answered, so the turn ends `"answered"` unless it still owes
+   * a submission the budget will not let it be asked for. A review is optional,
+   * so it is skipped, and the answer stands, on a turn with an `outputSchema`
+   * (that is `checkSubmission`'s job), with no round or time left, or once the
+   * loop would stop on its budget — a round it could not measure included. A
+   * reminder is the only way a typed turn gets its answer, so it is withheld
+   * only once the measured spend reaches a cap: there are at most two, and a
+   * provider that reports no usage would otherwise never be reminded at all.
    */
-  public followUp(round: number, budget: AgentTurnBudget): ChatMessage | undefined {
+  public followUp(round: number, budget: AgentTurnBudget): AgentFollowUp {
     const { reviewPrompt, maxRounds } = this.options;
     if (
       reviewPrompt &&
       !this.reviewed &&
       this.submitTool === undefined &&
       round + 1 < maxRounds &&
-      !budget.exhausted() &&
+      !budget.mustStopLoop() &&
       !budget.timeExhausted()
     ) {
       this.reviewed = true;
-      return { role: "user", content: [{ type: "text", text: reviewPrompt }] };
+      return send(reviewPrompt);
     }
-    if (
-      this.submitTool !== undefined &&
-      this.reminders < MAX_SUBMIT_REMINDERS &&
-      !budget.exhausted()
-    ) {
+    if (this.submitTool !== undefined && this.reminders < MAX_SUBMIT_REMINDERS) {
+      if (budget.exhausted()) return { kind: "end", stopReason: "budget" };
       this.reminders++;
-      return { role: "user", content: [{ type: "text", text: SUBMIT_REMINDER }] };
+      return send(SUBMIT_REMINDER);
     }
-    return undefined;
+    return { kind: "end", stopReason: "answered" };
   }
 
   /**
@@ -170,6 +182,10 @@ export class AgentTurnPolicy {
     this.answer = { value };
     return undefined;
   }
+}
+
+function send(text: string): AgentFollowUp {
+  return { kind: "send", message: { role: "user", content: [{ type: "text", text }] } };
 }
 
 /**

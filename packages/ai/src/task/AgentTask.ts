@@ -140,7 +140,7 @@ export const AgentInputSchema = {
       type: "integer",
       title: "Max Input Tokens",
       description:
-        "Prompt tokens, cached or not, summed over the turn's rounds, after which it stops with stopReason budget. An estimate counts like a stated figure. Fails closed: a round whose provider reported no prompt count cannot be counted, so the turn stops with stopReason budget after that round",
+        "Prompt tokens, cached or not, summed over the turn's rounds, after which no further round starts and the turn stops with stopReason budget. An estimate counts like a stated figure. Fails closed: after a round whose provider reported no prompt count, the turn starts no further tool round and stops with stopReason budget. A round in which the model answered without a tool still ends answered, since the answer is complete; budget is reported there only when an outputSchema turn could not be reminded to submit because the counted tokens reached the cap",
       minimum: 1,
       "x-ui-group": "Configuration",
     },
@@ -148,7 +148,7 @@ export const AgentInputSchema = {
       type: "number",
       title: "Max Cost (USD)",
       description:
-        "Estimated spend after which the turn stops with stopReason budget. Needs a price card for the model. Fails closed: a round whose usage the provider did not report, or reported only as an estimate, cannot be priced, so the turn stops with stopReason budget after that round",
+        "Estimated spend after which no further round starts and the turn stops with stopReason budget. Needs a price card for the model. Fails closed: after a round whose usage the provider did not report, or reported only as an estimate, the turn starts no further tool round and stops with stopReason budget; costUsd is then absent. A round in which the model answered without a tool still ends answered, since the answer is complete; budget is reported there only when an outputSchema turn could not be reminded to submit because the priced spend reached the cap",
       exclusiveMinimum: 0,
       "x-ui-group": "Configuration",
     },
@@ -219,7 +219,7 @@ export const AgentOutputSchema = {
       type: "string",
       title: "Stop Reason",
       description:
-        '"answered" when the model replied without asking for a tool, "submitted" when it submitted an answer that passed outputSchema, "budget" when a token, cost or time budget ran out, "max-rounds" when it ran out of rounds first',
+        '"answered" when the model replied without asking for a tool, "submitted" when it submitted an answer that passed outputSchema, "budget" when a token, cost or time budget stopped a turn that would otherwise have gone on, "max-rounds" when it ran out of rounds first',
       enum: ["answered", "submitted", "budget", "max-rounds"],
     },
     object: {
@@ -532,13 +532,13 @@ export class AgentTask extends Task<AgentTaskInput, AgentTaskOutput, AgentTaskCo
       }
       if (calls.length === 0) {
         record([]);
-        const followUp = policy.followUp(round, budget);
-        if (followUp !== undefined) {
-          messages.push(followUp);
+        const next = policy.followUp(round, budget);
+        if (next.kind === "send") {
+          messages.push(next.message);
           yield transcript();
           continue;
         }
-        yield finish(budget.exhausted() ? "budget" : "answered");
+        yield finish(next.stopReason);
         return;
       }
 

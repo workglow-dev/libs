@@ -68,17 +68,18 @@ describe("AgentTurnBudget", () => {
       expect(budget.exhausted()).toBe(true);
     });
 
-    it("fails closed on a round that reported no usage", () => {
+    it("stops the loop after a round that reported no usage, without calling the cap spent", () => {
       const budget = new AgentTurnBudget(limits, undefined);
       charge(budget, undefined);
-      expect(budget.exhausted()).toBe(true);
       expect(budget.mustStopLoop()).toBe(true);
+      expect(budget.exhausted()).toBe(false);
     });
 
-    it("fails closed on a round that counted only its output", () => {
+    it("stops the loop after a round that counted only its output", () => {
       const budget = new AgentTurnBudget(limits, undefined);
       charge(budget, usage(undefined, 10));
-      expect(budget.exhausted()).toBe(true);
+      expect(budget.mustStopLoop()).toBe(true);
+      expect(budget.exhausted()).toBe(false);
     });
   });
 
@@ -101,13 +102,20 @@ describe("AgentTurnBudget", () => {
       expect(budget.exhausted()).toBe(true);
     });
 
-    it("fails closed on a round it cannot price, and reports no total", () => {
+    it("stops the loop after a round it cannot price, and reports no total", () => {
       const budget = new AgentTurnBudget(limits, PRICING);
       charge(budget, usage(1_000, 10));
       charge(budget, { ...usage(10, 1), estimated: true });
       expect(budget.price({ ...usage(10, 1), estimated: true }, AT)).toBeUndefined();
-      expect(budget.exhausted()).toBe(true);
+      expect(budget.mustStopLoop()).toBe(true);
+      expect(budget.exhausted()).toBe(false);
       expect(budget.costUsd()).toBeUndefined();
+    });
+
+    it("leaves an unmeasured round alone when no cap asks for that measure", () => {
+      const tokensOnly = new AgentTurnBudget({ ...NO_LIMITS, maxInputTokens: 1_000_000 }, PRICING);
+      charge(tokensOnly, { ...usage(10, 1), estimated: true });
+      expect(tokensOnly.mustStopLoop()).toBe(false);
     });
   });
 

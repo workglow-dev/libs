@@ -20,24 +20,22 @@ export interface AgentBudgetLimits {
  * What one turn has spent against its caps: prompt tokens, priced spend, and
  * wall-clock time.
  *
- * A round the turn cannot measure counts as spending the cap it cannot measure,
- * never as free: one that reported no prompt count ends a `maxInputTokens` turn,
- * one that cannot be priced (no usage, or an estimate) ends a `maxCostUsd` turn.
- * Adding nothing for either would let a capped turn run every round for free.
- *
  * Three questions are asked of it, and kept apart on purpose:
  *
  * - {@link timeExhausted} — whether a model call may start at a given moment.
  *   Asked before every round and every retry, since a call started past the
  *   deadline is one the budget no longer covers.
  * - {@link mustStopLoop} — asked by the loop once a round's tool results are
- *   recorded: whether another round may start.
+ *   recorded: whether another round may start. A round the turn cannot
+ *   measure counts here as spending the cap it cannot measure, never as free:
+ *   one that reported no prompt count ends a `maxInputTokens` turn, one that
+ *   cannot be priced (no usage, or an estimate) ends a `maxCostUsd` turn.
+ *   Adding nothing for either would let a capped turn run every round for free.
  * - {@link exhausted} — asked on the answer path, once the model has replied
- *   without a tool: whether the turn's caps are spent, which decides whether
- *   a follow-up prompt is worth sending and how the turn reports its end.
- *
- * The last two give the same answer today; they are separate so the answer
- * path can change what it reports without moving where the loop stops.
+ *   without a tool: whether what was measured reached a cap. A round that could
+ *   not be measured is not evidence the cap was passed, and the model has
+ *   finished, so it neither turns the answer into a `"budget"` stop nor
+ *   withholds the bounded reminders that ask for a submission.
  */
 export class AgentTurnBudget {
   /** When the turn's time runs out; undefined without `maxDurationMs`. */
@@ -95,27 +93,31 @@ export class AgentTurnBudget {
     return this.deadline !== undefined && at >= this.deadline;
   }
 
-  /** Whether a token or cost cap is spent, counting a round it could not measure as spending it. */
+  /** Whether the spend the turn measured has reached a token or cost cap. */
   public exhausted(): boolean {
-    return this.capSpent();
+    const { maxInputTokens, maxCostUsd } = this.limits;
+    return (
+      (maxInputTokens !== undefined && this.spentTokens >= maxInputTokens) ||
+      (maxCostUsd !== undefined && this.spentUsd >= maxCostUsd)
+    );
   }
 
-  /** Whether the loop must end the turn after a round whose tool results are recorded. */
+  /**
+   * Whether the loop must end the turn after a round whose tool results are
+   * recorded: a cap is {@link exhausted}, or a round could not be measured
+   * against it.
+   */
   public mustStopLoop(): boolean {
-    return this.capSpent();
+    const { maxInputTokens, maxCostUsd } = this.limits;
+    return (
+      this.exhausted() ||
+      (maxInputTokens !== undefined && this.uncountedRound) ||
+      (maxCostUsd !== undefined && this.unpricedRound)
+    );
   }
 
   /** The turn's spend so far; undefined before any round, or once any round could not be priced. */
   public costUsd(): number | undefined {
     return this.costKnown && this.rounds > 0 ? this.spentUsd : undefined;
-  }
-
-  private capSpent(): boolean {
-    const { maxInputTokens, maxCostUsd } = this.limits;
-    return (
-      (maxInputTokens !== undefined &&
-        (this.uncountedRound || this.spentTokens >= maxInputTokens)) ||
-      (maxCostUsd !== undefined && (this.unpricedRound || this.spentUsd >= maxCostUsd))
-    );
   }
 }

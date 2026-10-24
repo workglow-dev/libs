@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { AgentTurnBudget } from "../AgentTurnBudget";
-import type { AgentTurnPolicyOptions } from "../AgentTurnPolicy";
+import type { AgentFollowUp, AgentTurnPolicyOptions } from "../AgentTurnPolicy";
 import { AgentTurnPolicy, MAX_SUBMISSION_REJECTIONS, timeLeftNotice } from "../AgentTurnPolicy";
 import type { AgentToolRecord } from "../AgentTurnRecord";
 import { AGENT_SUBMIT_TOOL_NAME } from "../AgentTurnRecord";
@@ -111,53 +111,80 @@ describe("AgentTurnPolicy", () => {
   });
 
   describe("followUp", () => {
+    const sent = (next: AgentFollowUp): string => {
+      if (next.kind !== "send") throw new Error(`expected a message, got ${next.stopReason}`);
+      return textOf(next.message);
+    };
+    const ANSWERED: AgentFollowUp = { kind: "end", stopReason: "answered" };
+    const BUDGET: AgentFollowUp = { kind: "end", stopReason: "budget" };
+
+    function tokenBudget(charged: Parameters<AgentTurnBudget["record"]>[0]): AgentTurnBudget {
+      const budget = new AgentTurnBudget(
+        { maxInputTokens: 1_000, maxCostUsd: undefined, maxDurationMs: undefined },
+        undefined
+      );
+      budget.record(charged, undefined);
+      return budget;
+    }
+    const spentUsage = {
+      input: 2_000,
+      cached: 0,
+      output: 1,
+      cacheWrite: 0,
+      reasoning: undefined,
+      total: undefined,
+      extra: undefined,
+    };
+
     it("asks for a review once, the first time the model answers", () => {
       const turn = policy({ reviewPrompt: "Check it." });
-      expect(textOf(turn.followUp(0, unlimited()))).toBe("Check it.");
-      expect(turn.followUp(1, unlimited())).toBeUndefined();
+      expect(sent(turn.followUp(0, unlimited()))).toBe("Check it.");
+      expect(turn.followUp(1, unlimited())).toEqual(ANSWERED);
     });
 
-    it("sends no review with no round, budget or time left to act on it", () => {
-      expect(policy({ reviewPrompt: "Check it.", maxRounds: 1 }).followUp(0, unlimited())).toBe(
-        undefined
+    it("sends no review with no round, budget or time left to act on it, and keeps the answer", () => {
+      expect(policy({ reviewPrompt: "Check it.", maxRounds: 1 }).followUp(0, unlimited())).toEqual(
+        ANSWERED
       );
-      const spent = new AgentTurnBudget(
-        { maxInputTokens: 1, maxCostUsd: undefined, maxDurationMs: undefined },
-        undefined
+      expect(policy({ reviewPrompt: "Check it." }).followUp(0, tokenBudget(spentUsage))).toEqual(
+        ANSWERED
       );
-      spent.record(undefined, undefined);
-      expect(policy({ reviewPrompt: "Check it." }).followUp(0, spent)).toBeUndefined();
+      // A round it could not measure stops the loop, so it rules out the review too.
+      expect(policy({ reviewPrompt: "Check it." }).followUp(0, tokenBudget(undefined))).toEqual(
+        ANSWERED
+      );
       const late = new AgentTurnBudget(
         { maxInputTokens: undefined, maxCostUsd: undefined, maxDurationMs: 1 },
         undefined,
         0
       );
-      expect(policy({ reviewPrompt: "Check it." }).followUp(0, late)).toBeUndefined();
+      expect(policy({ reviewPrompt: "Check it." }).followUp(0, late)).toEqual(ANSWERED);
     });
 
     it("leaves the review to checkSubmission on a turn with an outputSchema", () => {
       const turn = policy({ reviewPrompt: "Check it.", outputSchema: SCHEMA });
-      expect(textOf(turn.followUp(0, unlimited()))).toContain(AGENT_SUBMIT_TOOL_NAME);
+      expect(sent(turn.followUp(0, unlimited()))).toContain(AGENT_SUBMIT_TOOL_NAME);
     });
 
-    it("reminds a model to submit twice, then lets the turn end", () => {
+    it("reminds a model to submit twice, then lets the turn end answered", () => {
       const turn = policy({ outputSchema: SCHEMA });
-      expect(textOf(turn.followUp(0, unlimited()))).toContain(AGENT_SUBMIT_TOOL_NAME);
-      expect(textOf(turn.followUp(1, unlimited()))).toContain(AGENT_SUBMIT_TOOL_NAME);
-      expect(turn.followUp(2, unlimited())).toBeUndefined();
+      expect(sent(turn.followUp(0, unlimited()))).toContain(AGENT_SUBMIT_TOOL_NAME);
+      expect(sent(turn.followUp(1, unlimited()))).toContain(AGENT_SUBMIT_TOOL_NAME);
+      expect(turn.followUp(2, unlimited())).toEqual(ANSWERED);
     });
 
-    it("sends no reminder once the budget is spent", () => {
-      const spent = new AgentTurnBudget(
-        { maxInputTokens: 1, maxCostUsd: undefined, maxDurationMs: undefined },
-        undefined
-      );
-      spent.record(undefined, undefined);
-      expect(policy({ outputSchema: SCHEMA }).followUp(0, spent)).toBeUndefined();
+    it("still reminds after a round it could not measure", () => {
+      const turn = policy({ outputSchema: SCHEMA });
+      expect(sent(turn.followUp(0, tokenBudget(undefined)))).toContain(AGENT_SUBMIT_TOOL_NAME);
     });
 
-    it("ends the turn when it has nothing to ask", () => {
-      expect(policy().followUp(0, unlimited())).toBeUndefined();
+    it("ends budget, sending no reminder, once the measured spend reaches a cap", () => {
+      expect(policy({ outputSchema: SCHEMA }).followUp(0, tokenBudget(spentUsage))).toEqual(BUDGET);
+    });
+
+    it("ends the turn answered when it has nothing to ask", () => {
+      expect(policy().followUp(0, unlimited())).toEqual(ANSWERED);
+      expect(policy().followUp(0, tokenBudget(spentUsage))).toEqual(ANSWERED);
     });
   });
 

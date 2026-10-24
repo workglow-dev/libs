@@ -535,6 +535,78 @@ describe("AgentTask turn controls", () => {
       expect(output.stopReason).toBe("max-rounds");
     });
 
+    it("reports an answer given in a round with no usage as answered, not budget", async () => {
+      // Nothing was measured, so nothing was spent past the cap: the model finished.
+      const called = script([{ text: "Final answer." }]);
+      const output = await new AgentTask().run(
+        { model: PRICED_MODEL, prompt: "?", tools: [], maxCostUsd: 1, approval: "never" },
+        { registry }
+      );
+      expect(called()).toBe(1);
+      expect(output.stopReason).toBe("answered");
+      expect(output.text).toBe("Final answer.");
+      expect(output.costUsd).toBeUndefined();
+    });
+
+    it("reports the same of maxInputTokens", async () => {
+      script([{ text: "Final answer." }]);
+      const output = await new AgentTask().run(
+        { model: MODEL, prompt: "?", tools: [], maxInputTokens: 1_000, approval: "never" },
+        { registry }
+      );
+      expect(output.stopReason).toBe("answered");
+    });
+
+    it("still reminds a model to submit when its rounds report no usage", async () => {
+      const called = script([
+        { text: "The answer is 3." },
+        { text: "Still 3." },
+        { calls: [{ id: "s", name: AGENT_SUBMIT_TOOL_NAME, input: { trust: 3 } }] },
+      ]);
+      const output = await new AgentTask().run(
+        {
+          model: PRICED_MODEL,
+          prompt: "?",
+          tools: [],
+          outputSchema: ANSWER_SCHEMA,
+          maxCostUsd: 1,
+          approval: "never",
+        },
+        { registry }
+      );
+      expect(called()).toBe(3);
+      expect(output.stopReason).toBe("submitted");
+      expect(output.object).toEqual({ trust: 3 });
+    });
+
+    it("withholds the reminder, and reports budget, once a measured cap is spent", async () => {
+      // The turn wanted another round for its answer and could not afford it.
+      const called = script([{ text: "The answer is 3.", usage: usage(2_000, 0, 10) }]);
+      const output = await new AgentTask().run(
+        {
+          model: MODEL,
+          prompt: "?",
+          tools: [],
+          outputSchema: ANSWER_SCHEMA,
+          maxInputTokens: 1_000,
+          approval: "never",
+        },
+        { registry }
+      );
+      expect(called()).toBe(1);
+      expect(output.stopReason).toBe("budget");
+      expect(output.object).toBeUndefined();
+    });
+
+    it("reports a plain answer as answered even when its round spent past the cap", async () => {
+      script([{ text: "Final answer.", usage: usage(2_000, 0, 10) }]);
+      const output = await new AgentTask().run(
+        { model: MODEL, prompt: "?", tools: [], maxInputTokens: 1_000, approval: "never" },
+        { registry }
+      );
+      expect(output.stopReason).toBe("answered");
+    });
+
     it("counts an estimated usage against maxInputTokens rather than stopping on it", async () => {
       // An estimate is something to count: the cap binds on it as on a stated
       // figure, where a round that reported nothing at all ends the turn.

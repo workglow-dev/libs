@@ -254,7 +254,13 @@ on a round they cannot measure**: a round reporting no prompt count (no usage, o
 ends a `maxInputTokens` turn `"budget"` after it, and a round that cannot be priced (no usage, or
 an `estimated` one) ends a `maxCostUsd` turn the same way — counting it as 0 would let a capped
 turn run to `maxRounds` for free. An estimated usage does count against `maxInputTokens`, which
-is why runtimes that report nothing (Cactus, Chrome AI) emit one on `finish`.
+is why runtimes that report nothing (Cactus, Chrome AI) emit one on `finish`. That rule stops a
+turn that would **go on**; it never relabels one that ended. A round in which the model answered
+without a tool ends `"answered"`, measured or not and over the cap or not, because the answer is
+complete and a host reading `"budget"` as "truncated" would discard it. `"budget"` on that path
+means only that an `outputSchema` turn still owed its submission and the measured spend had
+reached a cap, so it could not be reminded; after a round it merely could not measure it is still
+reminded (twice at most), while the optional review is skipped.
 Every round leaves an `AgentStep` on `steps` (timings, attempts, each tool's outcome and
 size, usage, cost) and rides on the `snapshot` beside `messages`; `costUsd` totals them when
 every round could be priced.
