@@ -194,22 +194,23 @@ every vendor without the suite knowing what a rebuilt turn looks like.
 Every provider states each declaration, so an opt-out is a reason written
 down rather than a field left out. Which provider replays what:
 
-| Provider         | `reasoningStream`                     | `reasoningReplay`                                          | `toolResultImages` |
-| ---------------- | ------------------------------------- | ---------------------------------------------------------- | ------------------ |
-| Anthropic        | reasoning port                        | `native` (`anthropic:<model>`, content blocks)             | `in-result`        |
-| OpenAI           | reasoning port, when a summary is set | `native` (`openai:<model>`, Responses output items)        | `user-turn-after`  |
-| OpenRouter       | reasoning port                        | `native` (`openrouter:<model>`, `reasoning_details`)       | `user-turn-after`  |
-| Gemini 3+        | reasoning port                        | `call-signature` (`thoughtSignature`)                      | `in-result`        |
-| Gemini 2.5       | reasoning port                        | `call-signature` (`thoughtSignature`)                      | `user-turn-after`  |
-| Ollama           | reasoning port                        | `text` (`thinking`)                                        | `user-turn-after`  |
-| HF Transformers  | reasoning port                        | `text` (`reasoning_content`)                               | `text-only`        |
-| llama.cpp server | reasoning port                        | `text` (`reasoning_content`)                               | `user-turn-after`  |
-| DeepSeek         | reasoning port                        | `text` (`reasoning_content`)                               | `text-only`        |
-| xAI              | reasoning port                        | `none` (chat completions read no reasoning back)           | `user-turn-after`  |
-| HF Inference     | reasoning port                        | `none` (the routed backend may refuse `reasoning_content`) | `user-turn-after`  |
-| node-llama-cpp   | reasoning port                        | `text` (ended `thought` segments)                          | `text-only`        |
-| Cactus           | reasoning port (`<think>`)            | `none` (one stateless query per round)                     | `text-only`        |
-| Chrome AI        | not forwarded (no reasoning channel)  | `none` (no reasoning returned)                             | `text-only`        |
+| Provider               | `reasoningStream`                     | `reasoningReplay`                                          | `toolResultImages` |
+| ---------------------- | ------------------------------------- | ---------------------------------------------------------- | ------------------ |
+| Anthropic              | reasoning port                        | `native` (`anthropic:<model>`, content blocks)             | `in-result`        |
+| OpenAI                 | reasoning port, when a summary is set | `native` (`openai:<model>`, Responses output items)        | `user-turn-after`  |
+| OpenRouter             | reasoning port                        | `native` (`openrouter:<model>`, `reasoning_details`)       | `user-turn-after`  |
+| Gemini 3+              | reasoning port                        | `call-signature` (`thoughtSignature`)                      | `in-result`        |
+| Gemini 2.5             | reasoning port                        | `call-signature` (`thoughtSignature`)                      | `user-turn-after`  |
+| Ollama                 | reasoning port                        | `text` (`thinking`)                                        | `user-turn-after`  |
+| HF Transformers (text) | reasoning port                        | `text` (`reasoning_content`)                               | `text-only`        |
+| HF Transformers (VLM)  | reasoning port                        | `text` (`reasoning_content`)                               | `user-turn-after`  |
+| llama.cpp server       | reasoning port                        | `text` (`reasoning_content`)                               | `user-turn-after`  |
+| DeepSeek               | reasoning port                        | `text` (`reasoning_content`)                               | `text-only`        |
+| xAI                    | reasoning port                        | `none` (chat completions read no reasoning back)           | `user-turn-after`  |
+| HF Inference           | reasoning port                        | `none` (the routed backend may refuse `reasoning_content`) | `user-turn-after`  |
+| node-llama-cpp         | reasoning port                        | `text` (ended `thought` segments)                          | `text-only`        |
+| Cactus                 | reasoning port (`<think>`)            | `none` (one stateless query per round)                     | `text-only`        |
+| Chrome AI              | not forwarded (no reasoning channel)  | `none` (no reasoning returned)                             | `text-only`        |
 
 Cactus and Chrome AI have no frame for a call or its result, so the tool
 exchange rides in the prompt as prose. Their shims read the turns off the

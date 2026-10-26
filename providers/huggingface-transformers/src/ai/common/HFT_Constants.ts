@@ -101,6 +101,7 @@ const AudioPipelineUseCase = {
 
 type MultimodalPipelineUseCase =
   | "document-question-answering" // https://huggingface.co/tasks/document-question-answering
+  | "image-text-to-text" // https://huggingface.co/tasks/image-text-to-text
   | "image-to-text" // https://huggingface.co/tasks/image-to-text
   | "zero-shot-audio-classification" // https://huggingface.co/tasks/zero-shot-audio-classification
   | "zero-shot-image-classification" // https://huggingface.co/tasks/zero-shot-image-classification
@@ -108,6 +109,7 @@ type MultimodalPipelineUseCase =
 
 const MultimodalPipelineUseCase = {
   "document-question-answering": "document-question-answering",
+  "image-text-to-text": "image-text-to-text",
   "image-to-text": "image-to-text",
   "zero-shot-audio-classification": "zero-shot-audio-classification",
   "zero-shot-image-classification": "zero-shot-image-classification",

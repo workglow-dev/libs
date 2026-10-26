@@ -21,6 +21,7 @@ import {
   withHftPipelineInUse,
 } from "./HFT_Pipeline";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
+import { refuseHftVisionModel } from "./HFT_VisionLanguage";
 
 /**
  * Decode is greedy unless the caller asks for sampling: `temperature` only
@@ -32,6 +33,7 @@ export const HFT_StructuredGeneration: AiProviderRunFn<
   StructuredGenerationTaskOutput,
   HfTransformersOnnxModelConfig
 > = async (input, model, signal, emit) => {
+  refuseHftVisionModel(model!, "HFT_StructuredGeneration");
   await withHftPipelineInUse(getPipelineCacheKey(model!), async () => {
     const generateText = (await getPipeline(model!, emit, {}, signal)) as TextGenerationPipeline;
     const { TextStreamer, InterruptableStoppingCriteria } = await loadTransformersSDK();

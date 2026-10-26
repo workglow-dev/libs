@@ -14,6 +14,7 @@ import type {
 } from "@workglow/ai";
 import { renderHftPrefixPrompt } from "./HFT_CacheCheckpoint";
 import type { HfTransformersOnnxModelConfig } from "./HFT_ModelSchema";
+import type { HftVisionLanguageModel } from "./HFT_Pipeline";
 import {
   deleteHftSession,
   getHftSession,
@@ -28,6 +29,13 @@ import { hftSamplingOptions } from "./HFT_Sampling";
 import type { HftStreamEmit } from "./HFT_Streaming";
 import { createStreamingTextStreamer, createTextStreamer } from "./HFT_Streaming";
 import { buildHFTMessages, mapHFTTools } from "./HFT_ToolCalling";
+import {
+  buildHftVisionMessages,
+  generateHftVision,
+  isHftVisionModel,
+  promptAsUserMessage,
+  renderHftVisionPrompt,
+} from "./HFT_VisionLanguage";
 
 export function resolveHftCheckpointSystemPrompt(
   inputSystemPrompt: string | undefined,
@@ -287,6 +295,54 @@ async function generateTurn(
   return accumulated;
 }
 
+/**
+ * One chat turn on a vision-language model: the images in the conversation go
+ * to the processor beside the rendered prompt. The whole conversation is
+ * encoded each turn — no KV session is attached or kept — and a checkpoint's
+ * prefix is rendered in full ahead of it (see {@link generateHftVision}).
+ */
+async function generateVisionTurn(
+  input: AiChatProviderInput,
+  model: HfTransformersOnnxModelConfig,
+  sessionContext: AiSessionContext | undefined,
+  emit: HftStreamEmit,
+  signal: AbortSignal | undefined,
+  onDelta: (text: string) => void
+): Promise<void> {
+  const vlm = (await getPipeline(model, emit, {}, signal)) as HftVisionLanguageModel;
+  const prefix = sessionContext?.prefix;
+  let conversation: ReturnType<typeof buildHftVisionMessages>;
+  if (prefix) {
+    const fromPrompt = promptAsUserMessage(input.prompt);
+    const tail: ReadonlyArray<ChatMessage> =
+      input.messages && input.messages.length > 0 ? input.messages : fromPrompt ? [fromPrompt] : [];
+    conversation = buildHftVisionMessages(
+      [...(prefix.messages ?? []), ...tail],
+      resolveHftCheckpointSystemPrompt(input.systemPrompt, prefix.systemPrompt),
+      undefined,
+      undefined
+    );
+  } else {
+    conversation = buildHftVisionMessages(
+      input.messages,
+      input.systemPrompt,
+      input.prompt,
+      undefined
+    );
+  }
+  const tools = prefix?.tools && prefix.tools.length > 0 ? mapHFTTools(prefix.tools) : undefined;
+  await generateHftVision({
+    vlm,
+    prompt: renderHftVisionPrompt(vlm, conversation.messages, tools),
+    images: conversation.images,
+    maxNewTokens: input.maxTokens ?? 1024,
+    sampling: hftSamplingOptions(input.temperature, "model-default"),
+    onText: onDelta,
+    emit,
+    signal,
+  });
+}
+
 export const HFT_Chat: AiProviderRunFn<
   AiChatProviderInput,
   AiChatProviderOutput,
@@ -296,9 +352,14 @@ export const HFT_Chat: AiProviderRunFn<
   // conversations are not held across turns; only active inference is
   // protected from concurrent LRU eviction.
   await withHftPipelineInUse(getPipelineCacheKey(model!), async () => {
-    await generateTurn(input, model!, sessionContext, emit, signal, (piece) => {
+    const onDelta = (piece: string): void => {
       emit({ type: "text-delta", port: "text", textDelta: piece });
-    });
+    };
+    if (isHftVisionModel(model!)) {
+      await generateVisionTurn(input, model!, sessionContext, emit, signal, onDelta);
+    } else {
+      await generateTurn(input, model!, sessionContext, emit, signal, onDelta);
+    }
     emit({ type: "finish", data: {} as AiChatProviderOutput });
   });
 };

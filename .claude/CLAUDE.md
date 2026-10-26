@@ -450,6 +450,15 @@ step: `describeModelProfileContract` (`packages/test/src/test/ai-provider/modelP
 fails when a priced model has no row or a row has no price and is not named unpriced, and
 asserts that every reader agrees with every row in every spelling.
 
+An HF Transformers model with `pipeline: "image-text-to-text"` is a vision-language model:
+transformers.js has no `pipeline()` for it, so `getPipeline` caches `{ processor, tokenizer, model }`
+(`AutoProcessor` + `AutoModelForImageTextToText`) under the same key, in-use count and LRU, and
+chat, text generation and tool calling hand its images to the processor (`HFT_VisionLanguage.ts`).
+Which argument a processor takes first differs by class (LFM2-VL and LLaVA take the images first).
+It keeps no KV session — image features sit in the positions a prefix cache would skip — so a
+checkpoint's prefix is rendered in full each round, and it declares neither `cache.checkpoint` nor
+the json-mode / rewriter / summary capabilities, whose run-fns drive a text pipeline.
+
 **`*_JobRunFns.ts` runs inside a worker** with its own `globalServiceRegistry`. Never read
 main-thread state (credential stores, service registries) there — resolve it in the task
 class (e.g. `AiTask.getJobInput()`) and pass it through the serialized job input.
@@ -505,10 +514,11 @@ every round, and a converter that reads `prompt` or flattens to text shows the m
 turn again and never a tool result. A history holding tool calls or tool results must never go
 through `toTextFlatMessages`; HF Transformers still uses it, but only on the path where the
 history has no tool messages and no reasoning yet, where it loses nothing. Tool-result images go
-in a user message after the tool message (OpenAI, xAI, OpenRouter, HF Inference, Ollama); Gemini 3+ takes them in
+in a user message after the tool message (OpenAI, xAI, OpenRouter, HF Inference, Ollama, and an HF
+Transformers vision-language model); Gemini 3+ takes them in
 `functionResponse.parts`, and older models, which reject that with HTTP 400, get a user turn of
 their own — beside the response they leak their thinking into the answer. A model that reads
-text only (DeepSeek, HF Transformers, node-llama-cpp, Cactus, Chrome AI) is shown the image named
+text only (DeepSeek, an HF Transformers text-generation model, node-llama-cpp, Cactus, Chrome AI) is shown the image named
 in the result (`textOnlyToolResult`, `@workglow/ai/provider-utils`), never sent it and never left
 without a word of it: a result missing what the tool returned is the one most likely to be
 called for again.

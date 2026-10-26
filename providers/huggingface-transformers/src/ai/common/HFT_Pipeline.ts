@@ -4,7 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { DynamicCache, PretrainedModelOptions, ProgressInfo } from "@huggingface/transformers";
+import type {
+  DynamicCache,
+  PreTrainedModel,
+  PreTrainedTokenizer,
+  PretrainedModelOptions,
+  Processor,
+  ProgressInfo,
+} from "@huggingface/transformers";
 import { isBrowserLike } from "@workglow/ai/provider-utils";
 import type { StreamPhase } from "@workglow/task-graph";
 import { getLogger } from "@workglow/util/worker";
@@ -521,8 +528,27 @@ export function abortableFetch(url: string, options?: RequestInit): Promise<Resp
   );
 }
 
+/**
+ * A vision-language model, loaded as its processor and model. transformers.js
+ * has no `pipeline()` for image-text-to-text, so {@link getPipeline} assembles
+ * one: the processor turns the rendered prompt and its images into model
+ * inputs, and `model.generate()` decodes. `tokenizer` is the processor's own,
+ * for the streamer and for a turn that carries no image.
+ */
+export interface HftVisionLanguageModel {
+  readonly task: "image-text-to-text";
+  readonly processor: Processor;
+  readonly tokenizer: PreTrainedTokenizer;
+  readonly model: PreTrainedModel;
+}
+
+/** What {@link getPipeline} caches: a transformers.js pipeline, or a vision-language model. */
+export type HftLoadedPipeline =
+  | Awaited<ReturnType<TransformersSDKModule["pipeline"]>>
+  | HftVisionLanguageModel;
+
 /** @internal Cached pipelines keyed by {@link getPipelineCacheKey}. Exported for unit tests. */
-export const pipelines = new Map<string, Awaited<ReturnType<TransformersSDKModule["pipeline"]>>>();
+export const pipelines = new Map<string, HftLoadedPipeline>();
 
 /**
  * Upper bound on cached pipelines. Each pipeline pins an ONNX session (WASM
@@ -1126,14 +1152,17 @@ const doGetPipeline = async (
 
   const pipelineType = model.provider_config.pipeline;
 
-  const { pipeline } = await loadTransformersSDK();
+  const sdk = await loadTransformersSDK();
 
   const logger = getLogger();
   const pipelineTimerLabel = `hft:pipeline:${cacheKey}`;
   logger.time(pipelineTimerLabel, { pipelineType, modelPath });
 
   try {
-    const result = await pipeline(pipelineType, model.provider_config.model_path, pipelineOptions);
+    const result: HftLoadedPipeline =
+      pipelineType === "image-text-to-text"
+        ? await loadVisionLanguageModel(sdk, modelPath, pipelineOptions)
+        : await sdk.pipeline(pipelineType, modelPath, pipelineOptions);
 
     // Flush pending throttled progress and clean up timer
     if (throttleTimer) {
@@ -1160,7 +1189,10 @@ const doGetPipeline = async (
     // means the model cache is incomplete (e.g. preprocessor_config.json was not
     // downloaded, likely because a previous download was aborted). Throw a specific
     // error so the job queue can retry and re-fetch the missing files.
-    if (IMAGE_PIPELINE_TYPES.has(pipelineType) && (result as any).processor == null) {
+    if (
+      IMAGE_PIPELINE_TYPES.has(pipelineType) &&
+      (result as { processor?: unknown }).processor == null
+    ) {
       throw new Error(
         `${HFT_NULL_PROCESSOR_PREFIX} Image processor not initialized for ` +
           `${pipelineType}/${modelPath}. Model cache may be incomplete.`
@@ -1188,3 +1220,54 @@ const doGetPipeline = async (
     random.seed(model.provider_config.seed ?? undefined);
   }
 };
+
+/**
+ * Load a vision-language model as processor + `AutoModelForImageTextToText`,
+ * in parallel as `pipeline()` loads its parts. The processor reads only small
+ * config and tokenizer files, so it is handed the revision and the raw progress
+ * callback; the model gets every pipeline option (dtype, device, external data
+ * format) and is what reports the aggregate `progress_total` a download is
+ * measured by.
+ *
+ * A processor without an image processor or a tokenizer means the cache is
+ * incomplete, which is reported as {@link HFT_NULL_PROCESSOR_PREFIX} so the job
+ * retries and re-fetches it. The model is released on any failure: one whose
+ * processor failed would otherwise pin its ONNX sessions with no cache entry
+ * left to evict.
+ */
+async function loadVisionLanguageModel(
+  sdk: TransformersSDKModule,
+  modelPath: string,
+  options: PretrainedModelOptions
+): Promise<HftVisionLanguageModel> {
+  const [processorResult, modelResult] = await Promise.allSettled([
+    sdk.AutoProcessor.from_pretrained(modelPath, {
+      revision: options.revision,
+      progress_callback: options.progress_callback,
+    }),
+    sdk.AutoModelForImageTextToText.from_pretrained(modelPath, options),
+  ]);
+  const release = async (): Promise<void> => {
+    if (modelResult.status !== "fulfilled") return;
+    try {
+      await modelResult.value.dispose();
+    } catch {
+      // Best-effort: the load already failed, and that failure is the one to report.
+    }
+  };
+  if (processorResult.status === "rejected") {
+    await release();
+    throw processorResult.reason;
+  }
+  if (modelResult.status === "rejected") throw modelResult.reason;
+  const processor = processorResult.value;
+  const tokenizer = processor.tokenizer;
+  if (processor.image_processor == null || tokenizer == null) {
+    await release();
+    throw new Error(
+      `${HFT_NULL_PROCESSOR_PREFIX} Image processor or tokenizer not initialized for ` +
+        `image-text-to-text/${modelPath}. Model cache may be incomplete.`
+    );
+  }
+  return { task: "image-text-to-text", processor, tokenizer, model: modelResult.value };
+}

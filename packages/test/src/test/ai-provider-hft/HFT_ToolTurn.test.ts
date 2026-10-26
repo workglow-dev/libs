@@ -13,6 +13,8 @@ import {
   pipelines,
 } from "../../../../../providers/huggingface-transformers/src/ai/common/HFT_Pipeline";
 import { HFT_ToolCalling } from "../../../../../providers/huggingface-transformers/src/ai/common/HFT_ToolCalling";
+import type { FakeRawImage } from "./fakeVisionModel";
+import { fakeVisionModel, spyOnRawImageDecode } from "./fakeVisionModel";
 
 // "qwen" in the path selects the Hermes-style `<tool_call>` parser family.
 const model = {
@@ -101,4 +103,74 @@ runToolTurnConformance({
     reason:
       "the ONNX text-generation pipeline renders a chat template, which takes no images, so the result names the image in its place",
   },
+});
+
+// A vision-language model of the same family, loaded as processor + model.
+const vlmModel = {
+  model_id: "hft-conformance-qwen-vl",
+  provider: "HF_TRANSFORMERS_ONNX",
+  provider_config: { model_path: "test-org/qwen-vl-fake", pipeline: "image-text-to-text" },
+} as never;
+
+/**
+ * One request to a vision-language model is two things the run-fn hands over
+ * separately: the messages it renders, with an `{ type: "image" }` placeholder
+ * where each image goes, and the images it passes the processor beside the
+ * rendered prompt. The processor expands each placeholder's image token, in
+ * order, into the next image's features, so the request is read the same way:
+ * each placeholder is given the image the processor received at that position.
+ */
+interface VisionRequest {
+  readonly messages: ReadonlyArray<{ role: WireTurn["role"]; content: unknown }>;
+  readonly images: ReadonlyArray<FakeRawImage>;
+}
+
+function visionTurns(request: unknown): WireTurn[] {
+  const { messages, images } = request as VisionRequest;
+  let next = 0;
+  return messages.map((message) => ({
+    role: message.role,
+    body: {
+      ...message,
+      content: Array.isArray(message.content)
+        ? (message.content as Array<{ type: string }>).map((part) =>
+            part.type === "image" ? { type: "image", data: images[next++]?.base64 } : part
+          )
+        : message.content,
+    },
+  }));
+}
+
+runToolTurnConformance({
+  name: "HF Transformers (vision-language)",
+  createHarness: async () => {
+    const sdk = await loadTransformersSDK();
+    await clearPipelineCache();
+    const restoreDecode = spyOnRawImageDecode(sdk);
+    const fake = fakeVisionModel();
+    pipelines.set(getPipelineCacheKey(vlmModel), fake.vlm as never);
+    return {
+      respond: (reply) => fake.reply(decodedPieces(reply)),
+      run: (request, emit) =>
+        HFT_ToolCalling(
+          { model: vlmModel, toolChoice: "auto", ...request } as never,
+          vlmModel,
+          new AbortController().signal,
+          emit as never
+        ),
+      sent: (): VisionRequest[] =>
+        fake.rendered.map((render, i) => ({
+          messages: render.messages as VisionRequest["messages"],
+          images: fake.processorCalls.find((call) => call.render === i)?.images ?? [],
+        })),
+      dispose: async () => {
+        restoreDecode();
+        await clearPipelineCache();
+      },
+    };
+  },
+  turns: visionTurns,
+  reasoningStream: "reasoning-port",
+  reasoningReplay: { kind: "text" },
+  toolResultImages: { kind: "user-turn-after" },
 });

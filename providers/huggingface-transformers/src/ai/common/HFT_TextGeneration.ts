@@ -6,7 +6,9 @@
 
 import type { Message, TextGenerationPipeline } from "@huggingface/transformers";
 import type {
+  AiEmit,
   AiProviderRunFn,
+  AiSessionContext,
   TextGenerationTaskInput,
   TextGenerationTaskOutput,
 } from "@workglow/ai";
@@ -16,7 +18,7 @@ import {
   resolveHftParityAnchor,
 } from "./HFT_CacheCheckpoint";
 import type { HfTransformersOnnxModelConfig } from "./HFT_ModelSchema";
-import type { HftProgressiveSession } from "./HFT_Pipeline";
+import type { HftProgressiveSession, HftVisionLanguageModel } from "./HFT_Pipeline";
 import {
   deleteHftSession,
   getHftSession,
@@ -30,12 +32,65 @@ import {
 } from "./HFT_Pipeline";
 import { hftSamplingOptions } from "./HFT_Sampling";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
+import { mapHFTTools } from "./HFT_ToolCalling";
+import {
+  buildHftVisionMessages,
+  generateHftVision,
+  isHftVisionModel,
+  renderHftVisionPrompt,
+} from "./HFT_VisionLanguage";
+
+/**
+ * Text generation on a vision-language model: the prompt as one user turn of
+ * its chat template, after a checkpoint's prefix when there is one. Greedy
+ * unless a temperature is asked for, as on a text model. The prefix is rendered
+ * in full rather than reused from a KV session, which a vision-language model
+ * neither reads nor keeps.
+ */
+async function generateVisionText(
+  input: TextGenerationTaskInput,
+  model: HfTransformersOnnxModelConfig,
+  signal: AbortSignal | undefined,
+  emit: AiEmit<TextGenerationTaskOutput>,
+  sessionContext: AiSessionContext | undefined
+): Promise<void> {
+  const vlm = (await getPipeline(model, emit, {}, signal)) as HftVisionLanguageModel;
+  const prefix = sessionContext?.prefix;
+  const inputSystemPrompt = (input as { systemPrompt?: string | undefined }).systemPrompt;
+  const conversation = buildHftVisionMessages(
+    [
+      ...(prefix?.messages ?? []),
+      { role: "user", content: [{ type: "text", text: input.prompt }] },
+    ],
+    inputSystemPrompt || prefix?.systemPrompt,
+    undefined,
+    undefined
+  );
+  const tools = prefix?.tools && prefix.tools.length > 0 ? mapHFTTools(prefix.tools) : undefined;
+  await generateHftVision({
+    vlm,
+    prompt: renderHftVisionPrompt(vlm, conversation.messages, tools),
+    images: conversation.images,
+    maxNewTokens: input.maxTokens ?? 4 * 1024,
+    sampling: hftSamplingOptions(input.temperature, "greedy"),
+    onText: (text) => emit({ type: "text-delta", port: "text", textDelta: text }),
+    emit,
+    signal,
+  });
+  emit({ type: "finish", data: {} as TextGenerationTaskOutput });
+}
 
 export const HFT_TextGeneration: AiProviderRunFn<
   TextGenerationTaskInput,
   TextGenerationTaskOutput,
   HfTransformersOnnxModelConfig
 > = async (input, model, signal, emit, _outputSchema, sessionContext) => {
+  if (isHftVisionModel(model!)) {
+    await withHftPipelineInUse(getPipelineCacheKey(model!), () =>
+      generateVisionText(input, model!, signal, emit, sessionContext)
+    );
+    return;
+  }
   const sessionId = sessionContext?.sessionId;
   await withHftPipelineInUse(getPipelineCacheKey(model!), async () => {
     const generateText = (await getPipeline(model!, emit, {}, signal)) as TextGenerationPipeline;
