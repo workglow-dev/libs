@@ -15,6 +15,7 @@ import {
   loadTransformersSDK,
   pipelines,
 } from "../../../../../providers/huggingface-transformers/src/ai/common/HFT_Pipeline";
+import { resolveConstrainedToolCall } from "../../../../../providers/huggingface-transformers/src/ai/common/HFT_ConstrainedToolCall";
 import {
   buildHFTMessages,
   createHftDeltaRouter,
@@ -344,5 +345,130 @@ describe("buildHFTMessages", () => {
       undefined
     );
     expect(out[0]).toEqual({ role: "tool", content: "r", tool_call_id: "z" });
+  });
+});
+
+const weatherTool = input.tools[0]!;
+const timeTool = {
+  name: "get_time",
+  description: "Look up the time",
+  inputSchema: { type: "object", properties: { zone: { type: "string" } }, required: ["zone"] },
+};
+const withChoice = (toolChoice: string, extra: object = {}): ToolCallingTaskInput =>
+  ({ ...input, tools: [weatherTool, timeTool], toolChoice, ...extra }) as ToolCallingTaskInput;
+
+describe("resolveConstrainedToolCall", () => {
+  it("leaves an auto turn to the model", () => {
+    expect(resolveConstrainedToolCall(withChoice("auto"), "qwen", [], RENDERED_PROMPT)).toBe(
+      undefined
+    );
+  });
+
+  it("pins a named tool by name and arguments", () => {
+    const c = resolveConstrainedToolCall(withChoice("get_time"), "qwen", [], RENDERED_PROMPT)!;
+    expect(c.prefix).toBe("<tool_call>\n");
+    expect(c.schema).toMatchObject({
+      properties: { name: { const: "get_time" }, arguments: timeTool.inputSchema },
+      required: ["name", "arguments"],
+    });
+  });
+
+  it("offers every tool when one call is required", () => {
+    const c = resolveConstrainedToolCall(withChoice("required"), "qwen", [], RENDERED_PROMPT)!;
+    expect((c.schema as { oneOf: unknown[] }).oneOf).toHaveLength(2);
+  });
+
+  it("declines where the grammar would be wrong", () => {
+    const forced = withChoice("get_time");
+    expect(resolveConstrainedToolCall(forced, "llama", [], RENDERED_PROMPT)).toBe(undefined);
+    expect(resolveConstrainedToolCall(forced, null, [], RENDERED_PROMPT)).toBe(undefined);
+    expect(resolveConstrainedToolCall(forced, "qwen", ["qwen3.5-4b"], RENDERED_PROMPT)).toBe(
+      undefined
+    );
+    expect(resolveConstrainedToolCall(forced, "qwen", [], "<assistant><think>")).toBe(undefined);
+    const afterTool = withChoice("get_time", {
+      messages: [{ role: "tool", content: [] }],
+    });
+    expect(resolveConstrainedToolCall(afterTool, "qwen", [], RENDERED_PROMPT)).toBe(undefined);
+  });
+});
+
+describe("HFT_ToolCalling constrained decoding", () => {
+  async function runForced(
+    toolChoice: string,
+    pieces: readonly string[]
+  ): Promise<{ events: StreamEvent<never>[]; output: ToolCallingTaskOutput; opts: any[] }> {
+    const opts: any[] = [];
+    const pipeline = makeFakePipeline(pieces);
+    // One byte per id: the direct vocab form StructuredOutputProcessor accepts.
+    pipeline.tokenizer.tokens = Array.from({ length: 256 }, (_, id) => Uint8Array.of(id));
+    pipeline.tokenizer.eos_token_id = 0;
+    const inner = pipeline;
+    const wrapped: any = async (prompt: string, o: Record<string, unknown>) => {
+      opts.push({ prompt, ...o });
+      return inner(prompt, o);
+    };
+    wrapped.tokenizer = pipeline.tokenizer;
+    wrapped.model = pipeline.model;
+    pipelines.set(cacheKey, wrapped);
+    const events: StreamEvent<never>[] = [];
+    const accumulator = accumulatingEmit<ToolCallingTaskOutput>();
+    await HFT_ToolCalling(
+      withChoice(toolChoice),
+      model,
+      new AbortController().signal,
+      (event) => {
+        events.push(event as StreamEvent<never>);
+        accumulator.emit(event);
+      },
+      undefined,
+      undefined
+    );
+    return { events, output: accumulator.result(), opts };
+  }
+
+  it("opens the tag, constrains the body, and parses the unclosed call", async () => {
+    const { output, opts, events } = await runForced("get_time", [
+      '{"name": "get_time", ',
+      '"arguments": {"zone": "UTC"}}',
+    ]);
+    expect(opts[0].prompt.endsWith("<tool_call>\n")).toBe(true);
+    expect(opts[0].logits_processor?.constructor.name).toBe("StructuredOutputProcessor");
+    expect(output.toolCalls).toEqual([
+      expect.objectContaining({ name: "get_time", input: { zone: "UTC" } }),
+    ]);
+    // The body is the call, not something the assistant said.
+    expect(events.some((e: any) => e.port === "text")).toBe(false);
+  });
+
+  it("does not constrain an auto turn", async () => {
+    const { opts } = await runForced("auto", [TOOL_PIECES.join("")]);
+    expect(opts[0].logits_processor).toBe(undefined);
+    expect(opts[0].prompt.endsWith("<tool_call>\n")).toBe(false);
+  });
+
+  it("falls back to free decoding when the engine rejects a tool schema", async () => {
+    const bad = withChoice("get_time", {
+      tools: [
+        {
+          ...timeTool,
+          inputSchema: { type: "object", properties: { zone: { type: "string", pattern: "^a$" } } },
+        },
+      ],
+    });
+    const pipeline = makeFakePipeline(TOOL_PIECES);
+    pipeline.tokenizer.tokens = Array.from({ length: 256 }, (_, id) => Uint8Array.of(id));
+    pipeline.tokenizer.eos_token_id = 0;
+    pipelines.set(cacheKey, pipeline);
+    const accumulator = accumulatingEmit<ToolCallingTaskOutput>();
+    await HFT_ToolCalling(
+      bad,
+      model,
+      new AbortController().signal,
+      accumulator.emit,
+      undefined,
+      undefined
+    );
+    expect(accumulator.result().text).toContain("Let me check");
   });
 });

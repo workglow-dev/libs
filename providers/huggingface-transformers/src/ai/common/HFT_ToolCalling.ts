@@ -6,6 +6,7 @@
 
 import { asText } from "@workglow/util";
 import type { TextGenerationPipeline } from "@huggingface/transformers";
+import type { ResponseFormat } from "@huggingface/transformers-structured-output";
 import type {
   AiProviderRunFn,
   ChatMessage,
@@ -28,6 +29,7 @@ import {
   filterValidToolCalls,
   toTextFlatMessages,
 } from "@workglow/ai/worker";
+import { resolveConstrainedToolCall } from "./HFT_ConstrainedToolCall";
 import { renderHftPrefixPrompt, resolveHftParityAnchor } from "./HFT_CacheCheckpoint";
 import type { HfTransformersOnnxModelConfig } from "./HFT_ModelSchema";
 import {
@@ -498,7 +500,33 @@ export const HFT_ToolCalling: AiProviderRunFn<
       }
       promptParts = buildPromptAndPrefix(generateText.tokenizer, input, modelFamily);
     }
-    const { prompt, responsePrefix } = promptParts;
+
+    // A turn that must end in one call is decoded under a grammar when the
+    // family's call format allows it. A schema the engine rejects (it refuses
+    // `pattern` and `format`, which cannot be enforced incrementally) leaves
+    // the turn unconstrained, as it was before.
+    const constrained = resolveConstrainedToolCall(
+      input,
+      modelFamily,
+      getModelTextCandidates(model!),
+      promptParts.prompt
+    );
+    let processor: unknown;
+    if (constrained) {
+      try {
+        const { StructuredOutputProcessor } =
+          await import("@huggingface/transformers-structured-output");
+        processor = new StructuredOutputProcessor(generateText.tokenizer, {
+          type: "json_schema",
+          json_schema: constrained.schema,
+        } as Extract<ResponseFormat, { type: "json_schema" }>);
+      } catch {
+        processor = undefined;
+      }
+    }
+    const constraint = processor ? constrained : undefined;
+    const prompt = constraint ? `${promptParts.prompt}${constraint.prefix}` : promptParts.prompt;
+    const responsePrefix = constraint ? constraint.prefix : promptParts.responsePrefix;
 
     // Accumulate raw tokens (the KV cache encodes them verbatim), and route
     // each delta: thinking to `reasoning`, the rest through the tool-call
@@ -514,7 +542,9 @@ export const HFT_ToolCalling: AiProviderRunFn<
       generateText.tokenizer,
       (text) => {
         fullText += text;
-        filter.feed(text);
+        // A constrained body is the call itself, with no tags around it for the
+        // markup filter to hide, so none of it is the assistant's text.
+        if (!constraint) filter.feed(text);
       },
       TextStreamer,
       emit
@@ -586,6 +616,7 @@ export const HFT_ToolCalling: AiProviderRunFn<
         return_full_text: false,
         streamer,
         stopping_criteria: [stopping_criteria],
+        ...(processor ? { logits_processor: processor } : {}),
         ...(past_key_values ? { past_key_values } : {}),
       });
     } finally {
@@ -596,7 +627,7 @@ export const HFT_ToolCalling: AiProviderRunFn<
     // For models that use a generation prefix, prepend it so the parser sees the
     // full markup pattern.
     // Thinking is left out: a call quoted inside it was never made.
-    const answerText = filter.answerText();
+    const answerText = constraint ? `${fullText}${constraint.suffix}` : filter.answerText();
     const parseableFullText = responsePrefix ? `${responsePrefix}${answerText}` : answerText;
     // Only the calls are taken: the parser's cleaned text is the same text the
     // markup filter already streamed, and the stream is the one copy.
