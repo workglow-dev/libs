@@ -95,6 +95,38 @@ describe("accumulateOpenAIResponsesStream reasoning summaries", () => {
   });
 });
 
+describe("accumulateOpenAIResponsesStream raw reasoning", () => {
+  const reasoningTextDelta = (itemId: string, contentIndex: number, delta: string) => ({
+    type: "response.reasoning_text.delta",
+    item_id: itemId,
+    output_index: 0,
+    content_index: contentIndex,
+    delta,
+  });
+
+  it("streams a compatible server's raw reasoning on the reasoning port, never on text", async () => {
+    const out = await collect(
+      [
+        reasoningTextDelta("rs_1", 0, "The user wants "),
+        reasoningTextDelta("rs_1", 0, "the weather."),
+        reasoningTextDelta("rs_1", 1, "Call the tool."),
+        summaryDelta("rs_1", 0, "Checking weather."),
+        { type: "response.output_text.delta", output_index: 1, delta: "Answer." },
+      ],
+      true
+    );
+    expect(portText(out, "reasoning")).toBe(
+      "The user wants the weather.\n\nCall the tool.\n\nChecking weather."
+    );
+    expect(portText(out, "text")).toBe("Answer.");
+  });
+
+  it("drops raw reasoning for a caller with no reasoning port", async () => {
+    const out = await collect([reasoningTextDelta("rs_1", 0, "Thinking.")], false);
+    expect(out.filter((e) => e.type === "text-delta")).toEqual([]);
+  });
+});
+
 describe("requestReasoningSummary", () => {
   it("asks for nothing unless the model record opts in", () => {
     const params = finalizeResponsesRequest(modelWith({ effort: "high" }), { model: MODEL_NAME });

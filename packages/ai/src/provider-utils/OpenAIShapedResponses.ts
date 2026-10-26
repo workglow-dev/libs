@@ -308,13 +308,15 @@ interface ResponsesToolCallEntry {
  *    by the output item so concurrent tool calls (distinct `output_index`) never
  *    collide. The downstream `StreamProcessor` upserts by `id`.
  *
- * Pass `forwardReasoning` to also emit each `response.reasoning_summary_text.delta`
- * as a `text-delta` on the `reasoning` port, a blank line between summary parts
- * (a reasoning item can summarize in several parts, and a turn can hold several
- * reasoning items). Only a caller whose task has a `reasoning` port passes it;
- * without it summaries are dropped, never folded into `text`, which is what a
- * host shows and replays as the assistant's words. The API streams a summary
- * only when the request asked for one (`reasoning.summary`).
+ * Pass `forwardReasoning` to also emit the model's reasoning as `text-delta`s on
+ * the `reasoning` port, a blank line between parts (a reasoning item can hold
+ * several, and a turn several items): each `response.reasoning_summary_text.delta`,
+ * which OpenAI streams only when the request asked for a summary
+ * (`reasoning.summary`), and each `response.reasoning_text.delta`, the raw
+ * reasoning an open-weight model (gpt-oss) streams through a compatible server
+ * unasked. Only a caller whose task has a `reasoning` port passes it; without it
+ * both are dropped, never folded into `text`, which is what a host shows and
+ * replays as the assistant's words.
  *
  * Lifecycle events are ignored here. The caller emits its
  * own `finish` event after this returns (per the streaming convention). Generic
@@ -389,12 +391,16 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
         break;
       }
 
-      case "response.reasoning_summary_text.delta": {
+      case "response.reasoning_summary_text.delta":
+      case "response.reasoning_text.delta": {
         const delta: string = event.delta ?? "";
         if (!options.forwardReasoning || !delta) break;
-        const part = `${String(event.item_id ?? event.output_index ?? "")}:${String(
-          event.summary_index ?? 0
-        )}`;
+        // A summary part and a content part of one item are separate paragraphs.
+        const index =
+          event.type === "response.reasoning_text.delta"
+            ? `c${String(event.content_index ?? 0)}`
+            : `s${String(event.summary_index ?? 0)}`;
+        const part = `${String(event.item_id ?? event.output_index ?? "")}:${index}`;
         const textDelta =
           reasoningPart !== undefined && reasoningPart !== part ? `\n\n${delta}` : delta;
         reasoningPart = part;
