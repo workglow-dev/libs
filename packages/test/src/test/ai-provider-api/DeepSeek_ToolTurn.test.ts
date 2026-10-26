@@ -51,5 +51,8 @@ runToolTurnConformance({
   // `reasoning_content` on every assistant turn: the thinking models read it back
   // in a tool-calling loop. `provider_config.replay_reasoning: false` turns it off.
   reasoningReplay: { kind: "text" },
-  toolResultImages: { kind: "user-turn-after" },
+  toolResultImages: {
+    kind: "text-only",
+    reason: "DeepSeek's chat models read text only, so the result names the image in its place",
+  },
 });

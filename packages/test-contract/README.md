@@ -188,7 +188,7 @@ every vendor without the suite knowing what a rebuilt turn looks like.
 | `reasoningPortBlock`      | Thinking goes on the `reasoning` port only, never on `text` — also when the provider forwards it nowhere.                                                                                                                                                                            |
 | `nativeTurnBlock`         | A `native` provider emits one `nativeTurn` per round, keyed `<vendor>:<model>`, before `finish`; any other provider emits none.                                                                                                                                                      |
 | `reasoningRoundTripBlock` | `native`: an unchanged turn carries `wireForm(payload)` verbatim; one whose call id, name or input changed, whose call was dropped, or that another model produced is rebuilt. `text`: the reasoning comes back on the assistant turn. `call-signature`: each call's signature does. |
-| `toolResultImageBlock`    | A tool's image goes where `toolResultImages` says: `in-result`, `user-turn-after` (the result itself text-only), or nowhere for `text-only`.                                                                                                                                         |
+| `toolResultImageBlock`    | A tool's image goes where `toolResultImages` says: `in-result`, `user-turn-after` (the result itself text-only), or for `text-only` nowhere, the result naming its type.                                                                                                             |
 | `emptyToolResultBlock`    | A tool that returned nothing still answers its call, by id or by name.                                                                                                                                                                                                               |
 
 Every provider states each declaration, so an opt-out is a reason written
@@ -204,7 +204,7 @@ down rather than a field left out. Which provider replays what:
 | Ollama           | reasoning port                        | `text` (`thinking`)                                        | `user-turn-after`  |
 | HF Transformers  | reasoning port                        | `text` (`reasoning_content`)                               | `text-only`        |
 | llama.cpp server | reasoning port                        | `text` (`reasoning_content`)                               | `user-turn-after`  |
-| DeepSeek         | reasoning port                        | `text` (`reasoning_content`)                               | `user-turn-after`  |
+| DeepSeek         | reasoning port                        | `text` (`reasoning_content`)                               | `text-only`        |
 | xAI              | reasoning port                        | `none` (chat completions read no reasoning back)           | `user-turn-after`  |
 | HF Inference     | reasoning port                        | `none` (the routed backend may refuse `reasoning_content`) | `user-turn-after`  |
 | node-llama-cpp   | reasoning port                        | `text` (ended `thought` segments)                          | `text-only`        |

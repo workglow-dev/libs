@@ -66,6 +66,12 @@ export function toolResultImageBlock(
 
         if (shape.kind === "text-only") {
           expect(imageAt, "an image reached a model that reads text only").toBe(-1);
+          // Dropped without a word, the image reads as a tool that returned
+          // less than it did, and the model is likely to call it again.
+          expect(
+            JSON.stringify(turns[resultAt]!.body),
+            "the tool result does not say an image was returned"
+          ).toContain(TOOL_TURN_FIXTURE.image.mimeType);
           return;
         }
         expect(imageAt, "the tool's image is nowhere in the request").toBeGreaterThan(-1);
