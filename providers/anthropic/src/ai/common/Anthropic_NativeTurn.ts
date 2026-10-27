@@ -7,7 +7,8 @@
 import type { ChatMessage } from "@workglow/ai";
 import { getLogger } from "@workglow/util/worker";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
-import { parsedModelName } from "./Anthropic_RequestParams";
+import { resolveAnthropicProfile } from "./Anthropic_ModelProfiles";
+import { modelNameOf } from "./Anthropic_RequestParams";
 import { anthropicForcedChoiceSuppressesThinking } from "./Anthropic_Thinking";
 
 /**
@@ -278,11 +279,11 @@ export function withoutThinking(messages: readonly any[]): any[] | undefined {
  * - `thinking` absent with `output_config.effort` set: replay — a Claude 5+
  *   model runs adaptive thinking when `thinking` is omitted.
  * - Both absent: strip only when the request is known to run without thinking:
- *   the model's id parses as a generation before 5, where omitting `thinking`
- *   means none, or a forced `tool_choice` suppressed the legacy extended
- *   thinking the model is configured for. An id that does not parse (an alias,
- *   a fine-tune) may be a model that thinks by default, and with no model at
- *   all nothing is known; both replay.
+ *   the model's profile says omitting `thinking` means none (every generation
+ *   before 5), or a forced `tool_choice` suppressed the legacy extended
+ *   thinking the model is configured for. An id the profiles do not recognize
+ *   (an alias, a fine-tune) may be a model that thinks by default, and with no
+ *   model at all nothing is known; both replay.
  */
 export function requestAllowsThinkingReplay(
   params: Readonly<Record<string, unknown>>,
@@ -294,8 +295,8 @@ export function requestAllowsThinkingReplay(
     return true;
   }
   if (model === undefined) return true;
-  const parsed = parsedModelName(model);
-  if (parsed !== undefined && parsed.major < 5) return false;
+  const { profile, recognized } = resolveAnthropicProfile(modelNameOf(model));
+  if (recognized && profile.minimalThinking === "omit") return false;
   return !anthropicForcedChoiceSuppressesThinking(params, model);
 }
 

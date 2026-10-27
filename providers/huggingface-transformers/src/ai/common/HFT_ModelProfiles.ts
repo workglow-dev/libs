@@ -203,7 +203,11 @@ export function resolveHftRecordProfile(model: ProfileHints): HftRecordProfile {
   }
   const resolve = pipeline === undefined ? resolveHftProfile : resolveHftTextOnlyProfile;
   const { profile: resolved, source, recognized } = resolve(hftModelName(model));
-  if (!recognized && pipeline !== undefined && Object.hasOwn(HFT_PIPELINE_TASK_PROFILES, pipeline)) {
+  if (
+    !recognized &&
+    pipeline !== undefined &&
+    Object.hasOwn(HFT_PIPELINE_TASK_PROFILES, pipeline)
+  ) {
     return { profile: HFT_PIPELINE_TASK_PROFILES[pipeline]!, source: "pipeline", recognized: true };
   }
   return { profile: resolved, source, recognized };

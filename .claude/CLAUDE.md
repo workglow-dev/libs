@@ -467,6 +467,9 @@ a missing image processor is reported as a retryable incomplete cache.
 It keeps no KV session — image features sit in the positions a prefix cache would skip — so a
 checkpoint's prefix is rendered in full each round, and it declares neither `cache.checkpoint` nor
 the json-mode / rewriter / summary capabilities, whose run-fns drive a text pipeline.
+Its profile kind is `vision-language`, and for HFT the `pipeline` a record loads with outranks
+both its `pipeline_task` hint and its name: an image-text-to-text load is one whatever it is
+called, and any other load is never one, because it runs text-only.
 
 **`*_JobRunFns.ts` runs inside a worker** with its own `globalServiceRegistry`. Never read
 main-thread state (credential stores, service registries) there — resolve it in the task
