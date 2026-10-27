@@ -4,14 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { resolveAnthropicProfile } from "./Anthropic_ModelProfiles";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
 import type { AnthropicCapabilityResolution } from "./Anthropic_RequestParams";
-import {
-  ANTHROPIC_KNOWN_FAMILIES,
-  ANTHROPIC_LATEST_KNOWN_MAJOR,
-  anthropicCapabilityOverride,
-  parsedModelName,
-} from "./Anthropic_RequestParams";
+import { anthropicCapabilityOverride, modelNameOf } from "./Anthropic_RequestParams";
 
 /**
  * Native structured outputs: `output_config.format = {type: "json_schema"}`.
@@ -23,47 +19,21 @@ import {
  * cannot carry extended thinking.
  */
 
-/** Generation-4 minors that accept `output_config.format`, per family. */
-const GENERATION_4_OUTPUT_FORMAT_MINORS: Readonly<Record<string, readonly number[]>> = {
-  opus: [8, 5, 1],
-  haiku: [5],
-  sonnet: [],
-  fable: [],
-  mythos: [],
-};
-
 /**
  * Whether the configured model accepts `output_config.format`, and how that was
  * decided. `provider_config.supports_output_format` overrides everything;
- * otherwise the id is read against the tables.
- *
- * Generation 5 and later in every family; in generation 4, Opus 4.8, Opus 4.5,
- * Opus 4.1 and Haiku 4.5. Opus 4.7, Opus 4.6 and the Sonnet 4.x line keep the
- * tool route. A wrong `true` is a 400 and a wrong `false` costs only the older
- * route, so an id the parser cannot read, or a generation-4 family the table
- * does not name, answers `false`. A generation beyond the newest the table
- * knows, or a generation-5 family it does not name, answers `true`: the newest
- * known generation supports it and rejects a forced tool choice, and a future
- * id is assumed to behave as that one does (see `resolveAnthropicForcedToolChoice`).
+ * otherwise the model's row in `ANTHROPIC_MODEL_PROFILES` answers, and an id
+ * with no row takes the documented default profile there: an unreadable id the
+ * legacy one (tool route), a generation beyond the newest known the newest
+ * one (native format, no forced tool choice).
  */
 export function resolveAnthropicOutputFormatSupport(
   model: AnthropicModelConfig | undefined
 ): AnthropicCapabilityResolution {
   const override = anthropicCapabilityOverride(model, "supports_output_format");
   if (override !== undefined) return override;
-  const parsed = parsedModelName(model);
-  if (parsed === undefined) return { value: false, source: "default" };
-  if (parsed.major < 4) return { value: false, source: "table" };
-  const known = ANTHROPIC_KNOWN_FAMILIES.has(parsed.family);
-  if (parsed.major === 4) {
-    const minors = GENERATION_4_OUTPUT_FORMAT_MINORS[parsed.family];
-    if (!known || minors === undefined) return { value: false, source: "default" };
-    return { value: minors.includes(parsed.minor ?? 0), source: "table" };
-  }
-  return {
-    value: true,
-    source: known && parsed.major <= ANTHROPIC_LATEST_KNOWN_MAJOR ? "table" : "default",
-  };
+  const { profile, source } = resolveAnthropicProfile(modelNameOf(model));
+  return { value: profile.supportsOutputFormat, source };
 }
 
 export function anthropicSupportsOutputFormat(model: AnthropicModelConfig | undefined): boolean {

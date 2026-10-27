@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.6.14
+
+### Bug Fixes
+
+- read main's model profiles where the branch read raw ids
+
+#### providers
+
+- send the effort dial from the Gemini and Anthropic rewriter and summary run-fns
+
+#### anthropic,tf-mediapipe,xai
+
+- review findings on the model profiles
+
+#### anthropic
+
+- read adaptive-thinking support through the id normaliser; make the table-agreement test non-tautological
+
+### Refactors
+
+#### anthropic
+
+- strip absent thinking only when known to be off
+- one rule for when signed thinking is replayed
+
+#### ai
+
+- a shared model-profile resolver; Anthropic and OpenAI read every per-model decision from it
+- one model-profile table per provider for Anthropic and OpenAI
+
+### Performance
+
+#### anthropic
+
+- keep rewriter and summary streams off the SDK's generic stream type
+
 ## 0.6.13
 
 ### Features

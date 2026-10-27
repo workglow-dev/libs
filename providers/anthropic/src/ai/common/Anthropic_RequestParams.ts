@@ -4,97 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { ModelProfileSource } from "@workglow/ai/worker";
 import { getLogger } from "@workglow/util/worker";
+import { resolveAnthropicProfile } from "./Anthropic_ModelProfiles";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
-
-/**
- * Highest Claude generation that still accepts `temperature` / `top_p`.
- * Newer generations reject them with HTTP 400, which maps to a
- * non-retryable `PermanentJobError`.
- */
-export const ANTHROPIC_LAST_SAMPLING_MAJOR = 4;
-/** Highest minor within {@link ANTHROPIC_LAST_SAMPLING_MAJOR} that accepts them. */
-export const ANTHROPIC_LAST_SAMPLING_MINOR = 6;
-
-/**
- * A numeric id segment this long is a release date (`20250514`), not a minor
- * version. Without this rule `claude-sonnet-4-20250514` parses as minor
- * 20250514 and is wrongly treated as a post-cutoff generation.
- */
-const DATE_SEGMENT = /^\d{6,}$/;
-const NUMERIC_SEGMENT = /^\d+$/;
-const CLAUDE_PREFIX = "claude-";
-/** Families that never accepted sampling parameters, whatever their version. */
-const REJECTED_FAMILY = /^claude-(?:fable|mythos)(?:$|[-.])/;
-
-/**
- * Gateways prefix the vendor onto the id (`us.anthropic.claude-…`,
- * `anthropic.claude-…`) and suffix a revision (`…-v1:0`). Stripping the prefix
- * grades those spellings on the same generation rule as a native id, instead of
- * having them fall out of the parser as "not a Claude id at all".
- */
-export const ANTHROPIC_GATEWAY_PREFIX = /^(?:[a-z0-9-]+\.)*anthropic\./i;
-
-interface ParsedAnthropicModelId {
-  /** Empty for the bare `claude-2.1` shape, which carries no family name. */
-  readonly family: string;
-  readonly major: number;
-  readonly minor: number | undefined;
-}
-
-/**
- * Parses the three id shapes Anthropic has shipped:
- * - modern `claude-<family>-<major>[-<minor>][-<date>]` (`claude-opus-4-8`)
- * - legacy `claude-<major>[-<minor>]-<family>[-<date>]` (`claude-3-5-sonnet-20241022`)
- * - bare `claude-[instant-]<major>[.<minor>]` (`claude-2.1`, `claude-instant-1.2`)
- *
- * Returns `undefined` for anything else, including non-Claude ids.
- */
-export function parseAnthropicModelId(id: string): ParsedAnthropicModelId | undefined {
-  const normalized = id.trim().toLowerCase();
-  if (!normalized.startsWith(CLAUDE_PREFIX)) return undefined;
-
-  let rest = normalized.slice(CLAUDE_PREFIX.length);
-  if (rest.length === 0) return undefined;
-
-  if (rest.startsWith("instant-")) rest = rest.slice("instant-".length);
-  const bare = /^(\d+)(?:\.(\d+))?$/.exec(rest);
-  if (bare) {
-    return {
-      family: "",
-      major: Number(bare[1]),
-      minor: bare[2] === undefined ? undefined : Number(bare[2]),
-    };
-  }
-
-  const segments = rest.split("-").filter((segment) => segment.length > 0);
-  if (segments.length < 2) return undefined;
-
-  const isVersionSegment = (segment: string | undefined): boolean =>
-    segment !== undefined && NUMERIC_SEGMENT.test(segment) && !DATE_SEGMENT.test(segment);
-
-  // Legacy shape leads with the version: claude-3-5-sonnet-20241022.
-  if (isVersionSegment(segments[0])) {
-    const major = Number(segments[0]);
-    let index = 1;
-    let minor: number | undefined;
-    if (isVersionSegment(segments[index])) {
-      minor = Number(segments[index]);
-      index += 1;
-    }
-    const family = segments[index];
-    if (family === undefined || NUMERIC_SEGMENT.test(family)) return undefined;
-    return { family, major, minor };
-  }
-
-  // Modern shape leads with the family: claude-opus-4-8.
-  if (!isVersionSegment(segments[1])) return undefined;
-  return {
-    family: segments[0]!,
-    major: Number(segments[1]),
-    minor: isVersionSegment(segments[2]) ? Number(segments[2]) : undefined,
-  };
-}
 
 interface AnthropicSamplingProviderConfig {
   readonly model_name?: string;
@@ -103,12 +16,10 @@ interface AnthropicSamplingProviderConfig {
 
 /**
  * Whether the configured model accepts `temperature` / `top_p`.
- *
- * This is an allow-list of generations known to accept them, not a deny-list
- * of the ones that reject them: an id that does not match a known-accepting
- * shape is treated as rejecting. A wrong `false` changes sampling behavior; a
- * wrong `true` is an unrecoverable 400, so an unrecognized id defaults to
- * omitting. `provider_config.sampling_params` overrides the decision either way.
+ * `provider_config.sampling_params` overrides the decision either way;
+ * otherwise the model's row in `ANTHROPIC_MODEL_PROFILES` answers, in any
+ * spelling a gateway uses for it. An id the table cannot place answers `false`:
+ * a wrong `false` changes sampling behavior, a wrong `true` is an unrecoverable 400.
  */
 export function anthropicAcceptsSamplingParams(model: AnthropicModelConfig | undefined): boolean {
   const config = model?.provider_config as AnthropicSamplingProviderConfig | undefined;
@@ -117,22 +28,7 @@ export function anthropicAcceptsSamplingParams(model: AnthropicModelConfig | und
   if (override === "send") return true;
   if (override === "omit") return false;
 
-  const id = (config?.model_name ?? "").trim().toLowerCase();
-  if (REJECTED_FAMILY.test(id)) return false;
-
-  const parsed = parseAnthropicModelId(id);
-  if (parsed === undefined) return false;
-  if (parsed.major > ANTHROPIC_LAST_SAMPLING_MAJOR) return false;
-  // A missing minor means generation `.0` (e.g. `claude-sonnet-4-20250514`),
-  // which predates the cutoff — deliberately permissive.
-  if (
-    parsed.major === ANTHROPIC_LAST_SAMPLING_MAJOR &&
-    parsed.minor !== undefined &&
-    parsed.minor > ANTHROPIC_LAST_SAMPLING_MINOR
-  ) {
-    return false;
-  }
-  return true;
+  return resolveAnthropicProfile(modelNameOf(model)).profile.acceptsSamplingParams;
 }
 
 interface AnthropicSamplingInput {
@@ -207,31 +103,17 @@ export function applyAnthropicSamplingParams(
   });
 }
 
-/** The configured model's id, parsed, with any cloud-gateway prefix removed. */
-export function parsedModelName(model: AnthropicModelConfig | undefined) {
-  const id = (model?.provider_config as { model_name?: string } | undefined)?.model_name ?? "";
-  return parseAnthropicModelId(id.trim().replace(ANTHROPIC_GATEWAY_PREFIX, ""));
+export function modelNameOf(model: AnthropicModelConfig | undefined): string {
+  return (model?.provider_config as { model_name?: string } | undefined)?.model_name ?? "";
 }
 
 /** Where a capability decision came from. `"default"` means no table entry covered the id. */
-export type AnthropicCapabilitySource = "override" | "table" | "default";
+export type AnthropicCapabilitySource = "override" | ModelProfileSource;
 
 export interface AnthropicCapabilityResolution {
   readonly value: boolean;
   readonly source: AnthropicCapabilitySource;
 }
-
-/** Families the capability tables name; any other family falls to a default. */
-export const ANTHROPIC_KNOWN_FAMILIES: ReadonlySet<string> = new Set([
-  "fable",
-  "mythos",
-  "opus",
-  "sonnet",
-  "haiku",
-]);
-
-/** Newest generation the capability tables have an entry for. */
-export const ANTHROPIC_LATEST_KNOWN_MAJOR = 5;
 
 interface AnthropicCapabilityOverrides {
   readonly supports_output_format?: boolean;
@@ -250,37 +132,16 @@ export function anthropicCapabilityOverride(
 /**
  * Whether the configured model accepts a forced `tool_choice` (`any` or
  * `tool`), and how that was decided. `provider_config.accepts_forced_tool_choice`
- * overrides everything; otherwise the id is read against the table below.
- *
- * Claude Fable 5.1, Mythos 5.1, Opus 5.5 and Sonnet 5.5 reject both with a 400.
- * A wrong `true` is an unrecoverable 400 and a wrong `false` only relaxes the
- * choice to `auto`, so ids no table entry covers take the newest known
- * generation's behavior (rejects), and an id the parser cannot read takes the
- * oldest (accepts, the pre-generation-5 route). Those two defaults are the
- * counterparts of the ones in `resolveAnthropicOutputFormatSupport`: together a
- * future id gets the newest known profile — native output format, no forced
- * tool — and an unreadable id the legacy one — tool route, forced choice.
+ * overrides everything; otherwise the model's row in `ANTHROPIC_MODEL_PROFILES`
+ * answers, and an id with no row takes the documented default profile there.
  */
 export function resolveAnthropicForcedToolChoice(
   model: AnthropicModelConfig | undefined
 ): AnthropicCapabilityResolution {
   const override = anthropicCapabilityOverride(model, "accepts_forced_tool_choice");
   if (override !== undefined) return override;
-  const parsed = parsedModelName(model);
-  if (parsed === undefined) return { value: true, source: "default" };
-  if (parsed.major < 5) return { value: true, source: "table" };
-  if (parsed.major > ANTHROPIC_LATEST_KNOWN_MAJOR) return { value: false, source: "default" };
-  const minor = parsed.minor ?? 0;
-  switch (parsed.family) {
-    case "fable":
-    case "mythos":
-      return { value: minor < 1, source: "table" };
-    case "opus":
-    case "sonnet":
-      return { value: minor < 5, source: "table" };
-    default:
-      return { value: false, source: "default" };
-  }
+  const { profile, source } = resolveAnthropicProfile(modelNameOf(model));
+  return { value: profile.acceptsForcedToolChoice, source };
 }
 
 export function anthropicAcceptsForcedToolChoice(model: AnthropicModelConfig | undefined): boolean {
@@ -288,12 +149,12 @@ export function anthropicAcceptsForcedToolChoice(model: AnthropicModelConfig | u
 }
 
 /**
- * Request fields that come closest to "no thinking" on a Claude 5+ model, where
- * omitting `thinking` still runs adaptive thinking at the model's default
- * effort. Sonnet 5.5 has a real off switch (`between_tools`); every other
- * generation-5 model is held to `low` effort, which Anthropic recommends over
- * `{type: "disabled"}` even where that is still accepted. Returns `undefined`
- * for models where omitting thinking already means none.
+ * Request fields that come closest to "no thinking" on a model that runs
+ * adaptive thinking at its default effort whenever `thinking` is omitted (the
+ * profile's `minimalThinking`). Sonnet 5.5 has a real off switch
+ * (`between_tools`); the others are held to `low` effort, which Anthropic
+ * recommends over `{type: "disabled"}` even where that is still accepted.
+ * Returns `undefined` for models where omitting thinking already means none.
  */
 export function anthropicMinimalThinkingParams(
   model: AnthropicModelConfig | undefined
@@ -301,25 +162,26 @@ export function anthropicMinimalThinkingParams(
   | { readonly thinking: { readonly type: "between_tools" } }
   | { readonly output_config: { readonly effort: "low" } }
   | undefined {
-  const parsed = parsedModelName(model);
-  if (parsed === undefined || parsed.major < 5) return undefined;
-  if (parsed.family === "sonnet" && parsed.major === 5 && (parsed.minor ?? 0) >= 5) {
-    return { thinking: { type: "between_tools" } };
+  switch (resolveAnthropicProfile(modelNameOf(model)).profile.minimalThinking) {
+    case "between_tools":
+      return { thinking: { type: "between_tools" } };
+    case "low_effort":
+      return { output_config: { effort: "low" } };
+    case "omit":
+      return undefined;
   }
-  return { output_config: { effort: "low" } };
 }
 
 /**
- * Request fields for a Claude 5+ model when no effort or thinking is
- * configured: adaptive thinking at the model's own default effort. The API
- * already runs adaptive when `thinking` is omitted on these models; sending it
- * says so on the wire instead of depending on that default. Returns
- * `undefined` for earlier generations, where omitting thinking means none.
+ * Request fields when no effort or thinking is configured, for a model that
+ * thinks when `thinking` is omitted: adaptive thinking at the model's own
+ * default effort. The API already runs it; sending it says so on the wire
+ * instead of depending on that default. Returns `undefined` for a model where
+ * omitting thinking means none.
  */
 export function anthropicDefaultThinkingParams(
   model: AnthropicModelConfig | undefined
 ): { readonly thinking: { readonly type: "adaptive" } } | undefined {
-  const parsed = parsedModelName(model);
-  if (parsed === undefined || parsed.major < 5) return undefined;
-  return { thinking: { type: "adaptive" } };
+  const { minimalThinking } = resolveAnthropicProfile(modelNameOf(model)).profile;
+  return minimalThinking === "omit" ? undefined : { thinking: { type: "adaptive" } };
 }

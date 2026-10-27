@@ -308,7 +308,17 @@ interface ResponsesToolCallEntry {
  *    by the output item so concurrent tool calls (distinct `output_index`) never
  *    collide. The downstream `StreamProcessor` upserts by `id`.
  *
- * Reasoning-summary and lifecycle events are ignored here. The caller emits its
+ * Pass `forwardReasoning` to also emit the model's reasoning as `text-delta`s on
+ * the `reasoning` port, a blank line between parts (a reasoning item can hold
+ * several, and a turn several items): each `response.reasoning_summary_text.delta`,
+ * which OpenAI streams only when the request asked for a summary
+ * (`reasoning.summary`), and each `response.reasoning_text.delta`, the raw
+ * reasoning an open-weight model (gpt-oss) streams through a compatible server
+ * unasked. Only a caller whose task has a `reasoning` port passes it; without it
+ * both are dropped, never folded into `text`, which is what a host shows and
+ * replays as the assistant's words.
+ *
+ * Lifecycle events are ignored here. The caller emits its
  * own `finish` event after this returns (per the streaming convention). Generic
  * over the output type so non-tool-calling run-fns (TextGeneration / Rewriter /
  * Summary) can pass their own `emit` under `strictFunctionTypes`.
@@ -334,6 +344,7 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
   options: {
     readonly promptText?: string | undefined;
     readonly nativeTurnProvider?: string | undefined;
+    readonly forwardReasoning?: boolean | undefined;
   } = {}
 ): Promise<Usage | undefined> {
   // Keyed by the output item's stable id (`item.id` on `output_item.{added,done}`,
@@ -355,6 +366,9 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
     provisionalUsage.onPrompt(options.promptText);
   }
   let usage: Usage | undefined;
+  // The summary part the last forwarded reasoning delta belonged to, so a new
+  // part starts on its own paragraph instead of running on from the last one.
+  let reasoningPart: string | undefined;
 
   const emitToolCall = (entry: ResponsesToolCallEntry): void => {
     const parsed = parseToolArgs(entry.arguments);
@@ -374,6 +388,24 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
           provisionalUsage?.onText(delta);
           emit({ type: "text-delta", port: "text", textDelta: delta });
         }
+        break;
+      }
+
+      case "response.reasoning_summary_text.delta":
+      case "response.reasoning_text.delta": {
+        const delta: string = event.delta ?? "";
+        if (!options.forwardReasoning || !delta) break;
+        // A summary part and a content part of one item are separate paragraphs.
+        const index =
+          event.type === "response.reasoning_text.delta"
+            ? `c${String(event.content_index ?? 0)}`
+            : `s${String(event.summary_index ?? 0)}`;
+        const part = `${String(event.item_id ?? event.output_index ?? "")}:${index}`;
+        const textDelta =
+          reasoningPart !== undefined && reasoningPart !== part ? `\n\n${delta}` : delta;
+        reasoningPart = part;
+        provisionalUsage?.onText(delta);
+        emit({ type: "text-delta", port: "reasoning", textDelta });
         break;
       }
 
@@ -476,8 +508,8 @@ export async function accumulateOpenAIResponsesStream<Output = Record<string, an
       }
 
       default:
-        // Ignore the remaining lifecycle events (created/in_progress),
-        // reasoning summaries, and non-function tool events.
+        // Ignore the remaining lifecycle events (created/in_progress), the
+        // summary part/done markers, and non-function tool events.
         break;
     }
   }

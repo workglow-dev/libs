@@ -1,7 +1,7 @@
 {
   "name": "workglow",
   "type": "module",
-  "version": "0.6.13",
+  "version": "0.6.14",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -240,6 +240,7 @@
     "@workglow/a2ui": "workspace:*",
     "@workglow/tasks": "workspace:*",
     "@workglow/util": "workspace:*",
-    "tslog": "^5.2.0"
+    "@workglow/web-search": "workspace:*",
+    "tslog": "^5.4.0"
   }
 }

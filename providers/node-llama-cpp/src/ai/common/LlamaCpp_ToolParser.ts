@@ -12,19 +12,6 @@ import {
   parseLlama,
   parseQwen35Xml,
 } from "@workglow/ai/provider-utils";
-import type { LlamaCppModelConfig } from "./LlamaCpp_ModelSchema";
-
-export function getModelTextCandidates(model: LlamaCppModelConfig): string[] {
-  return [
-    model.model_id,
-    model.title,
-    model.description,
-    model.provider_config.model_url,
-    model.provider_config.model_path,
-  ]
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .map((value) => value.toLowerCase());
-}
 
 /**
  * Whether the text likely contains tool call markup worth parsing.
@@ -36,22 +23,6 @@ export function hasToolCallMarkers(text: string): boolean {
     text.includes("<|tool_call_start|>") ||
     /\[\w+\(/.test(text)
   );
-}
-
-export function detectQwenToolCallingVariation(
-  model: LlamaCppModelConfig
-): "3" | "3.5" | undefined {
-  const candidates = getModelTextCandidates(model);
-
-  if (candidates.some((value) => /\bqwen[\s._-]?3[\s._-]?5\b/.test(value))) {
-    return "3.5";
-  }
-
-  if (candidates.some((value) => /\bqwen[\s._-]?3\b/.test(value))) {
-    return "3";
-  }
-
-  return undefined;
 }
 
 export function extractToolCallsFromText(text: string, input: ToolCallingTaskInput): ToolCalls {

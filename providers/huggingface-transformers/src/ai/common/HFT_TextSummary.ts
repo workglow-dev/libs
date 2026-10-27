@@ -14,12 +14,14 @@ import {
   withHftPipelineInUse,
 } from "./HFT_Pipeline";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
+import { refuseHftVisionModel } from "./HFT_VisionLanguage";
 
 export const HFT_TextSummary: AiProviderRunFn<
   TextSummaryTaskInput,
   TextSummaryTaskOutput,
   HfTransformersOnnxModelConfig
 > = async (input, model, signal, emit) => {
+  refuseHftVisionModel(model!, "HFT_TextSummary");
   await withHftPipelineInUse(getPipelineCacheKey(model!), async () => {
     const generateSummary = (await getPipeline(model!, emit, {}, signal)) as SummarizationPipeline;
     const { TextStreamer, InterruptableStoppingCriteria } = await loadTransformersSDK();

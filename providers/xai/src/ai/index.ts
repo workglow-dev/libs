@@ -18,9 +18,16 @@ export * from "./common/Xai_ModelSearch";
 export * from "./common/Xai_Pricing";
 export * from "./registerXai";
 
-import { XAI_RUN_FN_SPECS } from "./common/Xai_Capabilities";
+import { inferXaiCapabilities, XAI_RUN_FN_SPECS } from "./common/Xai_Capabilities";
 import { _testOnly as clientTestOnly } from "./common/Xai_Client";
 import { XAI_RUN_FNS } from "./common/Xai_JobRunFns";
+import {
+  normalizeXaiModelId,
+  resolveXaiProfile,
+  XAI_MODEL_PROFILES,
+  XAI_UNPRICED_PROFILE_IDS,
+  xaiProfileCapabilities,
+} from "./common/Xai_ModelProfiles";
 import { XaiQueuedProvider } from "./XaiQueuedProvider";
 
 /**
@@ -30,5 +37,11 @@ export const _testOnly = {
   XaiQueuedProvider,
   XAI_RUN_FN_SPECS,
   XAI_RUN_FNS,
+  XAI_MODEL_PROFILES,
+  XAI_UNPRICED_PROFILE_IDS,
+  normalizeXaiModelId,
+  resolveXaiProfile,
+  xaiProfileCapabilities,
+  inferXaiCapabilities,
   setXaiClientForTests: clientTestOnly.setXaiClientForTests,
 } as const;

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.14
+
+### Refactors
+
+#### google-gemini,xai,deepseek,typesafeai
+
+- one model profile per provider
+
 ## 0.6.13
 
 _No changes in this package._

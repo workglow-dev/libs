@@ -266,6 +266,62 @@ describe("redactUrlForMessage", () => {
     );
     expect(error.message).not.toContain("SUPERSECRETVALUE");
   });
+
+  test("blanks a credential-named value in the fragment, leaves the rest", () => {
+    const shown = redactUrlForMessage(
+      "https://app.example.com/cb#access_token=FRAGSECRET1&state=s1&token_type=bearer"
+    );
+    expect(shown).not.toContain("FRAGSECRET1");
+    expect(shown).toContain("state=s1");
+    expect(shown).toContain("access_token=[redacted]");
+    expect(shown).toContain("app.example.com/cb");
+  });
+
+  test("leaves a plain fragment alone", () => {
+    const url = "https://example.com/docs#section-2";
+    expect(redactUrlForMessage(url)).toBe(url);
+  });
+
+  // An `@` after a `#` or `?` is a password holding one, or a query or fragment
+  // value holding an `@`. Neither reading can be ruled out, so everything after
+  // the `//` is hidden: the host in the first, a token's tail in the second.
+  test.each([
+    ["http://user:p#ss@host/x", "http://[redacted]"],
+    ["http://user:p?ss@host/x?api_key=QK1", "http://[redacted]"],
+    ["http://user:p#s?s@host", "http://[redacted]"],
+    ["http://host:99999?token=foo@SUPERSECRET/path", "http://[redacted]"],
+  ])("hides the authority when its `@` follows a `#` or `?`: %s", (url, shown) => {
+    expect(redactUrlForMessage(url)).toBe(shown);
+  });
+
+  test("a URL that does not parse still loses its userinfo and query secrets", () => {
+    // Port 99999 is out of range, so `new URL` throws on this input.
+    const shown = redactUrlForMessage(
+      "http://user:hunter2@host:99999/x?api_key=QUERYSECRET1&page=2#id_token=FRAGSECRET2"
+    );
+    for (const secret of ["hunter2", "QUERYSECRET1", "FRAGSECRET2"]) {
+      expect(shown).not.toContain(secret);
+    }
+    expect(shown).toContain("host:99999/x");
+    expect(shown).toContain("page=2");
+  });
+
+  test("a scheme-less user:pw@host loses its password, though it parses as scheme `admin`", () => {
+    const shown = redactUrlForMessage("admin:s3cretpw@internal.example:8080/x?token=T0KENVALUE");
+    expect(shown).not.toContain("s3cretpw");
+    expect(shown).not.toContain("T0KENVALUE");
+    expect(shown).toContain("internal.example:8080/x");
+  });
+
+  test("an unparseable URL with nothing to hide is returned unchanged", () => {
+    const url = "http://host:99999/x?page=2";
+    expect(redactUrlForMessage(url)).toBe(url);
+  });
+
+  test("a percent-encoded credential name is still recognised when the URL does not parse", () => {
+    const shown = redactUrlForMessage("http://host:99999/x?t%6Fken=ENCODEDSECRET");
+    expect(shown).not.toContain("ENCODEDSECRET");
+  });
 });
 
 describe("markup error bodies", () => {

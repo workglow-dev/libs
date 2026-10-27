@@ -26,9 +26,16 @@ export {
 } from "./common/DeepSeek_ToolCalling";
 export * from "./registerDeepSeek";
 
-import { DEEPSEEK_RUN_FN_SPECS } from "./common/DeepSeek_Capabilities";
+import { DEEPSEEK_RUN_FN_SPECS, inferDeepSeekCapabilities } from "./common/DeepSeek_Capabilities";
 import { _testOnly as clientTestOnly } from "./common/DeepSeek_Client";
 import { DEEPSEEK_RUN_FNS } from "./common/DeepSeek_JobRunFns";
+import {
+  DEEPSEEK_MODEL_PROFILES,
+  DEEPSEEK_UNPRICED_PROFILE_IDS,
+  deepSeekProfileCapabilities,
+  normalizeDeepSeekModelId,
+  resolveDeepSeekProfile,
+} from "./common/DeepSeek_ModelProfiles";
 import { mapDeepSeekUsage } from "./common/DeepSeek_Usage";
 import { DeepSeekQueuedProvider } from "./DeepSeekQueuedProvider";
 
@@ -39,6 +46,12 @@ export const _testOnly = {
   DeepSeekQueuedProvider,
   DEEPSEEK_RUN_FN_SPECS,
   DEEPSEEK_RUN_FNS,
+  DEEPSEEK_MODEL_PROFILES,
+  DEEPSEEK_UNPRICED_PROFILE_IDS,
+  normalizeDeepSeekModelId,
+  resolveDeepSeekProfile,
+  deepSeekProfileCapabilities,
+  inferDeepSeekCapabilities,
   mapDeepSeekUsage,
   setDeepSeekClientForTests: clientTestOnly.setDeepSeekClientForTests,
 } as const;

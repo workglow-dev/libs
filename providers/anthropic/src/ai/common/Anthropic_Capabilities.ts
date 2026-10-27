@@ -6,6 +6,7 @@
 
 import type { Capability, ModelRecord } from "@workglow/ai/worker";
 import { ANTHROPIC_CAPABILITY_SETS } from "./Anthropic_CapabilitySets";
+import { anthropicProfileCapabilities, resolveAnthropicProfile } from "./Anthropic_ModelProfiles";
 
 /**
  * Closed list of capability-set specs the Anthropic provider serves. Derived
@@ -20,16 +21,16 @@ export function anthropicWorkerRunFnSpecs(): readonly { readonly serves: readonl
 }
 
 /**
- * Shape used by the model-name regexes — `model_id` is required, the rest
+ * Shape read for the model id — `model_id` is required, the rest
  * is loosely-typed metadata only used to opportunistically widen the
  * inferred capability set.
  */
 type CapabilityHints = Pick<ModelRecord, "model_id" | "provider_config" | "capabilities">;
 
 /**
- * Heuristic capability inference for an Anthropic {@link ModelRecord}. Pattern-
- * matches the canonical Anthropic model id strings (and the `provider_config.
- * model_name` if present) to a closed set of {@link Capability}s. Falls back
+ * Capability inference for an Anthropic {@link ModelRecord}. Reads the model's
+ * profile (see `ANTHROPIC_MODEL_PROFILES`) by its id, or its
+ * `provider_config.model_name` when there is no id. Falls back
  * to the model's stored `capabilities` array (or a baseline of search +
  * info) when no pattern matches.
  *
@@ -42,84 +43,8 @@ export function inferAnthropicCapabilities(model: CapabilityHints): readonly Cap
       ""
   );
 
-  // Claude 5 family (claude-sonnet-5*, claude-opus-5*, claude-haiku-5*) plus the
-  // fable / mythos lines — same full capability set as Claude 4.
-  if (/^claude-(?:(?:sonnet|opus|haiku)-5|fable-|mythos-)/i.test(id)) {
-    return [
-      "text.generation",
-      "text.rewriter",
-      "text.summary",
-      "tool-use",
-      "json-mode",
-      "vision-input",
-      "cache.checkpoint",
-      "model.count-tokens",
-      "model.info",
-      "model.search",
-    ];
-  }
-
-  // Claude 3.5 / 3.7 family (sonnet, haiku) — full capability set with vision.
-  if (/^claude-3[.-][57]-/i.test(id)) {
-    return [
-      "text.generation",
-      "text.rewriter",
-      "text.summary",
-      "tool-use",
-      "json-mode",
-      "vision-input",
-      "cache.checkpoint",
-      "model.count-tokens",
-      "model.info",
-      "model.search",
-    ];
-  }
-
-  // Claude 4-series (claude-sonnet-4*, claude-opus-4*, claude-haiku-4*) — full caps with vision.
-  if (/^claude-(?:sonnet|opus|haiku)-4/i.test(id)) {
-    return [
-      "text.generation",
-      "text.rewriter",
-      "text.summary",
-      "tool-use",
-      "json-mode",
-      "vision-input",
-      "cache.checkpoint",
-      "model.count-tokens",
-      "model.info",
-      "model.search",
-    ];
-  }
-
-  // Claude 3 Haiku, Claude 3 Opus, Claude 3 Sonnet — full caps, all have vision-input.
-  if (/^claude-3[.-](?:haiku|opus|sonnet)/i.test(id)) {
-    return [
-      "text.generation",
-      "text.rewriter",
-      "text.summary",
-      "tool-use",
-      "json-mode",
-      "vision-input",
-      "cache.checkpoint",
-      "model.count-tokens",
-      "model.info",
-      "model.search",
-    ];
-  }
-
-  // Claude 2.x — text generation without vision.
-  if (/^claude-2/i.test(id)) {
-    return [
-      "text.generation",
-      "text.rewriter",
-      "text.summary",
-      "tool-use",
-      "json-mode",
-      "model.count-tokens",
-      "model.info",
-      "model.search",
-    ];
-  }
+  const resolved = resolveAnthropicProfile(id);
+  if (resolved.recognized) return anthropicProfileCapabilities(resolved.profile);
 
   // Unknown Claude id with declared capabilities → return as-is.
   const declared = (model.capabilities as readonly Capability[] | undefined) ?? [];

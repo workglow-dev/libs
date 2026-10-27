@@ -1,6 +1,9 @@
 # Advanced setup rather than GitHub's default setup, which cannot exclude a
 # path: see `.github/codeql/codeql-config.yml` for what is left out and why.
 # Default setup must be off in the repository's settings for this to run.
+#
+# A red run on main opens a `ci-nightly` issue (`ci-alert.yml`), which watches
+# this workflow by its `name:` -- rename it there too.
 name: CodeQL
 permissions:
   contents: read

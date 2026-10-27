@@ -233,7 +233,8 @@ call is refused rather than run.
 `stopReason: "submitted"` and the answer on `object` when a call passes it, and answers a
 failing one as a correction to make, so the model resubmits instead of the host failing the
 turn. A model that replies in text is reminded twice, then the turn ends `"answered"` with no
-`object`. An unset object port reaches the task as `{}`, and an empty schema counts as none.
+`object`; no reminder is sent on the last round or once the time is gone, since nothing could
+answer it, so the returned `messages` never end in one. An unset object port reaches the task as `{}`, and an empty schema counts as none.
 `checkSubmission` is where a host enforces what a schema cannot say — a section left empty
 that the document plainly has, two figures that must agree: given an answer that passed the
 schema and the turn so far, a returned reason goes back to the model as the submit call's
@@ -248,8 +249,19 @@ reasoning are forwarded only once the attempt settles, since a failed attempt's 
 taken back from the accumulated port; reasoning goes out on the turn's own `reasoning` port, a
 blank line between rounds, and is absent from the output when no round returned any), and
 budgets — `maxInputTokens`, `maxCostUsd` (refused without a price card,
-since a budget it cannot measure never stops anything, and failing closed for a round that reports no usage: it cannot be priced, so the turn ends `"budget"` after it),
-`maxDurationMs` — each ending the turn `"budget"`, never between a `tool_use` and its result.
+since a budget it cannot measure never stops anything), `maxDurationMs` — each ending the turn
+`"budget"`, never between a `tool_use` and its result. **Both token and cost budgets fail closed
+on a round they cannot measure**: a round reporting no prompt count (no usage, or output only)
+ends a `maxInputTokens` turn `"budget"` after it, and a round that cannot be priced (no usage, or
+an `estimated` one) ends a `maxCostUsd` turn the same way — counting it as 0 would let a capped
+turn run to `maxRounds` for free. An estimated usage does count against `maxInputTokens`, which
+is why runtimes that report nothing (Cactus, Chrome AI) emit one on `finish`. That rule stops a
+turn that would **go on**; it never relabels one that ended. A round in which the model answered
+without a tool ends `"answered"`, measured or not and over the cap or not, because the answer is
+complete and a host reading `"budget"` as "truncated" would discard it. `"budget"` on that path
+means only that an `outputSchema` turn still owed its submission and the measured spend had
+reached a cap, so it could not be reminded; after a round it merely could not measure it is still
+reminded (twice at most), while the optional review is skipped.
 Every round leaves an `AgentStep` on `steps` (timings, attempts, each tool's outcome and
 size, usage, cost) and rides on the `snapshot` beside `messages`; `costUsd` totals them when
 every round could be priced.
@@ -301,6 +313,13 @@ for the same reason as `AGENT_APPROVAL_OPT_OUT`: where a turn's model calls go i
 Conversation helpers for a host keeping its own message list, none of which run inside a
 task: `normalizeHistoryForModel` / `trimHistoryForModel` (`ChatHistory.ts`), and
 `collectToolUseIds` / `uniquifyToolCallIds` / `repairDuplicateToolCallIds` (`ToolCallIds.ts`).
+
+`AgentTask.ts` keeps only the loop's orchestration; each concern it drives is its own module,
+unit-tested in `packages/ai/src/task/__tests__/`: `AgentTurnBudget` (tokens, cost, deadline —
+`exhausted()` answers the answer path, `mustStopLoop()` the loop, so changing what an answered
+turn reports cannot move where the loop stops), `AgentRoundAttempt` (one round's retries,
+timeout and held deltas), `AgentTurnPolicy` (submit tool, reminders, review, time-left notice)
+and `AgentToolRound` (dispatching a round's calls and building their results).
 
 `validateModelAuthoredSchema` (`ModelAuthoredSchema.ts`) bounds a JSON Schema a model wrote
 before a host renders a form from it, beside `sanitizeToolArgs`, which bounds the arguments.
@@ -379,7 +398,11 @@ nothing else, and the host states which providers exist by calling
 `registerBuiltInWebSearchProviders()` or `registerWebSearchProvider()`. Registering on
 import would put Brave in front of `"auto"` routing in an app that only imported
 `@workglow/anthropic/web-search`, and stand a SearXNG instance up from an environment
-variable nobody read.
+variable nobody read. The `workglow` meta-package re-exports it, and the CLI's
+`registerCliTasks` registers `WebSearchTask` and **no provider**: a saved graph naming it
+opens, `task list` shows it, and running it fails with the registry's instruction to register
+one. The CLI never picks a search vendor for the operator; a downstream CLI built on
+`runWorkglowCli()` registers the providers it wants in its `registerTasks` hook.
 
 HTTP adapters (Brave, Tavily, SearXNG) execute by **owning a `FetchUrlTask`**, inheriting
 credential resolution via `credential_key`, SafeFetch's redirect/SSRF checks, retry/backoff,
@@ -419,6 +442,35 @@ Standalone packages with optional peer deps, each exposing `./ai` (main thread) 
 huggingface-transformers, huggingface-inference, node-llama-cpp, tf-mediapipe, chrome-ai.
 Shared cloud helpers live in `@workglow/ai/provider-utils`.
 
+**Every per-model decision reads one profile.** Each provider has a `<Prefix>_ModelProfiles.ts`
+built with `makeModelProfileResolver` (`@workglow/ai`): rows keyed by canonical id, ordered
+family rules for ids with no row, a normalizer that reduces every spelling a gateway sends
+(`anthropic/…`, `us.anthropic.…-v1:0`, `…@date`, `models/…`, `:tag`) to that id, and one
+fallback — the only place the provider guesses. Capability inference, the effort policy
+(`makeProfileEffortPolicy`), request building, model search and pricing guards all read the
+resolver, never the raw id, so a model cannot be an image model to the list and a chat model
+to the request, and a gateway spelling cannot reach one site and miss another. A new model is
+a row; a new behavior is a profile field. A provider with a pricing table keeps the two in
+step: `describeModelProfileContract` (`packages/test/src/test/ai-provider/modelProfileContract.ts`)
+fails when a priced model has no row or a row has no price and is not named unpriced, and
+asserts that every reader agrees with every row in every spelling.
+
+An HF Transformers model with `pipeline: "image-text-to-text"` is a vision-language model:
+transformers.js has no `pipeline()` for it, so `getPipeline` caches `{ processor, tokenizer, model }`
+(`AutoProcessor` + `AutoModelForImageTextToText`) under the same key, in-use count and LRU, and
+chat, text generation and tool calling hand its images to the processor (`HFT_VisionLanguage.ts`).
+Which argument a processor takes first differs by class (LFM2-VL and LLaVA take the images first).
+Before any weights download it refuses what cannot chat: a `model_type`
+`AutoModelForImageTextToText` does not map (Janus is `multi_modality`), and a processor with no
+tokenizer or chat template (Florence-2, Moondream and PaliGemma are driven by task prompts). Only
+a missing image processor is reported as a retryable incomplete cache.
+It keeps no KV session — image features sit in the positions a prefix cache would skip — so a
+checkpoint's prefix is rendered in full each round, and it declares neither `cache.checkpoint` nor
+the json-mode / rewriter / summary capabilities, whose run-fns drive a text pipeline.
+Its profile kind is `vision-language`, and for HFT the `pipeline` a record loads with outranks
+both its `pipeline_task` hint and its name: an image-text-to-text load is one whatever it is
+called, and any other load is never one, because it runs text-only.
+
 **`*_JobRunFns.ts` runs inside a worker** with its own `globalServiceRegistry`. Never read
 main-thread state (credential stores, service registries) there — resolve it in the task
 class (e.g. `AiTask.getJobInput()`) and pass it through the serialized job input.
@@ -450,7 +502,10 @@ Rules for writing a run-fn:
   Helpers: `createDecodeUsageReporter` (`HFT_Streaming.ts`, wired into `createStreamingTextStreamer`)
   and `createEstimatedOutputUsageReporter` (`provider-utils/UsageMapping.ts`) for
   OpenAI-compatible APIs that only bill on the final chunk. Provisional estimates are for
-  the progress counter only — `finish.usage` supersedes them for cost math.
+  the progress counter only — `finish.usage` supersedes them for cost math. A runtime that
+  counts nothing at all (Cactus, Chrome AI) puts `estimateCallUsage` on `finish.usage`
+  instead of leaving it absent: flagged `estimated`, it is never priced or persisted as
+  spend, but an agent's `maxInputTokens` has something to count.
 - **Deltas do not drive progress.** `StreamProcessor` translates only `phase` events into
   `updateProgress`, and `StreamingAiTask` emits one `Generating` phase latched on the
   first delta — so a run-fn that says nothing renders as one static line.
@@ -471,9 +526,17 @@ every round, and a converter that reads `prompt` or flattens to text shows the m
 turn again and never a tool result. A history holding tool calls or tool results must never go
 through `toTextFlatMessages`; HF Transformers still uses it, but only on the path where the
 history has no tool messages and no reasoning yet, where it loses nothing. Tool-result images go
-in a user message after the tool message (OpenAI, xAI, OpenRouter, HF Inference, Ollama); Gemini 3+ takes them in
+in a user message after the tool message (OpenAI, xAI, OpenRouter, HF Inference, Ollama, and an HF
+Transformers vision-language model); Gemini 3+ takes them in
 `functionResponse.parts`, and older models, which reject that with HTTP 400, get a user turn of
-their own — beside the response they leak their thinking into the answer.
+their own — beside the response they leak their thinking into the answer. A model that reads
+text only (DeepSeek, an HF Transformers text-generation model, node-llama-cpp, Cactus, Chrome AI) is shown the image named
+in the result (`textOnlyToolResult`, `@workglow/ai/provider-utils`), never sent it and never left
+without a word of it: a result missing what the tool returned is the one most likely to be
+called for again.
+`runToolTurnConformance` (`@workglow/test-contract/ai-provider`) pins these rules per provider
+over its own transport answering from a script (`*_ToolTurn.test.ts`): a provider declares how it
+streams and replays reasoning and where a tool's images go, and an opt-out carries its reason.
 
 ### `examples/cli` — the CLI and its web console
 
@@ -667,6 +730,23 @@ like a rendering bug and is a resolution one.
 JSON naming `"A2UISurfaceTask"` resolve for a host that installed `workglow` rather than
 reaching for this package by name — the same reason `@workglow/a2a/tasks` is.
 
+### `@workglow/webcontainer`
+
+A coding agent whose tools run inside a [WebContainer](https://webcontainers.io) in the browser
+tab, so model-written code executes there and cannot reach the host. Two subpaths:
+`./sandbox` (tools, prompt, `runSandboxAgent`; written against a `SandboxPort`, so it imports no
+WebContainer code) and `./container` (the only module that loads `@webcontainer/api`, an optional
+peer). `examples/webcontainer-agent` is the demo page; builder's agent chat uses the same package.
+
+Three properties are easy to break. **The tools are created once per sandbox and kept across
+turns** (`sandboxTools` on `runSandboxAgent`): servers outlive a turn so the preview stays live,
+and a run given them never stops them, not even when it fails or is stopped; creating them per turn
+kills the preview on every follow-up. **Background starts are serialized**, because the container
+announces a listening port without saying which process owns it; `stop_servers` bumps an epoch so a
+start still queued or spawning stands down. **Cancellation is listened for before `spawn`**, or a
+Stop clicked mid-start leaves the program running. The page must be cross-origin isolated
+(`COEP: require-corp`, `COOP: same-origin`); one container boots per page.
+
 ### `@workglow/triggers`
 
 Pure-timer triggers — `IntervalTrigger`, `PollingTrigger`, `CronTrigger` — plus the
@@ -764,6 +844,20 @@ coverage (`WORKGLOW_COVERAGE=1`, unit + integration in one job, minus the sectio
 download models or call live APIs); `WORKGLOW_TEST_TARGET=dist` turns the rewrite off to
 exercise the bundles instead, and refuses coverage there. The include/exclude globs are
 repo-root-relative, so coverage and `--project` cannot be combined.
+
+**A red `main` opens an issue.** `.github/workflows/ci-alert.yml` runs on `workflow_run`
+for `Build & Test`, `CodeQL` and both nightly workflows, and `scripts/ci-alert.ts` keeps
+ONE open issue per workflow, labelled `ci-nightly` and titled `CI red on main: <name>`: a
+failed run opens it (run URL, commit, failed jobs), each further failure comments on it, the
+next green run closes it. Only `push` / `schedule` / `workflow_dispatch` runs of this
+repository's `main` count — never a PR, never a cancellation (`Build & Test` cancels an
+in-flight `main` run on the next push). Without it a red schedule is a row in the Actions
+tab: the type-drift guard was once red for a month unseen. `workflow_run` matches by
+`name:`, so renaming a watched workflow means editing that list;
+`scripts/ciAlert.test.ts` fails on a listed name no workflow has, or a `schedule`
+workflow left off it. It runs from the default branch only, so a change to it cannot be
+tried on a PR. `require-green-ci` also refuses a release while the latest finished
+type-drift guard run on `main` is red.
 
 ## Developing without building
 

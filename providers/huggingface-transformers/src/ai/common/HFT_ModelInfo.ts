@@ -75,11 +75,13 @@ export const HFT_ModelInfo: AiProviderRunFn<
     ...(dtype ? { dtype } : {}),
     ...(device ? { device: device as DeviceType } : {}),
   };
-  const cacheStatus = await ModelRegistry.is_pipeline_cached_files(
-    pipelineType,
-    model_path,
-    cacheOptions
-  );
+  // An image-text-to-text model is no pipeline task transformers.js knows, so
+  // its files are the model's plus its tokenizer and processor — the parts
+  // getPipeline loads for it.
+  const cacheStatus =
+    pipelineType === "image-text-to-text"
+      ? await ModelRegistry.is_cached_files(model_path, cacheOptions)
+      : await ModelRegistry.is_pipeline_cached_files(pipelineType, model_path, cacheOptions);
   logger.debug("is_pipeline_cached", {
     input: [pipelineType, model_path, cacheOptions],
     result: cacheStatus,

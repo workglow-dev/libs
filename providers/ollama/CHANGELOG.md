@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.14
+
+### Bug Fixes
+
+#### providers
+
+- send the effort dial from every text run-fn on Ollama, HF Inference and node-llama-cpp
+
+### Refactors
+
+#### ollama,llamacpp-server,node-llama-cpp
+
+- one model profile per provider
+
 ## 0.6.13
 
 ### Features

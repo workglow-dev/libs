@@ -70,9 +70,7 @@ const TextPipelineUseCase = {
 type VisionPipelineUseCase =
   | "background-removal" // https://huggingface.co/tasks/image-segmentation#background-removal
   | "image-segmentation" // https://huggingface.co/tasks/image-segmentation
-  | "depth-estimation" // https://huggingface.co/tasks/depth-estimation
   | "image-classification" // https://huggingface.co/tasks/image-classification
-  | "image-to-image" // https://huggingface.co/tasks/image-to-image
   | "image-to-text" // https://huggingface.co/tasks/image-to-text
   | "object-detection" // https://huggingface.co/tasks/object-detection
   | "image-feature-extraction"; // https://huggingface.co/tasks/image-feature-extraction
@@ -80,9 +78,7 @@ type VisionPipelineUseCase =
 const VisionPipelineUseCase = {
   "background-removal": "background-removal",
   "image-segmentation": "image-segmentation",
-  "depth-estimation": "depth-estimation",
   "image-classification": "image-classification",
-  "image-to-image": "image-to-image",
   "image-to-text": "image-to-text",
   "object-detection": "object-detection",
   "image-feature-extraction": "image-feature-extraction",
@@ -100,14 +96,14 @@ const AudioPipelineUseCase = {
 } as const satisfies Record<AudioPipelineUseCase, AudioPipelineUseCase>;
 
 type MultimodalPipelineUseCase =
-  | "document-question-answering" // https://huggingface.co/tasks/document-question-answering
+  | "image-text-to-text" // https://huggingface.co/tasks/image-text-to-text
   | "image-to-text" // https://huggingface.co/tasks/image-to-text
   | "zero-shot-audio-classification" // https://huggingface.co/tasks/zero-shot-audio-classification
   | "zero-shot-image-classification" // https://huggingface.co/tasks/zero-shot-image-classification
   | "zero-shot-object-detection"; // https://huggingface.co/tasks/zero-shot-object-detection
 
 const MultimodalPipelineUseCase = {
-  "document-question-answering": "document-question-answering",
+  "image-text-to-text": "image-text-to-text",
   "image-to-text": "image-to-text",
   "zero-shot-audio-classification": "zero-shot-audio-classification",
   "zero-shot-image-classification": "zero-shot-image-classification",

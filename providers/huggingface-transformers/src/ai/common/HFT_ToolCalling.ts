@@ -5,9 +5,12 @@
  */
 
 import { asText } from "@workglow/util";
-import type { TextGenerationPipeline } from "@huggingface/transformers";
+import { getLogger } from "@workglow/util/worker";
+import type { LogitsProcessorList, TextGenerationPipeline } from "@huggingface/transformers";
+import type { ResponseFormat } from "@huggingface/transformers-structured-output";
 import type {
   AiProviderRunFn,
+  AiSessionContext,
   ChatMessage,
   CheckpointPrefix,
   ToolCallingTaskInput,
@@ -22,6 +25,7 @@ import {
   getAvailableParsers,
   getGenerationPrefix,
   parseToolCalls,
+  textOnlyToolResult,
 } from "@workglow/ai/provider-utils";
 import {
   buildToolDescription,
@@ -29,7 +33,10 @@ import {
   toTextFlatMessages,
 } from "@workglow/ai/worker";
 import { renderHftPrefixPrompt, resolveHftParityAnchor } from "./HFT_CacheCheckpoint";
+import type { ConstrainedToolCall } from "./HFT_ConstrainedToolCall";
+import { resolveConstrainedToolCall } from "./HFT_ConstrainedToolCall";
 import type { HfTransformersOnnxModelConfig } from "./HFT_ModelSchema";
+import type { HftVisionLanguageModel } from "./HFT_Pipeline";
 import {
   deleteHftSession,
   getHftSession,
@@ -42,6 +49,14 @@ import {
 } from "./HFT_Pipeline";
 import { hftSamplingOptions } from "./HFT_Sampling";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
+import { hftTemplateToolCall } from "./HFT_TemplateToolCall";
+import {
+  buildHftVisionMessages,
+  generateHftVision,
+  isHftVisionModel,
+  promptAsUserMessage,
+  renderHftVisionPrompt,
+} from "./HFT_VisionLanguage";
 
 // ============================================================================
 // Model detection
@@ -157,9 +172,13 @@ function resolveHFTToolsAndMessages(
  * Unlike `toTextFlatMessages` (which flattens everything to `{role, content}`
  * strings), this preserves tool_calls on assistant messages and the tool name
  * on tool-result messages — both required by HFT chat templates that support
- * tool calling. An assistant turn's reasoning rides as `reasoning_content`,
+ * tool calling. A call takes the {@link hftTemplateToolCall} form, which every
+ * template renders and a flat `{ name, arguments }` does not. A tool result is text only, an image in it named by
+ * {@link textOnlyToolResult}. An assistant turn's reasoning rides as `reasoning_content`,
  * which Qwen3-style templates read to keep the thinking of the current tool
  * loop in the rendered history; templates that do not know it ignore it.
+ * A vision-language model, which is handed the images, takes
+ * {@link buildHftVisionMessages} instead.
  */
 export function buildHFTMessages(
   messages: ReadonlyArray<ChatMessage> | undefined,
@@ -205,9 +224,9 @@ export function buildHFTMessages(
             name: string;
             input: Record<string, unknown>;
           };
-          return { id: tu.id, name: tu.name, arguments: tu.input };
+          return hftTemplateToolCall(tu.id, tu.name, tu.input);
         });
-      for (const call of toolCalls) toolNames.set(call.id, call.name);
+      for (const call of toolCalls) toolNames.set(call.id, call.function.name);
       const reasoning = msg.content
         .filter((b) => b.type === "reasoning")
         .map((b) => (b as { type: "reasoning"; text: string }).text)
@@ -219,14 +238,12 @@ export function buildHFTMessages(
     } else if (msg.role === "tool") {
       for (const b of msg.content) {
         if (b.type !== "tool_result") continue;
-        const text = b.content
-          .filter((inner) => inner.type === "text")
-          .map((inner) => (inner as { type: "text"; text: string }).text)
-          .join("");
+        // A chat template takes a tool result as text, so an image the tool
+        // returned is named in its place rather than left out without a word.
         const name = toolNames.get(b.tool_use_id);
         out.push({
           role: "tool",
-          content: text,
+          content: textOnlyToolResult(b.content),
           tool_call_id: b.tool_use_id,
           ...(name !== undefined ? { name } : {}),
         });
@@ -329,11 +346,7 @@ function buildPromptAndPrefix(
     }) as string;
   }
 
-  const responsePrefix =
-    input.toolChoice === "none" || hasToolMessages(input)
-      ? undefined
-      : getGenerationPrefix(modelFamily, forcedToolSelection(input));
-
+  const responsePrefix = generationPrefix(input, modelFamily);
   return {
     prompt: responsePrefix ? `${basePrompt}${responsePrefix}` : basePrompt,
     responsePrefix,
@@ -370,37 +383,54 @@ function buildCheckpointPromptAndPrefix(
     input.toolChoice
   );
 
-  let tools: ReturnType<typeof mapHFTTools> | undefined;
-  if (input.toolChoice === "none") {
-    tools = undefined;
-  } else if (
-    typeof input.toolChoice === "string" &&
-    input.toolChoice !== "auto" &&
-    input.toolChoice !== "required"
-  ) {
-    const selected = (input.tools ?? []).filter((t: ToolDefinition) => t.name === input.toolChoice);
-    const source = selected.length > 0 ? selected : (prefix.tools ?? input.tools);
-    tools = source && source.length > 0 ? mapHFTTools(source) : undefined;
-  } else {
-    const source = prefix.tools && prefix.tools.length > 0 ? prefix.tools : input.tools;
-    tools = source && source.length > 0 ? mapHFTTools(source) : undefined;
-  }
-
+  const tools = selectCheckpointTools(input, prefix);
   const basePrompt = tokenizer.apply_chat_template(messages as any, {
     ...(tools ? { tools: tools as any } : {}),
     tokenize: false,
     add_generation_prompt: true,
   }) as string;
 
-  const responsePrefix =
-    input.toolChoice === "none" || hasToolMessages(input)
-      ? undefined
-      : getGenerationPrefix(modelFamily, forcedToolSelection(input));
-
+  const responsePrefix = generationPrefix(input, modelFamily);
   return {
     prompt: responsePrefix ? `${basePrompt}${responsePrefix}` : basePrompt,
     responsePrefix,
   };
+}
+
+/**
+ * The tools a checkpoint consumer renders: the prefix's, which the warm-up
+ * rendered, unless the call narrows to one tool by name.
+ */
+function selectCheckpointTools(
+  input: ToolCallingTaskInput,
+  prefix: CheckpointPrefix
+): ReturnType<typeof mapHFTTools> | undefined {
+  if (input.toolChoice === "none") return undefined;
+  if (
+    typeof input.toolChoice === "string" &&
+    input.toolChoice !== "auto" &&
+    input.toolChoice !== "required"
+  ) {
+    const selected = (input.tools ?? []).filter((t: ToolDefinition) => t.name === input.toolChoice);
+    const source = selected.length > 0 ? selected : (prefix.tools ?? input.tools);
+    return source && source.length > 0 ? mapHFTTools(source) : undefined;
+  }
+  const source = prefix.tools && prefix.tools.length > 0 ? prefix.tools : input.tools;
+  return source && source.length > 0 ? mapHFTTools(source) : undefined;
+}
+
+/**
+ * The markup a model family's tool call opens with, appended to the prompt so
+ * a forced call starts already inside it. None after tool results, where the
+ * model is as likely to answer as to call again.
+ */
+function generationPrefix(
+  input: ToolCallingTaskInput,
+  modelFamily: string | null
+): string | undefined {
+  return input.toolChoice === "none" || hasToolMessages(input)
+    ? undefined
+    : getGenerationPrefix(modelFamily, forcedToolSelection(input));
 }
 
 // ============================================================================
@@ -449,15 +479,157 @@ export function createHftDeltaRouter(
   };
 }
 
+/**
+ * Parse the answer text for tool calls with the model-family-aware parser and
+ * emit the valid ones. A generation prefix is prepended so the parser sees the
+ * full markup it opened. Only the calls are taken: the parser's cleaned text is
+ * the same text the markup filter already streamed, and the stream is the one
+ * copy. The answer text excludes thinking — a call quoted inside it was never
+ * made.
+ */
+function emitParsedToolCalls(
+  input: ToolCallingTaskInput,
+  answerText: string,
+  responsePrefix: string | undefined,
+  modelFamily: string | null,
+  tools: ReadonlyArray<ToolDefinition>,
+  emit: (event: {
+    type: "object-delta";
+    port: "toolCalls";
+    objectDelta: ToolCallingTaskOutput["toolCalls"];
+  }) => void
+): void {
+  const parseableFullText = responsePrefix ? `${responsePrefix}${answerText}` : answerText;
+  const { toolCalls } = adaptParserResult(
+    parseToolCalls(parseableFullText, { parser: modelFamily })
+  );
+  const validToolCalls = filterValidToolCalls(normalizeParsedToolCalls(input, toolCalls), tools);
+  if (validToolCalls.length > 0) {
+    emit({ type: "object-delta", port: "toolCalls", objectDelta: [...validToolCalls] });
+  }
+}
+
+/**
+ * The tools a parsed call may name. A checkpoint turn may name a tool only its
+ * prefix holds: the prompt (and, on a text model, the constraint) both list
+ * that one, so a call to it is a valid call. A call forced by name admits that
+ * tool alone: a grammar enforces it only when one applies, and a turn decoded
+ * free (a vision-language model, a family with no grammar, a grammar that
+ * failed) can still name another.
+ */
+function allowedTools(
+  input: ToolCallingTaskInput,
+  sessionContext: AiSessionContext | undefined
+): ReadonlyArray<ToolDefinition> {
+  const prefixTools = sessionContext?.prefix?.tools ?? [];
+  const tools = [
+    ...(input.tools ?? []),
+    ...prefixTools.filter((tool) => !input.tools?.some((own) => own.name === tool.name)),
+  ];
+  const forced = forcedToolSelection(input);
+  return forced === undefined ? tools : tools.filter((tool) => tool.name === forced);
+}
+
+// ============================================================================
+// Vision-language models
+// ============================================================================
+
+/**
+ * One tool-calling round on a vision-language model: the same markup, parser,
+ * delta routing and sampling as a text model, with the conversation's images
+ * handed to the processor ({@link buildHftVisionMessages} says where each
+ * goes).
+ *
+ * No KV session is read or written. A checkpoint's prefix is rendered in full
+ * every round instead, and an emitted checkpoint stores nothing here: its
+ * registry entry carries the prefix, which the next round renders the same way.
+ */
+async function runVisionToolCalling(
+  input: ToolCallingTaskInput,
+  model: HfTransformersOnnxModelConfig,
+  signal: AbortSignal | undefined,
+  emit: Parameters<typeof HFT_ToolCalling>[3],
+  sessionContext: AiSessionContext | undefined
+): Promise<void> {
+  const vlm = (await getPipeline(model, emit, {}, signal)) as HftVisionLanguageModel;
+  const modelFamily = detectModelFamilyFromConfig(model);
+  const prefix = sessionContext?.prefix;
+
+  let conversation: ReturnType<typeof buildHftVisionMessages>;
+  let tools: ReturnType<typeof mapHFTTools> | undefined;
+  if (prefix) {
+    const fromPrompt = promptAsUserMessage(input.prompt);
+    const tail: ReadonlyArray<ChatMessage> =
+      input.messages && input.messages.length > 0 ? input.messages : fromPrompt ? [fromPrompt] : [];
+    conversation = buildHftVisionMessages(
+      [...(prefix.messages ?? []), ...tail],
+      input.systemPrompt || prefix.systemPrompt,
+      undefined,
+      input.toolChoice
+    );
+    tools = selectCheckpointTools(input, prefix);
+  } else {
+    conversation = buildHftVisionMessages(
+      input.messages,
+      input.systemPrompt,
+      input.prompt,
+      input.toolChoice
+    );
+    tools = selectHFTTools(input);
+  }
+
+  const responsePrefix = generationPrefix(input, modelFamily);
+  const basePrompt = renderHftVisionPrompt(vlm, conversation.messages, tools);
+  const prompt = responsePrefix ? `${basePrompt}${responsePrefix}` : basePrompt;
+
+  const filter = createHftDeltaRouter((event) => emit(event), prompt.trimEnd().endsWith("<think>"));
+  try {
+    await generateHftVision({
+      vlm,
+      prompt,
+      images: conversation.images,
+      maxNewTokens: input.maxTokens ?? 1024,
+      sampling: hftSamplingOptions(input.temperature, "model-default"),
+      onText: (text) => filter.feed(text),
+      emit,
+      signal,
+    });
+  } finally {
+    filter.flush();
+  }
+
+  emitParsedToolCalls(
+    input,
+    filter.answerText(),
+    responsePrefix,
+    modelFamily,
+    allowedTools(input, sessionContext),
+    emit
+  );
+  emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput });
+}
+
 // ============================================================================
 // Provider run functions
 // ============================================================================
+
+/** A forced-call constraint paired with the logits processor that enforces it. */
+interface ToolCallGrammar {
+  readonly constraint: ConstrainedToolCall;
+  readonly processor: LogitsProcessorList;
+}
 
 export const HFT_ToolCalling: AiProviderRunFn<
   ToolCallingTaskInput,
   ToolCallingTaskOutput,
   HfTransformersOnnxModelConfig
 > = async (input, model, signal, emit, _outputSchema, sessionContext) => {
+  if (isHftVisionModel(model!)) {
+    await withHftPipelineInUse(getPipelineCacheKey(model!), () =>
+      runVisionToolCalling(input, model!, signal, emit, sessionContext)
+    );
+    return;
+  }
   const sessionId = sessionContext?.sessionId;
   const isCheckpoint = sessionContext?.prefix !== undefined;
   await withHftPipelineInUse(getPipelineCacheKey(model!), async () => {
@@ -498,119 +670,209 @@ export const HFT_ToolCalling: AiProviderRunFn<
       }
       promptParts = buildPromptAndPrefix(generateText.tokenizer, input, modelFamily);
     }
-    const { prompt, responsePrefix } = promptParts;
 
-    // Accumulate raw tokens (the KV cache encodes them verbatim), and route
-    // each delta: thinking to `reasoning`, the rest through the tool-call
-    // markup filter to `text`. A template that opens `<think>` in the prompt
-    // leaves the generation starting inside the block.
-    let fullText = "";
-    const filter = createHftDeltaRouter(
-      (event) => emit(event),
-      prompt.trimEnd().endsWith("<think>")
-    );
+    // A turn that must end in one call is decoded under a grammar when the
+    // family's call format allows it. A schema the engine rejects (it refuses
+    // `pattern` and most `format`s, which cannot be enforced incrementally)
+    // leaves the turn unconstrained, as it was before. A generation prefix has
+    // already opened the call itself, so there is no body left to constrain.
+    const constrained =
+      promptParts.responsePrefix === undefined
+        ? resolveConstrainedToolCall(
+            input,
+            modelFamily,
+            getModelTextCandidates(model!),
+            promptParts.prompt,
+            sessionContext?.prefix
+          )
+        : undefined;
+    let grammar: ToolCallGrammar | undefined;
+    if (constrained) {
+      try {
+        const { StructuredOutputProcessor } =
+          await import("@huggingface/transformers-structured-output");
+        grammar = {
+          constraint: constrained,
+          processor: new StructuredOutputProcessor(generateText.tokenizer, {
+            type: "json_schema",
+            json_schema: constrained.schema,
+          } as Extract<ResponseFormat, { type: "json_schema" }>),
+        };
+      } catch (error) {
+        getLogger().debug("HFT_ToolCalling: tool-call grammar not applied", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
-    const streamer = createStreamingTextStreamer(
-      generateText.tokenizer,
-      (text) => {
-        fullText += text;
-        filter.feed(text);
-      },
-      TextStreamer,
+    // Usage snapshots replace one another downstream, and each decode starts its
+    // own count. A retry adds what the failed attempt had reported, so the
+    // totals a budget reads only grow, and the prompt it read twice is counted
+    // twice.
+    let carried = { input: 0, output: 0 };
+    let reported = { input: 0, output: 0 };
+    const emitCounted = (event: Parameters<typeof emit>[0]): void => {
+      if (event.type !== "usage") {
+        emit(event);
+        return;
+      }
+      const { input: seen, output: made } = event.usage;
+      const usage = {
+        ...event.usage,
+        input: seen === undefined ? undefined : seen + carried.input,
+        output: made === undefined ? undefined : made + carried.output,
+      };
+      reported = { input: usage.input ?? reported.input, output: usage.output ?? reported.output };
+      emit({ ...event, usage });
+    };
+
+    // One decode of the turn, under `grammar` or free. Everything a decode
+    // touches is built here, so a second attempt starts from nothing: a failed
+    // one leaves its streamer, its text and its KV cache half-written.
+    const decode = async (
+      active: ToolCallGrammar | undefined
+    ): Promise<{
+      readonly prompt: string;
+      readonly responsePrefix: string | undefined;
+      readonly fullText: string;
+      readonly answerText: string;
+      readonly past_key_values: any;
+    }> => {
+      const prompt = active
+        ? `${promptParts.prompt}${active.constraint.prefix}`
+        : promptParts.prompt;
+      const responsePrefix = active ? active.constraint.prefix : promptParts.responsePrefix;
+
+      // Accumulate raw tokens (the KV cache encodes them verbatim), and route
+      // each delta: thinking to `reasoning`, the rest through the tool-call
+      // markup filter to `text`. A template that opens `<think>` in the prompt
+      // leaves the generation starting inside the block.
+      let fullText = "";
+      const filter = createHftDeltaRouter(
+        (event) => emit(event),
+        prompt.trimEnd().endsWith("<think>")
+      );
+
+      const streamer = createStreamingTextStreamer(
+        generateText.tokenizer,
+        (text) => {
+          fullText += text;
+          // A constrained body is the call itself, with no tags around it for the
+          // markup filter to hide, so none of it is the assistant's text.
+          if (!active) filter.feed(text);
+        },
+        TextStreamer,
+        emitCounted
+      );
+      const stopping_criteria = new InterruptableStoppingCriteria();
+      if (signal) {
+        signal.addEventListener("abort", () => stopping_criteria.interrupt(), { once: true });
+      }
+
+      // Session cache: prefix-rewind for tool calling (streaming)
+      let past_key_values: any = undefined;
+
+      // prefix-rewind trusts cached KV tokens positionally, so a snapshot is
+      // only warmed / attached when the fed prompt provably starts with the
+      // exact text the stored KV encodes; otherwise generation falls back to a
+      // full re-encode of `prompt`, which stays correct.
+      const prefixParityOk = prefixPrompt !== undefined && prompt.startsWith(prefixPrompt);
+
+      if (sessionId && !hftSession && prefixParityOk) {
+        // Warm the shared region — the fingerprint's tools+systemPrompt block or
+        // a checkpoint's re-encoded prefix (worker restarted / state evicted).
+        // Never the full prompt: snapshotting this call's user turn would poison
+        // the cache for the next caller, whose different turn would be
+        // positionally misaligned with the stored KV.
+        const { DynamicCache } = await loadTransformersSDK();
+        const cache = new DynamicCache();
+        const tokenized = generateText.tokenizer(prefixPrompt!);
+        await generateText.model.generate({
+          ...tokenized,
+          max_new_tokens: 0,
+          past_key_values: cache,
+        });
+        hftSession = snapshotHftSession(
+          sessionId,
+          cache as Record<string, any>,
+          modelPath,
+          cacheKey,
+          prefixPrompt
+        );
+      }
+
+      if (
+        hftSession?.mode === "prefix-rewind" &&
+        hftSession.modelPath === modelPath &&
+        prefixParityOk &&
+        // WebGPU snapshots cannot be shared: the first decode step's update()
+        // would dispose the snapshot's gpu-buffer tensors, so skip the attach
+        // and re-encode the full prompt instead.
+        !hasGpuBufferEntries(hftSession.baseEntries)
+      ) {
+        // Create a fresh DynamicCache from the prefix snapshot for this call
+        const { DynamicCache } = await loadTransformersSDK();
+        past_key_values = new DynamicCache(hftSession.baseEntries);
+      }
+
+      if (sessionContext?.emitCheckpointId && !past_key_values) {
+        // Emitting without a consumable prefix KV (no parent checkpoint, or
+        // parity fell back to a full re-encode): attach an empty cache so this
+        // turn's KV can still be snapshotted under the emitted checkpoint id.
+        const { DynamicCache } = await loadTransformersSDK();
+        past_key_values = new DynamicCache();
+      }
+
+      try {
+        await generateText(prompt, {
+          max_new_tokens: input.maxTokens ?? 1024,
+          // As for a chat turn, an unset temperature defers to the model's config.
+          ...hftSamplingOptions(input.temperature, "model-default"),
+          return_full_text: false,
+          streamer,
+          stopping_criteria: [stopping_criteria],
+          ...(active ? { logits_processor: active.processor } : {}),
+          ...(past_key_values ? { past_key_values } : {}),
+        });
+      } catch (error) {
+        // A generate() that threw never reached its own end(), which is where the
+        // throttled tail of the usage count is flushed; the retry carries it.
+        streamer.end();
+        throw error;
+      } finally {
+        filter.flush();
+      }
+
+      // Thinking is left out: a call quoted inside it was never made.
+      const answerText = active ? `${fullText}${active.constraint.suffix}` : filter.answerText();
+      return { prompt, responsePrefix, fullText, answerText, past_key_values };
+    };
+
+    // A grammar that cannot finish (the engine reaches a dead end, or its EOS is
+    // not the model's) must not turn a call that decoded freely before into a
+    // failed turn. Nothing of a constrained attempt reached the text ports, so
+    // the free attempt starts clean.
+    let turn: Awaited<ReturnType<typeof decode>>;
+    try {
+      turn = await decode(grammar);
+    } catch (error) {
+      if (!grammar || signal?.aborted) throw error;
+      getLogger().warn("HFT_ToolCalling: constrained decoding failed; decoding without it", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      carried = reported;
+      turn = await decode(undefined);
+    }
+    const { prompt, responsePrefix, fullText, answerText, past_key_values } = turn;
+
+    emitParsedToolCalls(
+      input,
+      answerText,
+      responsePrefix,
+      modelFamily,
+      allowedTools(input, sessionContext),
       emit
     );
-    const stopping_criteria = new InterruptableStoppingCriteria();
-    if (signal) {
-      signal.addEventListener("abort", () => stopping_criteria.interrupt(), { once: true });
-    }
-
-    // Session cache: prefix-rewind for tool calling (streaming)
-    let past_key_values: any = undefined;
-
-    // prefix-rewind trusts cached KV tokens positionally, so a snapshot is
-    // only warmed / attached when the fed prompt provably starts with the
-    // exact text the stored KV encodes; otherwise generation falls back to a
-    // full re-encode of `prompt`, which stays correct.
-    const prefixParityOk = prefixPrompt !== undefined && prompt.startsWith(prefixPrompt);
-
-    if (sessionId && !hftSession && prefixParityOk) {
-      // Warm the shared region — the fingerprint's tools+systemPrompt block or
-      // a checkpoint's re-encoded prefix (worker restarted / state evicted).
-      // Never the full prompt: snapshotting this call's user turn would poison
-      // the cache for the next caller, whose different turn would be
-      // positionally misaligned with the stored KV.
-      const { DynamicCache } = await loadTransformersSDK();
-      const cache = new DynamicCache();
-      const tokenized = generateText.tokenizer(prefixPrompt!);
-      await generateText.model.generate({
-        ...tokenized,
-        max_new_tokens: 0,
-        past_key_values: cache,
-      });
-      hftSession = snapshotHftSession(
-        sessionId,
-        cache as Record<string, any>,
-        modelPath,
-        cacheKey,
-        prefixPrompt
-      );
-    }
-
-    if (
-      hftSession?.mode === "prefix-rewind" &&
-      hftSession.modelPath === modelPath &&
-      prefixParityOk &&
-      // WebGPU snapshots cannot be shared: the first decode step's update()
-      // would dispose the snapshot's gpu-buffer tensors, so skip the attach
-      // and re-encode the full prompt instead.
-      !hasGpuBufferEntries(hftSession.baseEntries)
-    ) {
-      // Create a fresh DynamicCache from the prefix snapshot for this call
-      const { DynamicCache } = await loadTransformersSDK();
-      past_key_values = new DynamicCache(hftSession.baseEntries);
-    }
-
-    if (sessionContext?.emitCheckpointId && !past_key_values) {
-      // Emitting without a consumable prefix KV (no parent checkpoint, or
-      // parity fell back to a full re-encode): attach an empty cache so this
-      // turn's KV can still be snapshotted under the emitted checkpoint id.
-      const { DynamicCache } = await loadTransformersSDK();
-      past_key_values = new DynamicCache();
-    }
-
-    try {
-      await generateText(prompt, {
-        max_new_tokens: input.maxTokens ?? 1024,
-        // As for a chat turn, an unset temperature defers to the model's config.
-        ...hftSamplingOptions(input.temperature, "model-default"),
-        return_full_text: false,
-        streamer,
-        stopping_criteria: [stopping_criteria],
-        ...(past_key_values ? { past_key_values } : {}),
-      });
-    } finally {
-      filter.flush();
-    }
-
-    // Parse the accumulated text for tool calls using the model-family-aware parser.
-    // For models that use a generation prefix, prepend it so the parser sees the
-    // full markup pattern.
-    // Thinking is left out: a call quoted inside it was never made.
-    const answerText = filter.answerText();
-    const parseableFullText = responsePrefix ? `${responsePrefix}${answerText}` : answerText;
-    // Only the calls are taken: the parser's cleaned text is the same text the
-    // markup filter already streamed, and the stream is the one copy.
-    const { toolCalls } = adaptParserResult(
-      parseToolCalls(parseableFullText, { parser: modelFamily })
-    );
-    const validToolCalls = filterValidToolCalls(
-      normalizeParsedToolCalls(input, toolCalls),
-      input.tools
-    );
-
-    if (validToolCalls.length > 0) {
-      emit({ type: "object-delta", port: "toolCalls", objectDelta: [...validToolCalls] });
-    }
 
     if (sessionContext?.emitCheckpointId && past_key_values) {
       // `fullText` is the raw generated text (pre markup-filter), so

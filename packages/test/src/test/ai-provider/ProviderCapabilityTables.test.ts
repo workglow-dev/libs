@@ -59,6 +59,10 @@ describe("future and unreadable ids take a documented default", () => {
   it("does not guess at an unknown OpenAI model", () => {
     expect(resolveOpenAiTemperatureWithReasoning(gpt("gpt-7-nova"))).toEqual({
       value: false,
+      source: "family",
+    });
+    expect(resolveOpenAiTemperatureWithReasoning(gpt("mystery"))).toEqual({
+      value: false,
       source: "default",
     });
   });

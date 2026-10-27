@@ -13,12 +13,14 @@ import { PermanentJobError } from "@workglow/job-queue";
 import { loadTfmpTasksTextSDK, loadTfmpTasksVisionSDK } from "./TFMP_Client";
 import { closeGenaiLlm, getGenaiLlm, withGenaiLock } from "./TFMP_GenaiRuntime";
 import type { TFMPModelConfig } from "./TFMP_ModelSchema";
+import { resolveTfmpRecordProfile } from "./TFMP_ModelProfiles";
 import type { TaskInstance } from "./TFMP_Runtime";
 import { getModelTask, modelTaskCache, wasm_reference_counts, wasm_tasks } from "./TFMP_Runtime";
 
 /**
  * Core implementation for downloading a TensorFlow MediaPipe model. Resolves
- * the pipeline-specific SDK class, materialises the task via
+ * the pipeline-specific SDK class from the model's profile (the same answer
+ * capability inference reads), materialises the task via
  * {@link getModelTask}, then immediately closes it to release the WASM
  * reference acquired during load — the download itself is the purpose; we
  * don't keep the task alive.
@@ -33,7 +35,8 @@ export const TFMP_Download: AiProviderRunFn<
   ModelDownloadTaskRunOutput,
   TFMPModelConfig
 > = async (input, model, signal, emit) => {
-  const pipeline = model?.provider_config.pipeline;
+  const profile = model ? resolveTfmpRecordProfile(model).profile : undefined;
+  const pipeline = profile?.kind === "task" ? profile.pipeline : undefined;
   let task: TaskInstance;
   switch (pipeline) {
     case "text-embedder": {
@@ -107,7 +110,7 @@ export const TFMP_Download: AiProviderRunFn<
     }
     default:
       throw new PermanentJobError(
-        `Invalid pipeline: ${pipeline}. Supported pipelines: text-embedder, text-classifier, text-language-detector, genai-text, vision-image-classifier, vision-image-embedder, vision-image-segmenter, vision-object-detector, vision-face-detector, vision-face-landmarker, vision-gesture-recognizer, vision-hand-landmarker, vision-pose-landmarker`
+        `Invalid pipeline: ${model?.provider_config.pipeline}. Supported pipelines: text-embedder, text-classifier, text-language-detector, genai-text, vision-image-classifier, vision-image-embedder, vision-image-segmenter, vision-object-detector, vision-face-detector, vision-face-landmarker, vision-gesture-recognizer, vision-hand-landmarker, vision-pose-landmarker`
       );
   }
 

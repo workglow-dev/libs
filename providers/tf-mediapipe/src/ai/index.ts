@@ -24,12 +24,19 @@ export {
   TFMP_VISION_WASM_VERSION,
 } from "./common/TFMP_Runtime";
 
-import { TFMP_RUN_FN_SPECS } from "./common/TFMP_Capabilities";
+import { inferTfmpCapabilities, TFMP_RUN_FN_SPECS } from "./common/TFMP_Capabilities";
 import { toTexImageSource } from "./common/TFMP_Image";
 import { buildGenaiPrompt, resolveTfmpChatTemplate } from "./common/TFMP_ChatTemplate";
 import { resolveTfmpDelegate } from "./common/TFMP_Delegate";
 import { isGenaiBusy, withGenaiLock } from "./common/TFMP_GenaiRuntime";
 import { TFMP_PREVIEW_TASKS, TFMP_RUN_FNS } from "./common/TFMP_JobRunFns";
+import {
+  normalizeTfmpModelId,
+  resolveTfmpProfile,
+  resolveTfmpRecordProfile,
+  TFMP_MODEL_FAMILIES,
+  tfmpProfileCapabilities,
+} from "./common/TFMP_ModelProfiles";
 import { optionsMatch } from "./common/TFMP_Runtime";
 import { extractJsonFromText } from "./common/TFMP_StructuredGeneration";
 import { TensorFlowMediaPipeQueuedProvider } from "./TensorFlowMediaPipeQueuedProvider";
@@ -42,6 +49,12 @@ export const _testOnly = {
   TFMP_RUN_FN_SPECS,
   TFMP_RUN_FNS,
   TFMP_PREVIEW_TASKS,
+  TFMP_MODEL_FAMILIES,
+  normalizeTfmpModelId,
+  resolveTfmpProfile,
+  resolveTfmpRecordProfile,
+  tfmpProfileCapabilities,
+  inferTfmpCapabilities,
   toTexImageSource,
   buildGenaiPrompt,
   resolveTfmpChatTemplate,

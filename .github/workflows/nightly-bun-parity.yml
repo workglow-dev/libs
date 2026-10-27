@@ -1,3 +1,5 @@
+# A red run on main opens a `ci-nightly` issue (`ci-alert.yml`), which watches
+# this workflow by its `name:` -- rename it there too.
 name: Nightly Bun parity & coverage
 
 # Bun is a supported local runner and occasionally surfaces bugs vitest does not,

@@ -2,7 +2,7 @@
   "name": "@workglow/tf-mediapipe",
   "type": "module",
   "sideEffects": false,
-  "version": "0.6.13",
+  "version": "0.6.14",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

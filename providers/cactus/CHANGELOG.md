@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.14
+
+### Bug Fixes
+
+#### cactus
+
+- carry each call and its labelled result into Needle's query
+
+#### ai
+
+- fail maxInputTokens closed on uncounted rounds; estimate usage for Cactus and Chrome AI
+
 ## 0.6.13
 
 ### Features

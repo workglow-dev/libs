@@ -6,6 +6,10 @@
 
 import type { Capability, ModelRecord } from "@workglow/ai/worker";
 import { TYPESAFEAI_CAPABILITY_SETS } from "./TypeSafeAi_CapabilitySets";
+import {
+  resolveTypeSafeAiProfile,
+  typeSafeAiProfileCapabilities,
+} from "./TypeSafeAi_ModelProfiles";
 
 /**
  * Closed list of capability-set specs the TypeSafe provider serves. Derived
@@ -22,26 +26,18 @@ export function typeSafeAiWorkerRunFnSpecs(): readonly {
 }
 
 /**
- * Shape used by the model-name regexes — `model_id` is required, the rest is
+ * Shape read for the model id — `model_id` is required, the rest is
  * loosely-typed metadata only used to opportunistically widen the inferred
  * capability set.
  */
 type CapabilityHints = Pick<ModelRecord, "model_id" | "provider_config" | "capabilities">;
 
 /**
- * Heuristic capability inference for a TypeSafe {@link ModelRecord}.
- *
- * Jev is a System One model: it returns typed answers to named questions and
- * never writes text. So the inferred set never includes `text.generation`,
- * `tool-use`, `json-mode`, any embedding or any image capability — a record
- * claiming one of those would clear the task's capability gate and then fail
- * inside the provider, with the useful "model is missing capabilities" message
- * replaced by whatever the API said.
- *
- * What it does infer is the native `judgment.systemone` surface plus the two
- * existing tasks a Choice and a Noul answer serve honestly — classification
- * (which is a Choice over caller-supplied labels) and reranking (a Noul per
- * candidate) — and the catalog meta-ops.
+ * Capability inference for a TypeSafe {@link ModelRecord}. Reads the model's
+ * profile (see `TYPESAFEAI_MODEL_PROFILES`) by its id, or its
+ * `provider_config.model_name` when there is no id: Jev and its aliases,
+ * versions and future `jev-*` releases. Falls back to the model's stored
+ * `capabilities` array (or a baseline of search + info) for any other id.
  *
  * Main-thread method only — workers do not run capability inference.
  */
@@ -52,17 +48,8 @@ export function inferTypeSafeAiCapabilities(model: CapabilityHints): readonly Ca
       ""
   );
 
-  // Jev and its aliases — `jev-latest`, `jev-preview`, `jev-1.13.0`, and future
-  // `jev-*` releases served by the same endpoint.
-  if (/^jev/i.test(id)) {
-    return [
-      "judgment.systemone",
-      "text.classification",
-      "text.reranking",
-      "model.info",
-      "model.search",
-    ];
-  }
+  const { profile, recognized } = resolveTypeSafeAiProfile(id);
+  if (recognized) return typeSafeAiProfileCapabilities(profile);
 
   // Unknown model — fall back to whatever the record declared, or just expose
   // the meta-ops so the model can still be searched / inspected.

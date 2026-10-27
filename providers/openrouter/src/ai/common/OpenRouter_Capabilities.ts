@@ -6,6 +6,11 @@
 
 import type { Capability, ModelRecord } from "@workglow/ai/worker";
 import { OPENROUTER_CAPABILITY_SETS } from "./OpenRouter_CapabilitySets";
+import {
+  OPENROUTER_BASELINE_CHAT,
+  openRouterProfileCapabilities,
+  resolveOpenRouterProfile,
+} from "./OpenRouter_ModelProfiles";
 
 export const OPENROUTER_RUN_FN_SPECS = OPENROUTER_CAPABILITY_SETS.map((serves) => ({ serves }));
 
@@ -15,22 +20,19 @@ export function openRouterWorkerRunFnSpecs(): readonly {
   return OPENROUTER_RUN_FN_SPECS;
 }
 
-/** Baseline capabilities every OpenRouter chat model exposes. */
-const BASELINE_CHAT: readonly Capability[] = [
-  "text.generation",
-  "text.rewriter",
-  "text.summary",
-  "model.count-tokens",
-  "model.info",
-  "model.search",
-];
-
 interface OpenRouterModelMeta {
   readonly architecture?: {
     readonly input_modalities?: readonly string[];
     readonly modality?: string;
   };
   readonly supported_parameters?: readonly string[];
+}
+
+function hasModelMeta(meta: OpenRouterModelMeta | undefined): boolean {
+  return (
+    (meta?.architecture?.input_modalities?.length ?? 0) > 0 ||
+    (meta?.supported_parameters?.length ?? 0) > 0
+  );
 }
 
 /**
@@ -42,7 +44,7 @@ interface OpenRouterModelMeta {
 export function deriveCapabilitiesFromMeta(
   meta: OpenRouterModelMeta | undefined
 ): readonly Capability[] {
-  const caps = new Set<Capability>(BASELINE_CHAT);
+  const caps = new Set<Capability>(OPENROUTER_BASELINE_CHAT);
   const modalities = meta?.architecture?.input_modalities ?? [];
   if (modalities.includes("image")) caps.add("vision-input");
   const params = meta?.supported_parameters ?? [];
@@ -54,18 +56,33 @@ export function deriveCapabilitiesFromMeta(
 }
 
 /**
+ * The capabilities a model id and its `/models` metadata describe. Metadata,
+ * when there is any, is what OpenRouter says the routed model takes; without
+ * it the model profile answers, so an id it knows is an embedding, image or
+ * audio model is not advertised as chat.
+ */
+export function openRouterModelCapabilities(
+  modelName: string | undefined,
+  meta: OpenRouterModelMeta | undefined
+): readonly Capability[] {
+  if (hasModelMeta(meta)) return deriveCapabilitiesFromMeta(meta);
+  return openRouterProfileCapabilities(resolveOpenRouterProfile(modelName).profile);
+}
+
+/**
  * Capability inference for an OpenRouter {@link ModelRecord}. Prefers the
- * record's stored metadata (populated at model-search time); falls back to the
- * record's declared `capabilities`, then to the baseline chat set.
+ * record's stored metadata (populated at model-search time); then the record's
+ * declared `capabilities`; then the model profile. The profile answers for an
+ * id it does not recognize too: it takes one for a chat model, which is what
+ * every entry `/models` lists serves.
  */
 export function inferOpenRouterCapabilities(model: ModelRecord): readonly Capability[] {
   const meta = model.metadata as OpenRouterModelMeta | undefined;
-  const hasMeta =
-    (meta?.architecture?.input_modalities?.length ?? 0) > 0 ||
-    (meta?.supported_parameters?.length ?? 0) > 0;
-  if (hasMeta) return deriveCapabilitiesFromMeta(meta);
+  if (hasModelMeta(meta)) return deriveCapabilitiesFromMeta(meta);
 
   const declared = (model.capabilities as readonly Capability[] | undefined) ?? [];
   if (declared.length > 0) return declared;
-  return BASELINE_CHAT;
+  const name =
+    (model.provider_config as { model_name?: string } | undefined)?.model_name ?? model.model_id;
+  return openRouterModelCapabilities(name, undefined);
 }

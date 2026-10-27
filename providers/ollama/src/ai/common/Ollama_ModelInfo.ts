@@ -5,18 +5,11 @@
  */
 
 import type { AiProviderRunFn, ModelInfoTaskInput, ModelInfoTaskOutput } from "@workglow/ai";
+import { resolveOllamaProfile } from "./Ollama_ModelProfiles";
 import type { OllamaModelConfig } from "./Ollama_ModelSchema";
 import { getOllamaModelName } from "./Ollama_ModelUtil";
 
 type GetClient = (model: OllamaModelConfig | undefined) => Promise<any>;
-
-/** Known Ollama embedding model dimensions. */
-const OLLAMA_EMBEDDING_DIMENSIONS: Record<string, { native_dimensions: number; mrl: boolean }> = {
-  "nomic-embed-text": { native_dimensions: 768, mrl: false },
-  "mxbai-embed-large": { native_dimensions: 1024, mrl: false },
-  "all-minilm": { native_dimensions: 384, mrl: false },
-  "snowflake-arctic-embed": { native_dimensions: 1024, mrl: false },
-};
 
 export function createOllamaModelInfoStream(
   getClient: GetClient
@@ -44,11 +37,12 @@ export function createOllamaModelInfoStream(
       }
 
       if (native_dimensions === undefined) {
-        const modelName = (pc.model_name as string) ?? "";
-        const baseName = modelName.split(":")[0];
-        const known = OLLAMA_EMBEDDING_DIMENSIONS[baseName];
+        const { profile } = resolveOllamaProfile(
+          typeof pc.model_name === "string" ? pc.model_name : undefined
+        );
+        const known = profile.kind === "embedding" ? profile.dimensions : undefined;
         if (known) {
-          native_dimensions = known.native_dimensions;
+          native_dimensions = known.native;
           mrl = mrl ?? known.mrl;
         }
       }

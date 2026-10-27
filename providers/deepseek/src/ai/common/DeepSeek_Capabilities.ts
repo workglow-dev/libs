@@ -6,6 +6,7 @@
 
 import type { Capability, ModelRecord } from "@workglow/ai/worker";
 import { DEEPSEEK_CAPABILITY_SETS } from "./DeepSeek_CapabilitySets";
+import { deepSeekProfileCapabilities, resolveDeepSeekProfile } from "./DeepSeek_ModelProfiles";
 
 /**
  * Closed list of capability-set specs the DeepSeek provider serves. Derived
@@ -20,18 +21,18 @@ export function deepSeekWorkerRunFnSpecs(): readonly { readonly serves: readonly
 }
 
 /**
- * Shape used by the model-name regexes — `model_id` is required, the rest is
+ * Shape read for the model id — `model_id` is required, the rest is
  * loosely-typed metadata only used to opportunistically widen the inferred
  * capability set.
  */
 type CapabilityHints = Pick<ModelRecord, "model_id" | "provider_config" | "capabilities">;
 
 /**
- * Heuristic capability inference for a DeepSeek {@link ModelRecord}. Pattern-
- * matches the canonical DeepSeek model id strings (and the `provider_config.
- * model_name` if present) to a closed set of {@link Capability}s. Falls back
- * to the model's stored `capabilities` array (or a baseline of search + info)
- * when no pattern matches.
+ * Capability inference for a DeepSeek {@link ModelRecord}. Reads the model's
+ * profile (see `DEEPSEEK_MODEL_PROFILES`) by its id, or its
+ * `provider_config.model_name` when there is no id. Falls back to the model's
+ * stored `capabilities` array (or a baseline of search + info) when the id
+ * names no known family.
  *
  * The DeepSeek chat models are text-only — no vision input and no image
  * generation — so the inferred set never includes those.
@@ -45,20 +46,8 @@ export function inferDeepSeekCapabilities(model: CapabilityHints): readonly Capa
       ""
   );
 
-  // Chat / reasoning models — deepseek-chat, deepseek-reasoner, deepseek-v4-*,
-  // and future deepseek-* ids.
-  if (/^deepseek/i.test(id)) {
-    return [
-      "text.generation",
-      "text.rewriter",
-      "text.summary",
-      "tool-use",
-      "json-mode",
-      "model.count-tokens",
-      "model.info",
-      "model.search",
-    ];
-  }
+  const { profile, recognized } = resolveDeepSeekProfile(id);
+  if (recognized) return deepSeekProfileCapabilities(profile);
 
   // Unknown model — fall back to whatever the record declared, or just expose
   // the meta-ops so the model can still be searched / inspected.

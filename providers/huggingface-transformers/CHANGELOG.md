@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.6.14
+
+### Features
+
+#### huggingface-transformers
+
+- send images to vision-language models
+- constrain forced tool calls with a grammar
+
+### Bug Fixes
+
+- read main's model profiles where the branch read raw ids
+- refuse a truncated guard history; admit only the forced tool's call
+- address code-review findings on the branch
+
+#### huggingface-transformers
+
+- offer only pipelines a run-fn serves, and infer the ones it does
+- refuse vision models that cannot chat before their weights load
+- write history tool calls in the chat-template function form
+- name a tool's image in the result a text-only model reads
+- carry usage across the grammar fallback
+- validate tool calls against the checkpoint prefix's tools
+- harden constrained tool-call decoding
+- type the tool-call logits processor
+
+### Refactors
+
+#### huggingface-transformers,tf-mediapipe,chrome-ai
+
+- one model profile per provider
+
 ## 0.6.13
 
 ### Features

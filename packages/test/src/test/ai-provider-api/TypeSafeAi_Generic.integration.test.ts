@@ -17,7 +17,7 @@ import { _testOnly } from "@workglow/typesafeai/ai";
 import { setTaskQueueRegistry } from "@workglow/task-graph";
 import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
-import { TYPESAFEAI } from "@workglow/typesafeai/ai";
+import { inferTypeSafeAiCapabilities, TYPESAFEAI } from "@workglow/typesafeai/ai";
 import { registerTypeSafeAiInline } from "@workglow/typesafeai/ai-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -179,7 +179,9 @@ describe.skipIf(!RUN)("TypeSafe (live)", () => {
     for (const result of live!.results) {
       expect(result.description.length).toBeGreaterThan(0);
       expect(result.record.provider).toBe(TYPESAFEAI);
-      expect(result.record.capabilities).toEqual([]);
+      expect(result.record.capabilities).toEqual(
+        inferTypeSafeAiCapabilities({ model_id: result.id } as never)
+      );
     }
 
     let fallback: ModelSearchTaskOutput | undefined;

@@ -11,10 +11,12 @@ import type {
   ModelSearchTaskOutput,
 } from "@workglow/ai";
 import { filterLabeledModelsByQuery } from "@workglow/ai/provider-utils";
+import type { Capability } from "@workglow/ai/worker";
 import { stampEffortOptions } from "@workglow/ai/worker";
 import { getClient } from "./DeepSeek_Client";
 import { DEEPSEEK } from "./DeepSeek_Constants";
 import { deepseekEffortPolicy } from "./DeepSeek_EffortPolicy";
+import { deepSeekProfileCapabilities, resolveDeepSeekProfile } from "./DeepSeek_ModelProfiles";
 
 interface DeepSeekModelListItem {
   readonly label: string;
@@ -32,6 +34,12 @@ const DEEPSEEK_FALLBACK: Array<{ label: string; value: string }> = [
   { label: "deepseek-flash", value: "deepseek-flash" },
   { label: "deepseek-v4-pro", value: "deepseek-v4-pro" },
 ];
+
+/** What the profile table says a listed model serves; nothing for an id it does not recognize. */
+function listedCapabilities(modelName: string): Capability[] {
+  const { profile, recognized } = resolveDeepSeekProfile(modelName);
+  return recognized ? [...deepSeekProfileCapabilities(profile)] : [];
+}
 
 async function listDeepSeekModels(credentialKey: string): Promise<DeepSeekModelListItem[]> {
   const client = await getClient({
@@ -57,7 +65,7 @@ function mapModelList(models: DeepSeekModelListItem[]): ModelSearchResultItem[] 
         provider: DEEPSEEK,
         title: m.value,
         description: "",
-        capabilities: [],
+        capabilities: listedCapabilities(m.value),
         provider_config: { model_name: m.value },
         metadata: {},
       },

@@ -1,5 +1,37 @@
 # @workglow/ai
 
+## 0.6.14
+
+### Bug Fixes
+
+#### ai
+
+- check a round's submit_answer calls one at a time
+- send no submit reminder a turn cannot answer
+- report an answered agent turn as answered under an unmeasured budget
+- fail maxInputTokens closed on uncounted rounds; estimate usage for Cactus and Chrome AI
+
+#### huggingface-transformers
+
+- offer only pipelines a run-fn serves, and infer the ones it does
+- name a tool's image in the result a text-only model reads
+
+#### openai
+
+- stream a compatible server's raw reasoning on the reasoning port
+- stream reasoning summaries on the tool-calling reasoning port
+
+#### deepseek
+
+- name a tool's image in its result instead of sending it
+
+### Refactors
+
+#### ai
+
+- split AgentTask's turn loop into budget, round, policy and tool-round modules
+- a shared model-profile resolver; Anthropic and OpenAI read every per-model decision from it
+
 ## 0.6.13
 
 ### Features

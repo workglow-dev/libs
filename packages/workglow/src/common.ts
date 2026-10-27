@@ -27,6 +27,10 @@ export * from "@workglow/mcp/util";
 export * from "@workglow/a2a/tasks";
 export * from "@workglow/a2a/util";
 export * from "@workglow/a2ui/tasks";
+// Registers `WebSearchTask` and no provider: which search vendors exist is the
+// host's decision, stated through `registerBuiltInWebSearchProviders()` or
+// `registerWebSearchProvider()`.
+export * from "@workglow/web-search";
 export * from "@workglow/tasks";
 export * from "@workglow/util";
 export * from "@workglow/util/schema";

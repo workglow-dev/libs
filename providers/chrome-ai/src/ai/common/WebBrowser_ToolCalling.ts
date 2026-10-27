@@ -34,6 +34,7 @@ import {
   snapshotStreamToTextDeltas,
 } from "./WebBrowser_ChromeHelpers";
 import type { WebBrowserModelConfig } from "./WebBrowser_ModelSchema";
+import { chromeCallUsage, initialPromptTexts, measurePromptTokens } from "./WebBrowser_Usage";
 
 function flattenPrompt(prompt: ToolCallingTaskInput["prompt"]): string {
   if (typeof prompt === "string") return prompt;
@@ -185,10 +186,16 @@ export const WebBrowser_ToolCalling: AiProviderRunFn<
     monitor: createDownloadMonitor(emit),
   });
   try {
+    // Measured before prompting: the session's count grows once the prompt runs.
+    const measuredPrompt = await measurePromptTokens(session, promptText, signal);
     const stream = session.promptStreaming(promptText, { signal });
     // The helper emits text-delta only; we emit the composite finish below
     // (text + toolCalls) after validating the captured calls.
-    await snapshotStreamToTextDeltas<ToolCallingTaskOutput>(stream, "text", emit);
+    const outputText = await snapshotStreamToTextDeltas<ToolCallingTaskOutput>(
+      stream,
+      "text",
+      emit
+    );
 
     // Validate each captured call's `input` against its tool's compiled
     // schema, then apply name-only defence in depth.
@@ -197,7 +204,25 @@ export const WebBrowser_ToolCalling: AiProviderRunFn<
     if (validated.length > 0) {
       emit({ type: "object-delta", port: "toolCalls", objectDelta: validated });
     }
-    emit({ type: "finish", data: { text: "", toolCalls: [] } as ToolCallingTaskOutput });
+    // An agent turn capping its input tokens needs a figure from every round,
+    // and Chrome reports none; see {@link chromeCallUsage}. The tool schemas
+    // are part of the context the session was given, so they count too.
+    const usage = chromeCallUsage(
+      measuredPrompt,
+      [
+        ...chromeTools.map(({ name, description, inputSchema }) =>
+          JSON.stringify({ name, description, inputSchema })
+        ),
+        ...initialPromptTexts(initialPrompts),
+        promptText,
+      ],
+      outputText
+    );
+    emit({
+      type: "finish",
+      data: { text: "", toolCalls: [] } as ToolCallingTaskOutput,
+      ...(usage === undefined ? {} : { usage }),
+    });
   } finally {
     try {
       session.destroy();

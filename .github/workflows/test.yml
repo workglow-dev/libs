@@ -14,6 +14,9 @@
 # suite, so a per-job number only means something once the fragments are merged
 # — an artifact per job, a merge job and a cleanup job, paid for on every push.
 # The nightly workflow runs the suite in one job and reports it instead.
+#
+# A red run on main opens a `ci-nightly` issue (`ci-alert.yml`), which watches
+# this workflow by its `name:` -- rename it there too.
 name: Build & Test
 permissions:
   contents: read

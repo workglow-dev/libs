@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.14
+
+### Bug Fixes
+
+#### tf-mediapipe,xai
+
+- read a MediaPipe URL's task directory; retired Grok betas do not reason
+
+#### anthropic,tf-mediapipe,xai
+
+- review findings on the model profiles
+
+### Refactors
+
+#### huggingface-transformers,tf-mediapipe,chrome-ai
+
+- one model profile per provider
+
 ## 0.6.13
 
 ### Bug Fixes

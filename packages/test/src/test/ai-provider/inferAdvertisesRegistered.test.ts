@@ -194,6 +194,8 @@ const PROVIDER_CASES: readonly {
         ["Xenova/segformer", { pipeline_task: "image-segmentation" }],
         ["Xenova/vit-gpt2", { pipeline_task: "image-to-text" }],
         ["Xenova/yolos-tiny", { pipeline_task: "object-detection" }],
+        ["onnx-community/LFM2.5-VL-450M-ONNX", { pipeline: "image-text-to-text" }],
+        ["HuggingFaceTB/SmolVLM-256M-Instruct"],
       ] as const
     ).map(([id, pc]) => ({
       id,
