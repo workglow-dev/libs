@@ -37,10 +37,10 @@ export const wasm_reference_counts = new Map<string, number>();
  * `@mediapipe/tasks-*` dependency, not merely a "recent" release. Drift is
  * caught by the version tests in `TFMP_GenaiHelpers.test.ts`.
  */
-export const TFMP_VISION_WASM_VERSION = "1.1.0";
-export const TFMP_TEXT_WASM_VERSION = "1.1.0";
-export const TFMP_AUDIO_WASM_VERSION = "1.1.0";
-export const TFMP_GENAI_WASM_VERSION = "0.10.29";
+export const TFMP_VISION_WASM_VERSION = "1.1.1";
+export const TFMP_TEXT_WASM_VERSION = "1.1.1";
+export const TFMP_AUDIO_WASM_VERSION = "1.1.1";
+export const TFMP_GENAI_WASM_VERSION = "0.10.30";
 
 export interface ITFMPWasmBaseUrls {
   readonly vision: string;
