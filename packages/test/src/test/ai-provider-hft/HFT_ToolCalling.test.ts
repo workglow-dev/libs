@@ -9,6 +9,7 @@ import type {
   CheckpointPrefix,
   ToolCallingTaskInput,
   ToolCallingTaskOutput,
+  ToolDefinition,
 } from "@workglow/ai";
 import { accumulatingEmit } from "@workglow/ai";
 import type { StreamEvent } from "@workglow/task-graph";
@@ -354,10 +355,14 @@ describe("buildHFTMessages", () => {
 });
 
 const weatherTool = input.tools[0]!;
-const timeTool = {
+const timeTool: ToolDefinition = {
   name: "get_time",
   description: "Look up the time",
-  inputSchema: { type: "object", properties: { zone: { type: "string" } }, required: ["zone"] },
+  inputSchema: {
+    type: "object",
+    properties: { zone: { type: "string" } },
+    required: ["zone"],
+  } as const,
 };
 const withChoice = (toolChoice: string, extra: object = {}): ToolCallingTaskInput =>
   ({ ...input, tools: [weatherTool, timeTool], toolChoice, ...extra }) as ToolCallingTaskInput;
