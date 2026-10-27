@@ -257,28 +257,93 @@ export const SECRET_QUERY_NAME = /key|token|secret|auth|password|passwd|pwd|sign
 
 /**
  * The URL as it may appear in an error message: userinfo and the value of any
- * credential-named query parameter blanked. A key passed on the query string
- * (`?api_key=…`) is otherwise copied into every persisted error and log line
- * that quotes the URL.
+ * credential-named query or fragment parameter blanked. A key passed on the
+ * query string (`?api_key=…`), or a token handed back in the fragment
+ * (`#access_token=…`), is otherwise copied into every persisted error and log
+ * line that quotes the URL.
+ *
+ * A URL that does not parse, or parses with no authority, is scrubbed as text
+ * rather than returned as given: the messages refusing a malformed URL are the
+ * ones most likely to quote a mangled copy of a credentialed one.
  */
 export function redactUrlForMessage(url: string): string {
+  let parsed: URL;
   try {
-    const parsed = new URL(url);
-    let changed = false;
-    if (parsed.username !== "" || parsed.password !== "") {
-      parsed.username = "";
-      parsed.password = "";
+    parsed = new URL(url);
+  } catch {
+    return redactUnparsedUrl(url);
+  }
+  // `user:pw@host` parses — as scheme `user` with an opaque path, so the
+  // password is not userinfo to the parser and would pass through untouched.
+  if (parsed.host === "" && !/^\s*[a-z][a-z\d+.-]*:\/\//i.test(url)) {
+    return redactUnparsedUrl(url);
+  }
+  let changed = false;
+  if (parsed.username !== "" || parsed.password !== "") {
+    parsed.username = "";
+    parsed.password = "";
+    changed = true;
+  }
+  for (const name of [...new Set(parsed.searchParams.keys())]) {
+    if (SECRET_QUERY_NAME.test(name)) {
+      parsed.searchParams.set(name, REDACTED_TEXT);
       changed = true;
     }
-    for (const name of [...new Set(parsed.searchParams.keys())]) {
-      if (SECRET_QUERY_NAME.test(name)) {
-        parsed.searchParams.set(name, REDACTED_TEXT);
-        changed = true;
-      }
-    }
-    return changed ? parsed.toString().replace(/%5Bredacted%5D/gi, REDACTED_TEXT) : url;
+  }
+  const hash = redactCredentialPairs(parsed.hash);
+  if (hash !== parsed.hash) {
+    parsed.hash = hash;
+    changed = true;
+  }
+  return changed ? parsed.toString().replace(/%5Bredacted%5D/gi, REDACTED_TEXT) : url;
+}
+
+/**
+ * The textual fallback for a URL `new URL` rejects, or reads as having no
+ * authority. Everything up to the last
+ * `@` before the query or fragment is treated as userinfo — from the authority's
+ * `//` when one precedes it, otherwise from the start, since a scheme-less
+ * `user:pw@host` cannot be told from a scheme. Over-redacting a malformed URL
+ * in an error message costs nothing; under-redacting leaks the password.
+ */
+function redactUnparsedUrl(url: string): string {
+  const tailStart = url.search(/[?#]/);
+  let head = tailStart < 0 ? url : url.slice(0, tailStart);
+  const tail = tailStart < 0 ? "" : url.slice(tailStart);
+  const at = head.lastIndexOf("@");
+  if (at >= 0) {
+    const slashes = head.indexOf("//");
+    const start = slashes >= 0 && slashes < at ? slashes + 2 : 0;
+    head = `${head.slice(0, start)}${REDACTED_TEXT}@${head.slice(at + 1)}`;
+  }
+  return head + redactCredentialPairs(tail);
+}
+
+/**
+ * Blanks the value of every `name=value` pair in a query or fragment string
+ * whose name matches {@link SECRET_QUERY_NAME}, leaving the rest of the text
+ * byte for byte. Split on delimiters rather than matched with a pattern: the
+ * input may be any length of unvalidated text.
+ */
+function redactCredentialPairs(text: string): string {
+  if (!text.includes("=")) return text;
+  return text
+    .split(/([?&#;])/)
+    .map((segment) => {
+      const eq = segment.indexOf("=");
+      if (eq <= 0) return segment;
+      const name = segment.slice(0, eq);
+      return isSecretParamName(name) ? `${name}=${REDACTED_TEXT}` : segment;
+    })
+    .join("");
+}
+
+function isSecretParamName(name: string): boolean {
+  if (SECRET_QUERY_NAME.test(name)) return true;
+  try {
+    return SECRET_QUERY_NAME.test(decodeURIComponent(name.replace(/\+/g, " ")));
   } catch {
-    return url;
+    return false;
   }
 }
 

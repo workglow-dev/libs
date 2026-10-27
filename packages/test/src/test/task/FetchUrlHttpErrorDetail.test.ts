@@ -266,6 +266,50 @@ describe("redactUrlForMessage", () => {
     );
     expect(error.message).not.toContain("SUPERSECRETVALUE");
   });
+
+  test("blanks a credential-named value in the fragment, leaves the rest", () => {
+    const shown = redactUrlForMessage(
+      "https://app.example.com/cb#access_token=FRAGSECRET1&state=s1&token_type=bearer"
+    );
+    expect(shown).not.toContain("FRAGSECRET1");
+    expect(shown).toContain("state=s1");
+    expect(shown).toContain("access_token=[redacted]");
+    expect(shown).toContain("app.example.com/cb");
+  });
+
+  test("leaves a plain fragment alone", () => {
+    const url = "https://example.com/docs#section-2";
+    expect(redactUrlForMessage(url)).toBe(url);
+  });
+
+  test("a URL that does not parse still loses its userinfo and query secrets", () => {
+    // Port 99999 is out of range, so `new URL` throws on this input.
+    const shown = redactUrlForMessage(
+      "http://user:hunter2@host:99999/x?api_key=QUERYSECRET1&page=2#id_token=FRAGSECRET2"
+    );
+    for (const secret of ["hunter2", "QUERYSECRET1", "FRAGSECRET2"]) {
+      expect(shown).not.toContain(secret);
+    }
+    expect(shown).toContain("host:99999/x");
+    expect(shown).toContain("page=2");
+  });
+
+  test("a scheme-less user:pw@host loses its password, though it parses as scheme `admin`", () => {
+    const shown = redactUrlForMessage("admin:s3cretpw@internal.example:8080/x?token=T0KENVALUE");
+    expect(shown).not.toContain("s3cretpw");
+    expect(shown).not.toContain("T0KENVALUE");
+    expect(shown).toContain("internal.example:8080/x");
+  });
+
+  test("an unparseable URL with nothing to hide is returned unchanged", () => {
+    const url = "http://host:99999/x?page=2";
+    expect(redactUrlForMessage(url)).toBe(url);
+  });
+
+  test("a percent-encoded credential name is still recognised when the URL does not parse", () => {
+    const shown = redactUrlForMessage("http://host:99999/x?t%6Fken=ENCODEDSECRET");
+    expect(shown).not.toContain("ENCODEDSECRET");
+  });
 });
 
 describe("markup error bodies", () => {
