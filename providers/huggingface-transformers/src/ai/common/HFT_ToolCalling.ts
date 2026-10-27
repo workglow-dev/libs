@@ -543,6 +543,27 @@ export const HFT_ToolCalling: AiProviderRunFn<
       }
     }
 
+    // Usage snapshots replace one another downstream, and each decode starts its
+    // own count. A retry adds what the failed attempt had reported, so the
+    // totals a budget reads only grow, and the prompt it read twice is counted
+    // twice.
+    let carried = { input: 0, output: 0 };
+    let reported = { input: 0, output: 0 };
+    const emitCounted = (event: Parameters<typeof emit>[0]): void => {
+      if (event.type !== "usage") {
+        emit(event);
+        return;
+      }
+      const { input: seen, output: made } = event.usage;
+      const usage = {
+        ...event.usage,
+        input: seen === undefined ? undefined : seen + carried.input,
+        output: made === undefined ? undefined : made + carried.output,
+      };
+      reported = { input: usage.input ?? reported.input, output: usage.output ?? reported.output };
+      emit({ ...event, usage });
+    };
+
     // One decode of the turn, under `grammar` or free. Everything a decode
     // touches is built here, so a second attempt starts from nothing: a failed
     // one leaves its streamer, its text and its KV cache half-written.
@@ -579,7 +600,7 @@ export const HFT_ToolCalling: AiProviderRunFn<
           if (!active) filter.feed(text);
         },
         TextStreamer,
-        emit
+        emitCounted
       );
       const stopping_criteria = new InterruptableStoppingCriteria();
       if (signal) {
@@ -651,6 +672,11 @@ export const HFT_ToolCalling: AiProviderRunFn<
           ...(active ? { logits_processor: active.processor } : {}),
           ...(past_key_values ? { past_key_values } : {}),
         });
+      } catch (error) {
+        // A generate() that threw never reached its own end(), which is where the
+        // throttled tail of the usage count is flushed; the retry carries it.
+        streamer.end();
+        throw error;
       } finally {
         filter.flush();
       }
@@ -672,6 +698,7 @@ export const HFT_ToolCalling: AiProviderRunFn<
       getLogger().warn("HFT_ToolCalling: constrained decoding failed; decoding without it", {
         error: error instanceof Error ? error.message : String(error),
       });
+      carried = reported;
       turn = await decode(undefined);
     }
     const { prompt, responsePrefix, fullText, answerText, past_key_values } = turn;

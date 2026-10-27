@@ -643,6 +643,49 @@ describe("HFT_ToolCalling constrained decoding", () => {
     ]);
   });
 
+  it("keeps usage counting up across the retry", async () => {
+    const pipeline = makeFakePipeline(TOOL_PIECES);
+    pipeline.tokenizer.tokens = Array.from({ length: 256 }, (_, id) => Uint8Array.of(id));
+    pipeline.tokenizer.eos_token_id = 0;
+    const wrapped: any = async (prompt: string, o: Record<string, unknown>) => {
+      const streamer = o.streamer as any;
+      // The prompt (3 tokens) reaches the model, then some output is made.
+      streamer.put([[1n, 2n, 3n]]);
+      if (o.logits_processor) {
+        streamer.token_callback_function([1n, 2n]);
+        throw new Error("The constraint reached a dead end before producing a valid output.");
+      }
+      streamer.token_callback_function([1n, 2n, 3n, 4n]);
+      const done = await pipeline(prompt, o);
+      streamer.end();
+      return done;
+    };
+    wrapped.tokenizer = pipeline.tokenizer;
+    wrapped.model = pipeline.model;
+    pipelines.set(cacheKey, wrapped);
+
+    const usages: Array<{ input?: number; output?: number }> = [];
+    await HFT_ToolCalling(
+      withChoice("get_weather"),
+      model,
+      new AbortController().signal,
+      (event: any) => {
+        if (event.type === "usage") usages.push(event.usage);
+      },
+      undefined,
+      undefined
+    );
+
+    for (let i = 1; i < usages.length; i++) {
+      expect(usages[i]!.input!).toBeGreaterThanOrEqual(usages[i - 1]!.input!);
+      expect(usages[i]!.output!).toBeGreaterThanOrEqual(usages[i - 1]!.output!);
+    }
+    const last = usages.at(-1)!;
+    // The prompt was read by both attempts, and the failed one made tokens too.
+    expect(last.input).toBe(6);
+    expect(last.output).toBe(6);
+  });
+
   it("does not hide a failure that is not the grammar's", async () => {
     const pipeline = makeFakePipeline(TOOL_PIECES);
     pipeline.tokenizer.tokens = Array.from({ length: 256 }, (_, id) => Uint8Array.of(id));
