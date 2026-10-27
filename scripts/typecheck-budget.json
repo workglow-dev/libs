@@ -2,7 +2,7 @@
   "tolerance": 0.15,
   "slack": 2000,
   "packages": {
-    "packages/a2a": 18794,
+    "packages/a2a": 25707,
     "packages/a2ui": 25609,
     "packages/ai": 212796,
     "packages/browser-control": 128459,

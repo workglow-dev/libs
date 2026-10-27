@@ -102,16 +102,18 @@ describe("createLinearRegexRunnerFactory", () => {
   });
 
   describe("bounds patterns that backtrack catastrophically", () => {
-    // `^(a?b?)*$` passes the shape screen and still backtracks exponentially natively.
-    const hostile: readonly [RegExp, string][] = [
-      [/(a|a)*$/, "a".repeat(50_000) + "!"],
-      [/^(a?b?)*$/, "ab".repeat(25_000) + "!"],
-      [/(\w|\d)*$/, "1".repeat(50_000) + "!"],
+    // `^(a?b?)*$` passes the shape screen and still backtracks exponentially natively. The
+    // patterns are data, as in RegexTask's own test: they reach the linear engine only, never
+    // the native one.
+    const hostile: readonly [string, string][] = [
+      ["(a|a)*$", "a".repeat(50_000) + "!"],
+      ["^(a?b?)*$", "ab".repeat(25_000) + "!"],
+      ["(\\w|\\d)*$", "1".repeat(50_000) + "!"],
     ];
-    for (const [regex, input] of hostile) {
-      it(`${regex}`, () => {
+    for (const [source, input] of hostile) {
+      it(`/${source}/`, () => {
         const started = performance.now();
-        linear(regex).exec(input);
+        linear(new RegExp(source)).exec(input);
         expect(performance.now() - started).toBeLessThan(5_000);
       });
     }
