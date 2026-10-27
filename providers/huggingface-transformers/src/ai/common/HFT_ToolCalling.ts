@@ -49,6 +49,7 @@ import {
 } from "./HFT_Pipeline";
 import { hftSamplingOptions } from "./HFT_Sampling";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
+import { hftTemplateToolCall } from "./HFT_TemplateToolCall";
 import {
   buildHftVisionMessages,
   generateHftVision,
@@ -171,7 +172,8 @@ function resolveHFTToolsAndMessages(
  * Unlike `toTextFlatMessages` (which flattens everything to `{role, content}`
  * strings), this preserves tool_calls on assistant messages and the tool name
  * on tool-result messages — both required by HFT chat templates that support
- * tool calling. A tool result is text only, an image in it named by
+ * tool calling. A call takes the {@link hftTemplateToolCall} form, which every
+ * template renders and a flat `{ name, arguments }` does not. A tool result is text only, an image in it named by
  * {@link textOnlyToolResult}. An assistant turn's reasoning rides as `reasoning_content`,
  * which Qwen3-style templates read to keep the thinking of the current tool
  * loop in the rendered history; templates that do not know it ignore it.
@@ -222,9 +224,9 @@ export function buildHFTMessages(
             name: string;
             input: Record<string, unknown>;
           };
-          return { id: tu.id, name: tu.name, arguments: tu.input };
+          return hftTemplateToolCall(tu.id, tu.name, tu.input);
         });
-      for (const call of toolCalls) toolNames.set(call.id, call.name);
+      for (const call of toolCalls) toolNames.set(call.id, call.function.name);
       const reasoning = msg.content
         .filter((b) => b.type === "reasoning")
         .map((b) => (b as { type: "reasoning"; text: string }).text)

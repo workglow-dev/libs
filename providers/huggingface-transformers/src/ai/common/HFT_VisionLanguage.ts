@@ -13,6 +13,8 @@ import { loadTransformersSDK } from "./HFT_Pipeline";
 import type { HftSamplingOptions } from "./HFT_Sampling";
 import type { HftStreamEmit } from "./HFT_Streaming";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
+import type { HftTemplateToolCall } from "./HFT_TemplateToolCall";
+import { hftTemplateToolCall } from "./HFT_TemplateToolCall";
 
 /**
  * Whether `model` is loaded as a vision-language model (processor +
@@ -104,9 +106,8 @@ export function promptAsUserMessage(prompt: unknown): ChatMessage | undefined {
  * generation, so images go in the one role every vision template renders them
  * in, and one rule holds whatever template a model ships.
  *
- * A tool call is written in the `{ type: "function", function: { name,
- * arguments } }` form: LFM2-VL's template reads only that, and Qwen-style
- * templates unwrap it. An assistant turn's reasoning rides as
+ * A tool call is written in the {@link hftTemplateToolCall} form, as on the
+ * text-model path. An assistant turn's reasoning rides as
  * `reasoning_content`, as on the text-model path.
  */
 export function buildHftVisionMessages(
@@ -161,7 +162,7 @@ export function buildHftVisionMessages(
     } else if (msg.role === "assistant") {
       let text = "";
       let reasoning = "";
-      const toolCalls: Array<Record<string, unknown>> = [];
+      const toolCalls: HftTemplateToolCall[] = [];
       for (const block of msg.content) {
         if (block.type === "text") {
           text += block.text;
@@ -169,11 +170,7 @@ export function buildHftVisionMessages(
           reasoning += block.text;
         } else if (block.type === "tool_use") {
           toolNames.set(block.id, block.name);
-          toolCalls.push({
-            id: block.id,
-            type: "function",
-            function: { name: block.name, arguments: block.input },
-          });
+          toolCalls.push(hftTemplateToolCall(block.id, block.name, block.input));
         }
       }
       const entry: Record<string, unknown> = {

@@ -340,7 +340,13 @@ describe("buildHFTMessages", () => {
       role: "assistant",
       content: "Checking.",
       reasoning_content: "Need the weather tool.",
-      tool_calls: [{ id: "call_1", name: "get_weather", arguments: { city: "Paris" } }],
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: { name: "get_weather", arguments: { city: "Paris" } },
+        },
+      ],
     });
   });
 
