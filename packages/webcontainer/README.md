@@ -12,19 +12,19 @@ A runnable page lives in [`examples/webcontainer-agent`](../../examples/webconta
 
 ## Entry points
 
-| Import | What it holds |
-| --- | --- |
-| `@workglow/webcontainer/sandbox` | `SandboxPort` and `resolveSandboxPath`; `createSandboxTools` and `listSandboxFiles`; `runSandboxAgent`; `SANDBOX_SYSTEM_PROMPT`. Nothing here imports the WebContainer API, so it runs over any `SandboxPort`. |
-| `@workglow/webcontainer/container` | `bootWebContainer()` and `webContainerPort()`, the adapter from `@webcontainer/api` to `SandboxPort`. The only module that loads it. |
+| Import                             | What it holds                                                                                                                                                                                                  |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@workglow/webcontainer/sandbox`   | `SandboxPort` and `resolveSandboxPath`; `createSandboxTools` and `listSandboxFiles`; `runSandboxAgent`; `SANDBOX_SYSTEM_PROMPT`. Nothing here imports the WebContainer API, so it runs over any `SandboxPort`. |
+| `@workglow/webcontainer/container` | `bootWebContainer()` and `webContainerPort()`, the adapter from `@webcontainer/api` to `SandboxPort`. The only module that loads it.                                                                           |
 
 ## Embedding
 
 ```ts
-const { port } = await bootWebContainer();               // or your own SandboxPort
-await registerAnthropicInline();                          // providers are the host's to register
+const { port } = await bootWebContainer(); // or your own SandboxPort
+await registerAnthropicInline(); // providers are the host's to register
 const sandboxTools = createSandboxTools(port, { onPreview: (url) => (iframe.src = url) });
 const run = await runSandboxAgent({
-  sandboxTools,                                           // kept across turns so previews stay live
+  sandboxTools, // kept across turns so previews stay live
   instruction: "a markdown previewer",
   model: { provider: "ANTHROPIC", provider_config: { model_name, api_key } },
   sandbox: port,
@@ -41,15 +41,24 @@ is stopped. The tools are `write_file`, `read_file`, `list_files`, `run_command`
 file and output limits, timeouts), and `systemPrompt`, `maxRounds` and `maxDurationMs` for the turn.
 To use the tools in an `AgentTask` you build yourself, pass `sandboxTools.tools` as its `tools`.
 
+`lazySandboxPort(boot)` is a `SandboxPort` that boots the real one on first use. Tools built over
+it can be described to a model before anything has run, and cost nothing (no network, no seconds of
+start-up) until the model calls one; a failed boot is retried by the next call.
+
+`bootWebContainer({ coep })` takes the cross-origin embedder policy the page was served with
+(`require-corp`, the default, or `credentialless`). The container's preview frames must match the
+page. `credentialless` suits an app that loads third-party resources it does not control, and is not
+supported by Safari.
+
 ## Why it is safe to run model-written code
 
-| Layer | What it gives |
-| --- | --- |
-| WebContainer | The code runs in the tab's sandbox: no host filesystem, no host processes, no native binaries. Its network is the browser's, so it is subject to the browser's rules, not the machine's. |
-| Tools are host functions over `SandboxPort` | The model can only call the five tools. Paths are resolved inside the project root (`..` that leaves it is refused). |
-| `run_command` has no shell | Program and arguments are separate, and the program must be on an allow-list (`DEFAULT_ALLOWED_COMMANDS`), so `a && b`, pipes and redirects do not exist. |
-| Bounds | File size, output size (the tail is kept), a foreground timeout that kills the process, a cap on background servers, bounded listings, and `maxRounds` / `maxDurationMs` on the turn. |
-| Key handling | The API key stays in the host page's memory and goes only to the provider's SDK call. Sandbox code runs in a separate origin and cannot read it. |
+| Layer                                       | What it gives                                                                                                                                                                            |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WebContainer                                | The code runs in the tab's sandbox: no host filesystem, no host processes, no native binaries. Its network is the browser's, so it is subject to the browser's rules, not the machine's. |
+| Tools are host functions over `SandboxPort` | The model can only call the five tools. Paths are resolved inside the project root (`..` that leaves it is refused).                                                                     |
+| `run_command` has no shell                  | Program and arguments are separate, and the program must be on an allow-list (`DEFAULT_ALLOWED_COMMANDS`), so `a && b`, pipes and redirects do not exist.                                |
+| Bounds                                      | File size, output size (the tail is kept), a foreground timeout that kills the process, a cap on background servers, bounded listings, and `maxRounds` / `maxDurationMs` on the turn.    |
+| Key handling                                | The API key stays in the host page's memory and goes only to the provider's SDK call. Sandbox code runs in a separate origin and cannot read it.                                         |
 
 That containment is why the run uses `approval: "never"`: there is nothing outside the sandbox for
 a person to approve. A host that gives the agent a tool reaching past the sandbox should not reuse
@@ -60,8 +69,8 @@ allows, and a model can spend your tokens. Use a key with a spend limit.
 
 ## Requirements
 
-- The page must be **cross-origin isolated** (`Cross-Origin-Embedder-Policy: require-corp`,
-  `Cross-Origin-Opener-Policy: same-origin`), because a WebContainer needs `SharedArrayBuffer`.
+- The page must be **cross-origin isolated** (`Cross-Origin-Embedder-Policy: require-corp` or
+  `credentialless`, and `Cross-Origin-Opener-Policy: same-origin`), because a WebContainer needs `SharedArrayBuffer`.
   Whatever serves the host app must set both. Preview iframes need `allow="cross-origin-isolated"`.
 - A Chromium-based browser or Firefox; Safari support is newer and less complete.
 - One WebContainer per page.

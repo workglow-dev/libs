@@ -8,6 +8,7 @@ import type { ToolDefinition, ToolExecuteContext } from "@workglow/ai";
 import { describe, expect, it } from "vitest";
 import { resolveSandboxPath } from "../sandboxPort";
 import type { SandboxEntry, SandboxPort, SandboxProcess } from "../sandboxPort";
+import { lazySandboxPort } from "../lazySandboxPort";
 import { createSandboxTools, listSandboxFiles } from "../sandboxTools";
 
 interface FakeProgram {
@@ -357,6 +358,51 @@ describe("run_command", () => {
     off();
     await call(tools, "stop_servers", {});
     await call(tools, "run_command", { command: "node", background: true });
+    expect(heard).toHaveLength(1);
+  });
+});
+
+describe("lazySandboxPort", () => {
+  it("boots on first use, once, and not before", async () => {
+    const real = new FakeSandbox();
+    let boots = 0;
+    const port = lazySandboxPort(async () => {
+      boots++;
+      return real;
+    });
+    expect(boots).toBe(0);
+    await port.writeFile("a", "1");
+    await port.writeFile("b", "2");
+    expect(boots).toBe(1);
+    expect(real.files.get("b")).toBe("2");
+  });
+
+  it("retries after a failed boot", async () => {
+    const real = new FakeSandbox();
+    let attempts = 0;
+    const port = lazySandboxPort(async () => {
+      attempts++;
+      if (attempts === 1) throw new Error("offline");
+      return real;
+    });
+    await expect(port.readFile("x")).rejects.toThrow("offline");
+    await port.writeFile("x", "ok");
+    expect(attempts).toBe(2);
+  });
+
+  it("delivers server-ready events once booted, and stops after unsubscribe", async () => {
+    const real = new FakeSandbox({ node: { chunks: [], exitCode: undefined, listensOn: 3000 } });
+    const port = lazySandboxPort(async () => real);
+    const heard: string[] = [];
+    const off = port.onServerReady((_port, url) => void heard.push(url));
+    await port.mkdir("x"); // forces the boot
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await port.spawn("node", []);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(heard).toEqual(["http://localhost:3000"]);
+    off();
+    await port.spawn("node", []);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(heard).toHaveLength(1);
   });
 });

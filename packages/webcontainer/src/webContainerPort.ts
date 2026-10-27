@@ -7,27 +7,40 @@
 import type { FileSystemTree, WebContainer } from "@webcontainer/api";
 import type { SandboxPort } from "./sandboxPort";
 
+export interface BootWebContainerOptions {
+  /**
+   * Cross-origin embedder policy the page was served with. The container's
+   * preview frames must match the page, so this has to agree with the header.
+   * `credentialless` is the gentler one for an app that loads third-party
+   * resources it does not control; it is not supported by Safari.
+   */
+  readonly coep?: "require-corp" | "credentialless" | undefined;
+  /** Files to mount in the project directory before returning. */
+  readonly files?: FileSystemTree | undefined;
+}
+
 /**
  * Boots the page's WebContainer. A page can hold one, and booting needs the
- * page to be cross-origin isolated (`Cross-Origin-Embedder-Policy:
- * require-corp` and `Cross-Origin-Opener-Policy: same-origin`), because the
+ * page to be cross-origin isolated (`Cross-Origin-Embedder-Policy`
+ * and `Cross-Origin-Opener-Policy: same-origin`), because the
  * container is built on SharedArrayBuffer.
  *
  * The API is imported here and nowhere else in `core`, so the tools and the
  * runner can be loaded, and tested, without it.
  */
 export async function bootWebContainer(
-  files?: FileSystemTree
+  options: BootWebContainerOptions = {}
 ): Promise<{ readonly container: WebContainer; readonly port: SandboxPort }> {
   if (typeof crossOriginIsolated !== "undefined" && !crossOriginIsolated) {
     throw new Error(
       "This page is not cross-origin isolated, so a WebContainer cannot boot. Serve it with " +
-        "Cross-Origin-Embedder-Policy: require-corp and Cross-Origin-Opener-Policy: same-origin."
+        "Cross-Origin-Embedder-Policy (require-corp or credentialless) and " +
+        "Cross-Origin-Opener-Policy: same-origin."
     );
   }
   const { WebContainer } = await import("@webcontainer/api");
-  const container = await WebContainer.boot({ coep: "require-corp" });
-  if (files !== undefined) await container.mount(files);
+  const container = await WebContainer.boot({ coep: options.coep ?? "require-corp" });
+  if (options.files !== undefined) await container.mount(options.files);
   return { container, port: webContainerPort(container) };
 }
 

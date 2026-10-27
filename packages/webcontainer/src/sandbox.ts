@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export * from "./lazySandboxPort";
 export * from "./runSandboxAgent";
 export * from "./sandboxPort";
 export * from "./sandboxPrompt";
