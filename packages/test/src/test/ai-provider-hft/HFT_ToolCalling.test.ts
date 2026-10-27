@@ -4,18 +4,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { AiSessionContext, ToolCallingTaskInput, ToolCallingTaskOutput } from "@workglow/ai";
+import type {
+  AiSessionContext,
+  CheckpointPrefix,
+  ToolCallingTaskInput,
+  ToolCallingTaskOutput,
+} from "@workglow/ai";
 import { accumulatingEmit } from "@workglow/ai";
 import type { StreamEvent } from "@workglow/task-graph";
 import { expectNoFinishAccumulation } from "@workglow/test-contract/ai-provider";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { resolveConstrainedToolCall } from "../../../../../providers/huggingface-transformers/src/ai/common/HFT_ConstrainedToolCall";
 import {
   clearPipelineCache,
   getPipelineCacheKey,
   loadTransformersSDK,
   pipelines,
 } from "../../../../../providers/huggingface-transformers/src/ai/common/HFT_Pipeline";
-import { resolveConstrainedToolCall } from "../../../../../providers/huggingface-transformers/src/ai/common/HFT_ConstrainedToolCall";
 import {
   buildHFTMessages,
   createHftDeltaRouter,
@@ -356,16 +361,40 @@ const timeTool = {
 };
 const withChoice = (toolChoice: string, extra: object = {}): ToolCallingTaskInput =>
   ({ ...input, tools: [weatherTool, timeTool], toolChoice, ...extra }) as ToolCallingTaskInput;
+const resolve = (
+  forced: ToolCallingTaskInput,
+  family: string | null = "qwen",
+  texts: readonly string[] = [],
+  prompt: string = RENDERED_PROMPT,
+  prefix?: CheckpointPrefix
+) => resolveConstrainedToolCall(forced, family, texts, prompt, prefix);
+
+/**
+ * Feeds `text` byte by byte through a grammar built over the one-byte-per-id
+ * vocabulary and returns the index of the first byte it refused, or `undefined`
+ * when the whole text was allowed and the grammar would now accept an end.
+ */
+async function firstRefusal(processor: any, text: string): Promise<number | "open" | undefined> {
+  const { Tensor } = await loadTransformersSDK();
+  const ids: bigint[] = [1n, 2n, 3n];
+  for (let i = 0; i <= text.length; i++) {
+    const logits = new Tensor("float32", new Float32Array(256), [1, 256]);
+    processor([ids], logits);
+    if (i === text.length) return logits.data[0] > -1e30 ? undefined : "open";
+    const byte = text.charCodeAt(i);
+    if (!(logits.data[byte] > -1e30)) return i;
+    ids.push(BigInt(byte));
+  }
+  return undefined;
+}
 
 describe("resolveConstrainedToolCall", () => {
   it("leaves an auto turn to the model", () => {
-    expect(resolveConstrainedToolCall(withChoice("auto"), "qwen", [], RENDERED_PROMPT)).toBe(
-      undefined
-    );
+    expect(resolve(withChoice("auto"))).toBe(undefined);
   });
 
   it("pins a named tool by name and arguments", () => {
-    const c = resolveConstrainedToolCall(withChoice("get_time"), "qwen", [], RENDERED_PROMPT)!;
+    const c = resolve(withChoice("get_time"))!;
     expect(c.prefix).toBe("<tool_call>\n");
     expect(c.schema).toMatchObject({
       properties: { name: { const: "get_time" }, arguments: timeTool.inputSchema },
@@ -373,30 +402,98 @@ describe("resolveConstrainedToolCall", () => {
     });
   });
 
-  it("offers every tool when one call is required", () => {
-    const c = resolveConstrainedToolCall(withChoice("required"), "qwen", [], RENDERED_PROMPT)!;
-    expect((c.schema as { oneOf: unknown[] }).oneOf).toHaveLength(2);
+  it("names every tool when one call is required, and gives each its own arguments", () => {
+    const c = resolve(withChoice("required"))!;
+    expect(c.schema).toMatchObject({
+      properties: { name: { enum: ["get_weather", "get_time"] } },
+      allOf: [{ then: expect.anything() }, { then: expect.anything() }],
+    });
+    // Not a root `oneOf`: the engine checks that only once the object closes.
+    expect(c.schema).not.toHaveProperty("oneOf");
   });
 
   it("declines where the grammar would be wrong", () => {
     const forced = withChoice("get_time");
-    expect(resolveConstrainedToolCall(forced, "llama", [], RENDERED_PROMPT)).toBe(undefined);
-    expect(resolveConstrainedToolCall(forced, null, [], RENDERED_PROMPT)).toBe(undefined);
-    expect(resolveConstrainedToolCall(forced, "qwen", ["qwen3.5-4b"], RENDERED_PROMPT)).toBe(
-      undefined
-    );
-    expect(resolveConstrainedToolCall(forced, "qwen", [], "<assistant><think>")).toBe(undefined);
+    expect(resolve(forced, "llama")).toBe(undefined);
+    expect(resolve(forced, null)).toBe(undefined);
+    expect(resolve(forced, "qwen", ["qwen3.5-4b"])).toBe(undefined);
+    expect(resolve(forced, "qwen", [], "<assistant><think>")).toBe(undefined);
     const afterTool = withChoice("get_time", {
       messages: [{ role: "tool", content: [] }],
     });
-    expect(resolveConstrainedToolCall(afterTool, "qwen", [], RENDERED_PROMPT)).toBe(undefined);
+    expect(resolve(afterTool)).toBe(undefined);
+  });
+
+  it("reads a checkpoint's history and tools, which the call itself does not carry", () => {
+    const toolsInPrefix: CheckpointPrefix = {
+      tools: [weatherTool, timeTool],
+      messages: [{ role: "tool", content: [] }],
+    };
+    const bare = withChoice("get_time", { tools: [] });
+    // The tool result is in the prefix, so this turn may be the answer.
+    expect(resolve(bare, "qwen", [], RENDERED_PROMPT, toolsInPrefix)).toBe(undefined);
+    // Without it, the tool being asked for is found in the prefix's list.
+    const c = resolve(bare, "qwen", [], RENDERED_PROMPT, { tools: [weatherTool, timeTool] })!;
+    expect(c.schema).toMatchObject({ properties: { name: { const: "get_time" } } });
+    const required = resolve(withChoice("required", { tools: [] }), "qwen", [], RENDERED_PROMPT, {
+      tools: [weatherTool, timeTool],
+    })!;
+    expect(required.schema).toMatchObject({
+      properties: { name: { enum: ["get_weather", "get_time"] } },
+    });
+  });
+
+  it("hands the engine the same schema object for the same tools", () => {
+    // The engine caches the masks it computes on the schema object, and a turn
+    // arrives as a fresh copy of the tools, so the object is found by content.
+    const copy = (): ToolCallingTaskInput => structuredClone(withChoice("get_time"));
+    expect(resolve(copy())!.schema).toBe(resolve(copy())!.schema);
+    expect(resolve(withChoice("required"))!.schema).toBe(resolve(withChoice("required"))!.schema);
+  });
+
+  it("leaves out annotations the engine refuses and re-roots a tool's own references", () => {
+    const tool = {
+      name: "walk",
+      description: "Walk a tree",
+      inputSchema: {
+        type: "object",
+        "x-ui-order": ["node"],
+        properties: {
+          node: { $ref: "#/$defs/Node", "x-ui-manual": true },
+          "x-api-key": { type: "string" },
+          tag: { const: { $ref: "#/not/a/schema" } },
+        },
+        $defs: {
+          Node: {
+            type: "object",
+            properties: { next: { $ref: "#" } },
+            additionalProperties: false,
+          },
+        },
+      },
+    };
+    const c = resolve(withChoice("walk", { tools: [tool] }))!;
+    const args = (c.schema as any).properties.arguments;
+    expect(args["x-ui-order"]).toBe(undefined);
+    expect(args.properties.node["x-ui-manual"]).toBe(undefined);
+    expect(args.properties["x-api-key"]).toEqual({ type: "string" });
+    expect(args.properties.tag).toEqual({ const: { $ref: "#/not/a/schema" } });
+    expect(args.properties.node.$ref).toBe("#/properties/arguments/$defs/Node");
+    expect(args.$defs.Node.properties.next.$ref).toBe("#/properties/arguments");
+
+    const many = resolve(withChoice("required", { tools: [tool, timeTool] }))!;
+    expect((many.schema as any).$defs.arguments0.properties.node.$ref).toBe(
+      "#/$defs/arguments0/$defs/Node"
+    );
   });
 });
 
 describe("HFT_ToolCalling constrained decoding", () => {
   async function runForced(
     toolChoice: string,
-    pieces: readonly string[]
+    pieces: readonly string[],
+    extra: object = {},
+    context?: AiSessionContext
   ): Promise<{ events: StreamEvent<never>[]; output: ToolCallingTaskOutput; opts: any[] }> {
     const opts: any[] = [];
     const pipeline = makeFakePipeline(pieces);
@@ -414,7 +511,7 @@ describe("HFT_ToolCalling constrained decoding", () => {
     const events: StreamEvent<never>[] = [];
     const accumulator = accumulatingEmit<ToolCallingTaskOutput>();
     await HFT_ToolCalling(
-      withChoice(toolChoice),
+      withChoice(toolChoice, extra),
       model,
       new AbortController().signal,
       (event) => {
@@ -422,7 +519,7 @@ describe("HFT_ToolCalling constrained decoding", () => {
         accumulator.emit(event);
       },
       undefined,
-      undefined
+      context
     );
     return { events, output: accumulator.result(), opts };
   }
@@ -445,6 +542,22 @@ describe("HFT_ToolCalling constrained decoding", () => {
     const { opts } = await runForced("auto", [TOOL_PIECES.join("")]);
     expect(opts[0].logits_processor).toBe(undefined);
     expect(opts[0].prompt.endsWith("<tool_call>\n")).toBe(false);
+  });
+
+  it("does not let a call name a tool that is not on offer", async () => {
+    // A grammar keeps the state of the one text fed through it, so each case gets its own.
+    const grammar = async (): Promise<unknown> =>
+      (await runForced("required", ['{"name": "get_time", "arguments": {}}'])).opts[0]
+        .logits_processor;
+
+    expect(
+      await firstRefusal(await grammar(), '{"name":"get_time","arguments":{"zone":"UTC"}}')
+    ).toBe(undefined);
+    // Refused at the byte that makes the name nobody's, not at the closing brace
+    // after a whole call has been written.
+    expect(await firstRefusal(await grammar(), '{"name":"get_foo","arguments":{}}')).toBe(13);
+    // A call without its arguments cannot end.
+    expect(await firstRefusal(await grammar(), '{"name":"get_time"}')).toBe(18);
   });
 
   it("falls back to free decoding when the engine rejects a tool schema", async () => {
@@ -470,5 +583,68 @@ describe("HFT_ToolCalling constrained decoding", () => {
       undefined
     );
     expect(accumulator.result().text).toContain("Let me check");
+  });
+
+  it("decodes again without the grammar when the grammar fails mid-generation", async () => {
+    const pipeline = makeFakePipeline(TOOL_PIECES);
+    pipeline.tokenizer.tokens = Array.from({ length: 256 }, (_, id) => Uint8Array.of(id));
+    pipeline.tokenizer.eos_token_id = 0;
+    const attempts: any[] = [];
+    const wrapped: any = async (prompt: string, o: Record<string, unknown>) => {
+      attempts.push({ prompt, ...o });
+      if (o.logits_processor) {
+        // What the engine does at a dead end, after the streamer saw some text.
+        (o.streamer as any).callback_function('{"name": "get_t');
+        throw new Error("The constraint reached a dead end before producing a valid output.");
+      }
+      return pipeline(prompt, o);
+    };
+    wrapped.tokenizer = pipeline.tokenizer;
+    wrapped.model = pipeline.model;
+    pipelines.set(cacheKey, wrapped);
+
+    const events: StreamEvent<never>[] = [];
+    const accumulator = accumulatingEmit<ToolCallingTaskOutput>();
+    await HFT_ToolCalling(
+      withChoice("get_weather"),
+      model,
+      new AbortController().signal,
+      (event) => {
+        events.push(event as StreamEvent<never>);
+        accumulator.emit(event);
+      },
+      undefined,
+      undefined
+    );
+
+    expect(attempts.map((a) => !!a.logits_processor)).toEqual([true, false]);
+    expect(attempts[1].prompt.endsWith("<tool_call>\n")).toBe(false);
+    // Nothing of the failed attempt leaked into the answer.
+    expect(accumulator.result().text).toBe(PREAMBLE);
+    expect(accumulator.result().toolCalls).toEqual([
+      expect.objectContaining({ name: "get_weather", input: { city: "Paris" } }),
+    ]);
+  });
+
+  it("does not hide a failure that is not the grammar's", async () => {
+    const pipeline = makeFakePipeline(TOOL_PIECES);
+    pipeline.tokenizer.tokens = Array.from({ length: 256 }, (_, id) => Uint8Array.of(id));
+    pipeline.tokenizer.eos_token_id = 0;
+    const wrapped: any = async () => {
+      throw new Error("out of memory");
+    };
+    wrapped.tokenizer = pipeline.tokenizer;
+    wrapped.model = pipeline.model;
+    pipelines.set(cacheKey, wrapped);
+    await expect(
+      HFT_ToolCalling(
+        withChoice("auto"),
+        model,
+        new AbortController().signal,
+        () => {},
+        undefined,
+        undefined
+      )
+    ).rejects.toThrow("out of memory");
   });
 });
