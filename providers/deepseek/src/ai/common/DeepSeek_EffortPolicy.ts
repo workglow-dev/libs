@@ -6,41 +6,26 @@
 
 import {
   EFFORT_POLICY_NONE,
-  makeEffortPolicy,
+  makeProfileEffortPolicy,
   MODEL_EFFORTS,
   type ModelEffortPolicy,
   type ModelEffortPolicyFn,
 } from "@workglow/ai/worker";
+import { resolveDeepSeekProfile } from "./DeepSeek_ModelProfiles";
 
 const REASONING = {
   supported: MODEL_EFFORTS,
   default: "high",
 } as const satisfies ModelEffortPolicy;
 
-/** V4 is the first family that reasons on every id; before it the mode is the id. */
-function isReasoningDeepSeekFamily(id: string): boolean {
-  const version = /^deepseek-v(\d+)/i.exec(id);
-  return version !== null && Number(version[1]) >= 4;
-}
-
 /**
- * DeepSeek splits thinking by id rather than by parameter: `deepseek-reasoner`
- * is the thinking mode of the weights `deepseek-chat` serves without it, and
- * the V4 family reasons on every id. Matching `deepseek-v4` alone dropped the
- * dial on `deepseek-reasoner` — the vendor's own name for the thinking model —
- * while {@link resolveMaxTokens} still paid it the full default allowance.
+ * Read off the profile's `reasoning`. DeepSeek splits thinking by id rather
+ * than by parameter: `deepseek-reasoner` is the thinking mode of the weights
+ * `deepseek-chat` serves without it, and the V4 family reasons on every id.
+ * {@link resolveMaxTokens} reads the same policy, so the reasoning allowance is
+ * paid exactly where the dial is offered.
  */
-export const deepseekEffortPolicy: ModelEffortPolicyFn = makeEffortPolicy({
-  rules: [
-    {
-      when: [
-        isReasoningDeepSeekFamily,
-        /^deepseek-flash/i,
-        /^deepseek-reasoner/i,
-        /^deepseek-r\d/i,
-      ],
-      policy: REASONING,
-    },
-  ],
-  fallback: EFFORT_POLICY_NONE,
-});
+export const deepseekEffortPolicy: ModelEffortPolicyFn = makeProfileEffortPolicy(
+  resolveDeepSeekProfile,
+  (profile) => (profile.reasoning ? REASONING : EFFORT_POLICY_NONE)
+);

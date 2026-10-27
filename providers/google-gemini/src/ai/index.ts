@@ -14,13 +14,14 @@ export * from "./common/Gemini_ModelSearch";
 export * from "./common/Gemini_Pricing";
 export * from "./registerGemini";
 
-import { GEMINI_RUN_FN_SPECS } from "./common/Gemini_Capabilities";
+import { GEMINI_RUN_FN_SPECS, inferGeminiCapabilities } from "./common/Gemini_Capabilities";
 import {
   generateGeminiStreamWithCacheFallback,
   isGeminiCachedContentNotFoundError,
 } from "./common/Gemini_CachedContentFallback";
 import {
   _testOnly as clientTestOnly,
+  geminiReturnsThoughts,
   geminiSupportsMultimodalFunctionResponses,
   resolveThinkingConfig,
 } from "./common/Gemini_Client";
@@ -30,6 +31,13 @@ import {
   setGeminiCachedContent,
 } from "./common/Gemini_CacheStore";
 import { GEMINI_RUN_FNS } from "./common/Gemini_JobRunFns";
+import {
+  GEMINI_MODEL_PROFILES,
+  GEMINI_UNPRICED_PROFILE_IDS,
+  geminiProfileCapabilities,
+  normalizeGeminiModelId,
+  resolveGeminiProfile,
+} from "./common/Gemini_ModelProfiles";
 import { emitGeminiRefusal, geminiRefusalCategory } from "./common/Gemini_Refusal";
 import { buildGeminiContents } from "./common/Gemini_ToolCalling";
 import { mapGeminiUsage } from "./common/Gemini_Usage";
@@ -45,8 +53,15 @@ export const _testOnly = {
   GoogleGeminiQueuedProvider,
   GEMINI_RUN_FN_SPECS,
   GEMINI_RUN_FNS,
+  GEMINI_MODEL_PROFILES,
+  GEMINI_UNPRICED_PROFILE_IDS,
+  normalizeGeminiModelId,
+  resolveGeminiProfile,
+  geminiProfileCapabilities,
+  inferGeminiCapabilities,
   buildGeminiContents,
   geminiSupportsMultimodalFunctionResponses,
+  geminiReturnsThoughts,
   geminiRefusalCategory,
   emitGeminiRefusal,
   setGeminiClientForTests: clientTestOnly.setGeminiClientForTests,

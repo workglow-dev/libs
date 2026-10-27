@@ -7,7 +7,7 @@
 import type { ModelPricing } from "@workglow/ai";
 import { resolveModelPricingFromTable } from "@workglow/ai";
 
-import { XAI_IMAGE_MODEL } from "./Xai_EffortPolicy";
+import { resolveXaiProfile } from "./Xai_ModelProfiles";
 
 /**
  * Public list pricing for xAI Grok models (USD per 1M tokens).
@@ -27,11 +27,14 @@ export const XAI_PRICING: Record<string, ModelPricing> = {
  *
  * Image models resolve to nothing: they bill per image, and the table names
  * only the text ids, so without the guard `grok-2-image-1212` would take
- * `grok-2`'s per-1M-token card. The matcher is the effort policy's, not a
- * second copy.
+ * `grok-2`'s per-1M-token card. Which ids those are is the profile's `kind`,
+ * the same answer capability inference and the effort policy read.
  */
 export function getXaiModelPricing(modelId: string | undefined): ModelPricing | undefined {
-  return resolveModelPricingFromTable(XAI_PRICING, modelId, ["xai/"], (id) =>
-    XAI_IMAGE_MODEL.test(id)
+  return resolveModelPricingFromTable(
+    XAI_PRICING,
+    modelId,
+    ["xai/"],
+    (id) => resolveXaiProfile(id).profile.kind === "image"
   );
 }

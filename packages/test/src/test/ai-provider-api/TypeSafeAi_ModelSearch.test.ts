@@ -5,7 +5,7 @@
  */
 
 import type { AiProviderRunFn, ModelInfoTaskOutput, ModelSearchTaskOutput } from "@workglow/ai";
-import { _testOnly, TYPESAFEAI } from "@workglow/typesafeai/ai";
+import { _testOnly, inferTypeSafeAiCapabilities, TYPESAFEAI } from "@workglow/typesafeai/ai";
 import { _testOnly as runtimeTestOnly } from "@workglow/typesafeai/ai-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -78,15 +78,17 @@ describe("TypeSafeAi_ModelSearch", () => {
     expect(out.results.map((r) => r.id)).toEqual(["jev-preview"]);
   });
 
-  // Stamping a capability list here would make a searched record and a
-  // hand-typed one disagree about the same model; inferCapabilities owns it.
-  it("seeds a record with no capabilities, leaving inference to fill them", async () => {
+  // A searched record and a hand-typed one must agree about the same model, so
+  // the search stamps exactly what inferCapabilities answers: both read the profile.
+  it("seeds a record with the capabilities inference gives the same id", async () => {
     installClient([{ name: "jev-latest" }]);
 
     const out = await search({ credential_key: "k" });
 
     expect(out.results[0]!.record.provider).toBe(TYPESAFEAI);
-    expect(out.results[0]!.record.capabilities).toEqual([]);
+    expect(out.results[0]!.record.capabilities).toEqual(
+      inferTypeSafeAiCapabilities({ model_id: "jev-latest" } as never)
+    );
     expect(out.results[0]!.record.provider_config).toEqual({ model_name: "jev-latest" });
   });
 });
