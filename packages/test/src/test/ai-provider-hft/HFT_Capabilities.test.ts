@@ -57,6 +57,25 @@ describe("inferHftCapabilities from the pipeline a record loads with", () => {
     ).toContain("text.language-detection");
   });
 
+  // The Hub tags a vision-language repo image-text-to-text, but a record that
+  // loads it through `text-generation` runs text-only: images would never
+  // reach the model, while the text pipeline's own capabilities do apply.
+  it("ignores an image-text-to-text hint on a record loaded another way", () => {
+    const caps = inferHftCapabilities(
+      record("onnx-community/Qwen2-VL-2B-Instruct", {
+        pipeline: "text-generation",
+        pipeline_task: "image-text-to-text",
+      })
+    );
+    expect(caps).not.toContain("vision-input");
+    expect(caps).toEqual(expect.arrayContaining(["text.generation", "json-mode"]));
+    expect(
+      inferHftCapabilities(
+        record("onnx-community/Qwen2-VL-2B-Instruct", { pipeline_task: "image-text-to-text" })
+      )
+    ).toContain("vision-input");
+  });
+
   it("still falls through to meta-ops for a name and pipeline nothing serves", () => {
     expect(inferHftCapabilities(record("someone/mystery-model", {}))).toEqual([
       "model.search",

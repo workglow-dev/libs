@@ -348,6 +348,15 @@ export const HFT_Chat: AiProviderRunFn<
   AiChatProviderOutput,
   HfTransformersOnnxModelConfig
 > = async (input, model, signal, emit, _outputSchema, sessionContext) => {
+  // An encoder-decoder model takes one prompt string and ships no chat
+  // template, so a conversation has nothing to render into; refused here rather
+  // than failing inside `apply_chat_template`.
+  if (model!.provider_config.pipeline === "text2text-generation") {
+    throw new Error(
+      `HFT_Chat: "${model!.provider_config.model_path}" is a text2text-generation model, which ` +
+        `takes a single prompt and holds no conversation; use TextGenerationTask instead.`
+    );
+  }
   // Refcount the pipeline for the duration of a single turn — long-lived
   // conversations are not held across turns; only active inference is
   // protected from concurrent LRU eviction.

@@ -38,7 +38,8 @@
  * waited for.
  */
 import { spawnSync } from "node:child_process";
-import { evaluateCiRuns, evaluateNightlyGuard, type WorkflowRun } from "./lib/ciGate";
+import type { WorkflowRun } from "./lib/ciGate";
+import { evaluateCiRuns, evaluateNightlyGuard } from "./lib/ciGate";
 import { readTreeState, summarizePaths } from "./lib/cleanTree";
 
 /** Escape hatch, for a machine with no `gh` or an offline publish. */

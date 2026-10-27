@@ -44,7 +44,16 @@ async function github(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
-  const data: unknown = text === "" ? undefined : JSON.parse(text);
+  let data: unknown = undefined;
+  if (text !== "") {
+    // An error page (a proxy's HTML 502) is not JSON; its status still has to
+    // reach the error message rather than be replaced by a SyntaxError.
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text.slice(0, 500);
+    }
+  }
   return { status: response.status, data };
 }
 
@@ -184,7 +193,16 @@ async function main(): Promise<void> {
     return;
   }
 
-  const failedJobs = verdict.kind === "red" ? await listFailedJobs(id, run.runAttempt) : [];
+  // The failed jobs only decorate the issue body: a failure listing them must
+  // not stop the issue from being opened.
+  let failedJobs: string[] = [];
+  if (verdict.kind === "red") {
+    try {
+      failedJobs = await listFailedJobs(id, run.runAttempt);
+    } catch (err) {
+      console.warn(`Could not list the failed jobs: ${(err as Error).message}`);
+    }
+  }
   await apply(planAlert(run, await listOpenIssues(), failedJobs));
 }
 

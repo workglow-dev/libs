@@ -303,20 +303,30 @@ export function redactUrlForMessage(url: string): string {
  * authority. Everything up to the last
  * `@` before the query or fragment is treated as userinfo — from the authority's
  * `//` when one precedes it, otherwise from the start, since a scheme-less
- * `user:pw@host` cannot be told from a scheme. Over-redacting a malformed URL
+ * `user:pw@host` cannot be told from a scheme. An unescaped `?` or `#` in the
+ * password ends that head before its `@`, so after `//` the userinfo also runs
+ * to the last `@` ahead of the path's first `/`. Over-redacting a malformed URL
  * in an error message costs nothing; under-redacting leaks the password.
  */
 function redactUnparsedUrl(url: string): string {
-  const tailStart = url.search(/[?#]/);
-  let head = tailStart < 0 ? url : url.slice(0, tailStart);
-  const tail = tailStart < 0 ? "" : url.slice(tailStart);
-  const at = head.lastIndexOf("@");
-  if (at >= 0) {
-    const slashes = head.indexOf("//");
-    const start = slashes >= 0 && slashes < at ? slashes + 2 : 0;
-    head = `${head.slice(0, start)}${REDACTED_TEXT}@${head.slice(at + 1)}`;
+  const queryAt = url.search(/[?#]/);
+  let at = url.lastIndexOf("@", (queryAt < 0 ? url.length : queryAt) - 1);
+  const slashes = url.indexOf("//");
+  if (slashes >= 0 && (queryAt < 0 || slashes < queryAt)) {
+    const pathAt = url.indexOf("/", slashes + 2);
+    const inAuthority = url.lastIndexOf("@", (pathAt < 0 ? url.length : pathAt) - 1);
+    if (inAuthority > slashes + 1) at = Math.max(at, inAuthority);
   }
-  return head + redactCredentialPairs(tail);
+  let head = "";
+  let rest = url;
+  if (at >= 0) {
+    const start = slashes >= 0 && slashes < at ? slashes + 2 : 0;
+    head = `${url.slice(0, start)}${REDACTED_TEXT}@`;
+    rest = url.slice(at + 1);
+  }
+  const tailStart = rest.search(/[?#]/);
+  if (tailStart < 0) return head + rest;
+  return head + rest.slice(0, tailStart) + redactCredentialPairs(rest.slice(tailStart));
 }
 
 /**

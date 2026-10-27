@@ -252,10 +252,15 @@ export const HFT_TextGeneration: AiProviderRunFn<
 
     // Use the chat-template format for instruction-tuned models. Passing a raw
     // prompt string skips the chat template and most instruct models produce no
-    // output.
-    const messages: Message[] = [{ role: "user", content: input.prompt }];
+    // output. An encoder-decoder (text2text-generation) model has no chat
+    // template, and its pipeline tokenizes strings only, so it takes the prompt
+    // as written.
+    const promptInput: string | Message[] =
+      model!.provider_config.pipeline === "text2text-generation"
+        ? input.prompt
+        : [{ role: "user", content: input.prompt }];
 
-    await generateText(messages, {
+    await generateText(promptInput, {
       streamer,
       ...sampling,
       max_new_tokens: input.maxTokens ?? 4 * 1024,

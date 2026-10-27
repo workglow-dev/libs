@@ -282,6 +282,16 @@ describe("redactUrlForMessage", () => {
     expect(redactUrlForMessage(url)).toBe(url);
   });
 
+  // An unescaped `#` or `?` in a password ends the head before its `@`; the
+  // userinfo still has to be found in the authority, ahead of the path.
+  test.each([
+    ["http://user:p#ss@host/x", "http://[redacted]@host/x"],
+    ["http://user:p?ss@host/x?api_key=QK1", "http://[redacted]@host/x?api_key=[redacted]"],
+    ["http://user:p#s?s@host", "http://[redacted]@host"],
+  ])("redacts userinfo whose password holds a `#` or `?`: %s", (url, shown) => {
+    expect(redactUrlForMessage(url)).toBe(shown);
+  });
+
   test("a URL that does not parse still loses its userinfo and query secrets", () => {
     // Port 99999 is out of range, so `new URL` throws on this input.
     const shown = redactUrlForMessage(

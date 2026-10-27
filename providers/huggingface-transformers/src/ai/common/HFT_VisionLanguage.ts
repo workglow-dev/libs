@@ -255,11 +255,27 @@ const IMAGES_FIRST_PROCESSORS = [
   "PixtralProcessor",
 ] as const;
 
-export function processorTakesImagesFirst(sdk: object, processor: object): boolean {
-  return IMAGES_FIRST_PROCESSORS.some((name) => {
+/**
+ * Text-first processors whose call takes audio between the images and the
+ * options — `(text, images, audio, options)`. Options passed third would be
+ * read as audio and handed to the feature extractor, which fails the call.
+ */
+const AUDIO_SLOT_PROCESSORS = ["Gemma3nProcessor", "Gemma4Processor"] as const;
+
+function isProcessorOf(sdk: object, processor: object, names: readonly string[]): boolean {
+  return names.some((name) => {
     const cls = (sdk as Record<string, unknown>)[name];
     return typeof cls === "function" && processor instanceof cls;
   });
+}
+
+export function processorTakesImagesFirst(sdk: object, processor: object): boolean {
+  return isProcessorOf(sdk, processor, IMAGES_FIRST_PROCESSORS);
+}
+
+/** Whether `processor`'s call has an audio argument ahead of its options. */
+export function processorTakesAudio(sdk: object, processor: object): boolean {
+  return isProcessorOf(sdk, processor, AUDIO_SLOT_PROCESSORS);
 }
 
 /**
@@ -283,7 +299,9 @@ export async function encodeHftVisionInputs(
   const processor = vlm.processor as unknown as (...args: unknown[]) => Promise<unknown>;
   const inputs = processorTakesImagesFirst(sdk, vlm.processor)
     ? await processor(decoded, prompt, options)
-    : await processor(prompt, decoded, options);
+    : processorTakesAudio(sdk, vlm.processor)
+      ? await processor(prompt, decoded, null, options)
+      : await processor(prompt, decoded, options);
   return inputs as Record<string, unknown>;
 }
 

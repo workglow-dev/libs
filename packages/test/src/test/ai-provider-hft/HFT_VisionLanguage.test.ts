@@ -428,6 +428,31 @@ describe("HFT_ToolCalling on a vision-language model", () => {
     expect(call.images.map((i) => i.base64)).toEqual([PHOTO.data, CHART.data]);
   });
 
+  // Gemma 3n and 4 take `(text, images, audio, options)`: options passed third
+  // are read as audio and handed to the feature extractor.
+  it.each(["Gemma3nProcessor", "Gemma4Processor"] as const)(
+    "leaves the audio slot empty for %s and passes the options fourth",
+    async (processorClass) => {
+      fake = fakeVisionModel(sdk[processorClass]);
+      pipelines.set(cacheKey, fake.vlm as never);
+      fake.reply(["Paris."]);
+      await runToolCalling({ messages: imageHistory() });
+
+      const call = fake.processorCalls[0]!;
+      expect(typeof call.args[0]).toBe("string");
+      expect(Array.isArray(call.args[1])).toBe(true);
+      expect(call.args[2]).toBeNull();
+      expect(call.args[3]).toEqual({ add_special_tokens: false });
+    }
+  );
+
+  it("passes the options third to a text-first processor with no audio slot", async () => {
+    fake.reply(["Paris."]);
+    await runToolCalling({ messages: imageHistory() });
+    expect(fake.processorCalls[0]!.args).toHaveLength(3);
+    expect(fake.processorCalls[0]!.args[2]).toEqual({ add_special_tokens: false });
+  });
+
   it("tokenizes a turn without images, the processor untouched", async () => {
     fake.reply(["Hello."]);
     const { output } = await runToolCalling({ prompt: "Say hello." });
