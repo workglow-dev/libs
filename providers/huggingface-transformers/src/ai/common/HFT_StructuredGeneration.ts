@@ -118,9 +118,11 @@ export const HFT_StructuredGeneration: AiProviderRunFn<
       logits_processor: processor,
     });
 
-    emit({
-      type: "finish",
-      data: { object: json.finishObject() } as StructuredGenerationTaskOutput,
-    });
+    // The parser's last delta can lag the chunk that closed the object (a final
+    // `"}` arrives as one piece), and the task's accumulated deltas win over the
+    // finish payload, so the authoritative object goes out as a delta first.
+    const object = json.finishObject();
+    emit({ type: "object-delta", port: "object", objectDelta: object });
+    emit({ type: "finish", data: { object } as StructuredGenerationTaskOutput });
   });
 };

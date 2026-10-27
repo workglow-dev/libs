@@ -83,7 +83,7 @@ export const HFT_MODEL_FAMILIES: readonly ModelProfileFamily<HftModelProfile>[] 
   VISION_LANGUAGE_FAMILY,
   // Captioners, which the image-to-text pipeline serves.
   { when: /blip|vit-gpt2/, profile: IMAGE_TO_TEXT },
-  { when: /llama|mistral|gemma|phi|qwen|tinyllama|smollm/, profile: TEXT_GENERATION },
+  { when: /llama|mistral|gemma|phi|qwen|tinyllama|smollm|lfm/, profile: TEXT_GENERATION },
 ];
 
 /**
