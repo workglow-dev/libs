@@ -97,7 +97,7 @@ export function normalizeAnthropicModelId(id: string): string {
   let out = id
     .trim()
     .toLowerCase()
-    .replace(/\[[^\]]*\]$/, "")
+    .replace(/\[[^[\]]*\]$/, "")
     .replace(/^anthropic\//, "")
     .replace(ANTHROPIC_GATEWAY_PREFIX, "")
     .replace(/@(?:\d{8}|latest)$/, "")

@@ -99,4 +99,21 @@ describe("TF MediaPipe record profile", () => {
       { kind: "task", pipeline: "vision-image-classifier" },
     ]);
   });
+
+  it("profiles the file the download opens, not the record's id", () => {
+    for (const model_id of ["universal-sentence-encoder", "gemma-embedder"]) {
+      const embedder = {
+        model_id,
+        provider_config: {
+          model_path: "universal_sentence_encoder.tflite",
+          pipeline: "audio-classifier",
+        },
+      } as never;
+      expect([model_id, resolveTfmpRecordProfile(embedder).profile]).toEqual([
+        model_id,
+        { kind: "task", pipeline: "text-embedder" },
+      ]);
+      expect(inferTfmpCapabilities(embedder)).toContain("text.embedding");
+    }
+  });
 });

@@ -148,12 +148,17 @@ function isServedPipeline(value: unknown): value is TfmpServedPipeline {
   return typeof value === "string" && Object.hasOwn(PIPELINE_PROFILES, value);
 }
 
-/** The name a MediaPipe record is profiled by: its id, else its file path, else its model name. */
+/**
+ * The name a MediaPipe record is profiled by: the file the download opens
+ * (`model_path`), else its id, else its model name. The file comes first
+ * because it is what the weights are; an id is whatever the record was named,
+ * and profiling by it could load a `.tflite` embedder through the LLM engine.
+ */
 export function tfmpModelName(model: ProfileHints): string {
   const config = model.provider_config as
     | { readonly model_path?: string | undefined; readonly model_name?: string | undefined }
     | undefined;
-  return String(model.model_id ?? config?.model_path ?? config?.model_name ?? "");
+  return String(config?.model_path || model.model_id || config?.model_name || "");
 }
 
 /**

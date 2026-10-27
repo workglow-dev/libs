@@ -51,8 +51,9 @@ export const XAI_MODEL_PROFILES: Readonly<Record<string, XaiModelProfile>> = {
   "grok-4": VISION_REASONING,
   "grok-3": REASONING,
   "grok-3-mini": REASONING,
-  "grok-2": REASONING,
-  "grok-2-vision": VISION_REASONING,
+  // Grok 2 predates reasoning: a `reasoning_effort` sent to it is rejected.
+  "grok-2": chat(false, false),
+  "grok-2-vision": chat(true, false),
 };
 
 /** Rows for models `XAI_PRICING` has no card for; the contract test allows exactly these. */
