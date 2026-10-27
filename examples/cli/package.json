@@ -64,6 +64,7 @@
     "@workglow/mcp": "workspace:*",
     "@workglow/tasks": "workspace:*",
     "@workglow/util": "workspace:*",
+    "@workglow/web-search": "workspace:*",
     "@huggingface/transformers": "catalog:",
     "@huggingface/transformers-structured-output": "catalog:",
     "tiktoken": "catalog:",

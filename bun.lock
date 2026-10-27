@@ -83,6 +83,7 @@
         "@workglow/task-graph": "workspace:*",
         "@workglow/tasks": "workspace:*",
         "@workglow/util": "workspace:*",
+        "@workglow/web-search": "workspace:*",
         "@workglow/xai": "workspace:*",
         "chalk": "^6.0.1",
         "commander": "catalog:",

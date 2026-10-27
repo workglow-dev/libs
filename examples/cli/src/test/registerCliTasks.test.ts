@@ -4,8 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { createGraphFromGraphJSON, TaskGraph, TaskRegistry } from "@workglow/task-graph";
+import {
+  createGraphFromGraphJSON,
+  TaskConfigurationError,
+  TaskGraph,
+  TaskRegistry,
+} from "@workglow/task-graph";
 import { FileGrepTask, FileLoaderTask, FileSedTask } from "@workglow/tasks";
+import { WebSearchProviderRegistry, WebSearchTask } from "@workglow/web-search";
 import { beforeAll, describe, expect, it } from "vitest";
 import { registerCliTasks } from "../registerCliTasks";
 
@@ -52,5 +58,23 @@ describe("the CLI's task surface", () => {
     const rebuilt = createGraphFromGraphJSON(graph.toJSON());
 
     expect(rebuilt.getTask("load")).toBeInstanceOf(FileLoaderTask);
+  });
+
+  /**
+   * Registered so a saved graph naming it opens; no provider, because which
+   * vendor a search goes to is the host's call. Running it must then fail with
+   * the instruction to register one, not route to something nobody chose.
+   */
+  it("registers WebSearchTask and no search provider", async () => {
+    // Importing the package's node entry already registers the class, so it is
+    // removed first: what is pinned is that the CLI's own set includes it.
+    TaskRegistry.all.delete(WebSearchTask.type);
+    registerCliTasks();
+    expect(TaskRegistry.all.get(WebSearchTask.type)).toBe(WebSearchTask);
+    expect(WebSearchProviderRegistry.list()).toEqual([]);
+
+    const run = new WebSearchTask().run({ query: "workglow", provider: "auto" } as never);
+    await expect(run).rejects.toBeInstanceOf(TaskConfigurationError);
+    await expect(run).rejects.toThrow(/No web-search providers are registered/);
   });
 });

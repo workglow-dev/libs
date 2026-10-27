@@ -397,7 +397,11 @@ nothing else, and the host states which providers exist by calling
 `registerBuiltInWebSearchProviders()` or `registerWebSearchProvider()`. Registering on
 import would put Brave in front of `"auto"` routing in an app that only imported
 `@workglow/anthropic/web-search`, and stand a SearXNG instance up from an environment
-variable nobody read.
+variable nobody read. The `workglow` meta-package re-exports it, and the CLI's
+`registerCliTasks` registers `WebSearchTask` and **no provider**: a saved graph naming it
+opens, `task list` shows it, and running it fails with the registry's instruction to register
+one. The CLI never picks a search vendor for the operator; a downstream CLI built on
+`runWorkglowCli()` registers the providers it wants in its `registerTasks` hook.
 
 HTTP adapters (Brave, Tavily, SearXNG) execute by **owning a `FetchUrlTask`**, inheriting
 credential resolution via `credential_key`, SafeFetch's redirect/SSRF checks, retry/backoff,
