@@ -173,6 +173,21 @@ describe("AgentTurnPolicy", () => {
       expect(turn.followUp(2, unlimited())).toEqual(ANSWERED);
     });
 
+    it("sends no reminder on the last round, and ends the turn answered", () => {
+      const turn = policy({ outputSchema: SCHEMA, maxRounds: 2 });
+      expect(sent(turn.followUp(0, unlimited()))).toContain(AGENT_SUBMIT_TOOL_NAME);
+      expect(turn.followUp(1, unlimited())).toEqual(ANSWERED);
+    });
+
+    it("sends no reminder once the turn's time is gone, and ends it budget", () => {
+      const late = new AgentTurnBudget(
+        { maxInputTokens: undefined, maxCostUsd: undefined, maxDurationMs: 1 },
+        undefined,
+        0
+      );
+      expect(policy({ outputSchema: SCHEMA }).followUp(0, late)).toEqual(BUDGET);
+    });
+
     it("still reminds after a round it could not measure", () => {
       const turn = policy({ outputSchema: SCHEMA });
       expect(sent(turn.followUp(0, tokenBudget(undefined)))).toContain(AGENT_SUBMIT_TOOL_NAME);

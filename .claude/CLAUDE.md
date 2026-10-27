@@ -233,7 +233,8 @@ call is refused rather than run.
 `stopReason: "submitted"` and the answer on `object` when a call passes it, and answers a
 failing one as a correction to make, so the model resubmits instead of the host failing the
 turn. A model that replies in text is reminded twice, then the turn ends `"answered"` with no
-`object`. An unset object port reaches the task as `{}`, and an empty schema counts as none.
+`object`; no reminder is sent on the last round or once the time is gone, since nothing could
+answer it, so the returned `messages` never end in one. An unset object port reaches the task as `{}`, and an empty schema counts as none.
 `checkSubmission` is where a host enforces what a schema cannot say — a section left empty
 that the document plainly has, two figures that must agree: given an answer that passed the
 schema and the turn so far, a returned reason goes back to the model as the submit call's

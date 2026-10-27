@@ -579,6 +579,34 @@ describe("AgentTask turn controls", () => {
       expect(output.object).toEqual({ trust: 3 });
     });
 
+    // A reminder needs a round to be answered in. Sent on the last one, it would
+    // end the transcript in a user message the model never saw, which a host
+    // carries into its next turn.
+    it("sends no reminder on the last round, and ends the turn answered", async () => {
+      const called = script([{ text: "The answer is 3." }]);
+      const output = await new AgentTask().run(
+        {
+          model: MODEL,
+          prompt: "?",
+          tools: [],
+          outputSchema: ANSWER_SCHEMA,
+          maxRounds: 2,
+          approval: "never",
+        },
+        { registry }
+      );
+      expect(called()).toBe(2);
+      expect(output.stopReason).toBe("answered");
+      expect(output.object).toBeUndefined();
+      expect(output.messages.at(-1)!.role).toBe("assistant");
+      const reminders = output.messages.filter(
+        (m) =>
+          m.role === "user" &&
+          m.content.some((b) => b.type === "text" && b.text.includes(AGENT_SUBMIT_TOOL_NAME))
+      );
+      expect(reminders).toHaveLength(1);
+    });
+
     it("withholds the reminder, and reports budget, once a measured cap is spent", async () => {
       // The turn wanted another round for its answer and could not afford it.
       const called = script([{ text: "The answer is 3.", usage: usage(2_000, 0, 10) }]);

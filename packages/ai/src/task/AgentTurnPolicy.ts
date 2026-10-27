@@ -100,13 +100,15 @@ export class AgentTurnPolicy {
    * round, or how the turn ends.
    *
    * The model has answered, so the turn ends `"answered"` unless it still owes
-   * a submission the budget will not let it be asked for. A review is optional,
+   * a submission the budget or the clock will not let it be asked for. On the
+   * last round no reminder is sent and the turn ends `"answered"`, as it does
+   * once the reminders are spent. A review is optional,
    * so it is skipped, and the answer stands, on a turn with an `outputSchema`
    * (that is `checkSubmission`'s job), with no round or time left, or once the
    * loop would stop on its budget — a round it could not measure included. A
-   * reminder is the only way a typed turn gets its answer, so it is withheld
-   * only once the measured spend reaches a cap: there are at most two, and a
-   * provider that reports no usage would otherwise never be reminded at all.
+   * reminder is the only way a typed turn gets its answer, so a round it could
+   * not measure does not withhold one: there are at most two, and a provider
+   * that reports no usage would otherwise never be reminded at all.
    */
   public followUp(round: number, budget: AgentTurnBudget): AgentFollowUp {
     const { reviewPrompt, maxRounds } = this.options;
@@ -122,7 +124,15 @@ export class AgentTurnPolicy {
       return send(reviewPrompt);
     }
     if (this.submitTool !== undefined && this.reminders < MAX_SUBMIT_REMINDERS) {
-      if (budget.exhausted()) return { kind: "end", stopReason: "budget" };
+      // A reminder is a question that needs a round to be answered in. With no
+      // round left the model has given its last reply, so the turn ends on it;
+      // with no time left the loop would stop on its budget before asking.
+      // Either way none is appended, so the transcript never ends in a message
+      // the model did not see.
+      if (round + 1 >= maxRounds) return { kind: "end", stopReason: "answered" };
+      if (budget.exhausted() || budget.timeExhausted()) {
+        return { kind: "end", stopReason: "budget" };
+      }
       this.reminders++;
       return send(SUBMIT_REMINDER);
     }
