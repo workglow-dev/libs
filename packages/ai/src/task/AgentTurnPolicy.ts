@@ -82,6 +82,8 @@ export class AgentTurnPolicy {
   public readonly submissionRejections: string[] = [];
   private readonly options: AgentTurnPolicyOptions;
   private answer: { readonly value: unknown } | undefined;
+  /** The submission still being checked; the next waits for it. */
+  private submitting: Promise<unknown> = Promise.resolve();
   private reminders = 0;
   private reviewed = false;
 
@@ -173,8 +175,20 @@ export class AgentTurnPolicy {
     }
   }
 
-  /** A reason to send the answer back to the model, or undefined once it is recorded. */
-  private async submit(value: unknown): Promise<string | undefined> {
+  /**
+   * A reason to send the answer back to the model, or undefined once it is
+   * recorded. Submissions are checked one at a time, in the order they were
+   * called: under `toolConcurrency` two calls in one round would otherwise read
+   * the same rejection count, so the cap on rejections could be passed, and
+   * the answer recorded would be whichever check happened to settle last.
+   */
+  private submit(value: unknown): Promise<string | undefined> {
+    const checked = this.submitting.then(() => this.checkAndRecord(value));
+    this.submitting = checked.catch(() => undefined);
+    return checked;
+  }
+
+  private async checkAndRecord(value: unknown): Promise<string | undefined> {
     const { checkSubmission } = this.options;
     if (
       checkSubmission !== undefined &&

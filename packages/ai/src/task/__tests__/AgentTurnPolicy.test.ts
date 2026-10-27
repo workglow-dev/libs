@@ -93,6 +93,26 @@ describe("AgentTurnPolicy", () => {
       expect(seen).toEqual([0, 1]);
     });
 
+    it("checks submissions made at once one at a time, in the order they were called", async () => {
+      // Under toolConcurrency a round's submit calls run together. A check that
+      // takes longer on the first must still see it counted before the second.
+      const seen: number[] = [];
+      const turn = policy({
+        outputSchema: SCHEMA,
+        checkSubmission: async (answer, context) => {
+          seen.push(context.rejections);
+          const { trust } = answer as { trust: number };
+          await new Promise((resolve) => setTimeout(resolve, trust === 1 ? 20 : 0));
+          return "Not yet.";
+        },
+      });
+      const results = await Promise.all([1, 2, 3].map((trust) => submit(turn, { trust })));
+      expect(seen).toEqual([0, 1]);
+      expect(results.map((r) => r instanceof ToolCallError)).toEqual([true, true, false]);
+      expect(turn.submissionRejections).toHaveLength(MAX_SUBMISSION_REJECTIONS);
+      expect(turn.submitted).toEqual({ value: { trust: 3 } });
+    });
+
     it("hands the check the turn as it stands when the model submits", async () => {
       const messages: ChatMessage[] = [];
       let seen = -1;
