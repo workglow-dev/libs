@@ -51,6 +51,9 @@ const PATTERNS: readonly [string, string][] = [
   ["a\\z", "g"],
   ["\\a", "g"],
   ["\\Qa.b", "g"],
+  // With no named group, `\k` is the letter, in a class or out.
+  ["\\k<x>", "g"],
+  ["[\\k]", "g"],
   ["\\pL", "g"],
   ["\\x{2}", "g"],
   ["\\u{2}", "g"],
@@ -80,6 +83,7 @@ const INPUTS: readonly string[] = [
   "back\bspace",
   "A [:] d] 5 az pL Qaxb xx uu \\c1 \u0011 \u0007",
   "call (555) 123-4567 or -z %",
+  "kk<x> k<y>",
 ];
 
 describe("createLinearRegexRunnerFactory", () => {

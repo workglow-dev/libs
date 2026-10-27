@@ -124,6 +124,10 @@ export function toLinearRegexSource(regex: RegExp): ILinearRegexSource {
 
   const src = regex.source;
   const legacy = !regex.unicode;
+  // Without `u` and without a named group, `\k` is the letter itself; otherwise a `\k` that
+  // compiled is a named backreference. A `(?<` spelled with an escaped paren also counts,
+  // which only refuses a pattern that would have been safe.
+  const kIsBackreference = !legacy || /\(\?<(?![=!])/.test(src);
   let out = "";
   let inClass = false;
   let multilineDollar = false;
@@ -141,7 +145,11 @@ export function toLinearRegexSource(regex: RegExp): ILinearRegexSource {
     if (ch === "\\") {
       const next = src[i + 1];
       i++;
-      if (next === "k") refuse(regex, "a named backreference (\\k)");
+      if (next === "k") {
+        if (kIsBackreference) refuse(regex, "a named backreference (\\k)");
+        out += next;
+        continue;
+      }
       if (next >= "1" && next <= "9") refuse(regex, `a backreference or octal escape (\\${next})`);
       if (
         legacy &&
