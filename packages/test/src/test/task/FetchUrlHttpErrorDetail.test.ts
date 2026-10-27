@@ -282,13 +282,15 @@ describe("redactUrlForMessage", () => {
     expect(redactUrlForMessage(url)).toBe(url);
   });
 
-  // An unescaped `#` or `?` in a password ends the head before its `@`; the
-  // userinfo still has to be found in the authority, ahead of the path.
+  // An `@` after a `#` or `?` is a password holding one, or a query or fragment
+  // value holding an `@`. Neither reading can be ruled out, so everything after
+  // the `//` is hidden: the host in the first, a token's tail in the second.
   test.each([
-    ["http://user:p#ss@host/x", "http://[redacted]@host/x"],
-    ["http://user:p?ss@host/x?api_key=QK1", "http://[redacted]@host/x?api_key=[redacted]"],
-    ["http://user:p#s?s@host", "http://[redacted]@host"],
-  ])("redacts userinfo whose password holds a `#` or `?`: %s", (url, shown) => {
+    ["http://user:p#ss@host/x", "http://[redacted]"],
+    ["http://user:p?ss@host/x?api_key=QK1", "http://[redacted]"],
+    ["http://user:p#s?s@host", "http://[redacted]"],
+    ["http://host:99999?token=foo@SUPERSECRET/path", "http://[redacted]"],
+  ])("hides the authority when its `@` follows a `#` or `?`: %s", (url, shown) => {
     expect(redactUrlForMessage(url)).toBe(shown);
   });
 

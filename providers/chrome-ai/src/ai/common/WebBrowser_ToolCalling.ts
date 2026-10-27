@@ -205,10 +205,17 @@ export const WebBrowser_ToolCalling: AiProviderRunFn<
       emit({ type: "object-delta", port: "toolCalls", objectDelta: validated });
     }
     // An agent turn capping its input tokens needs a figure from every round,
-    // and Chrome reports none; see {@link chromeCallUsage}.
+    // and Chrome reports none; see {@link chromeCallUsage}. The tool schemas
+    // are part of the context the session was given, so they count too.
     const usage = chromeCallUsage(
       measuredPrompt,
-      [...initialPromptTexts(initialPrompts), promptText],
+      [
+        ...chromeTools.map(({ name, description, inputSchema }) =>
+          JSON.stringify({ name, description, inputSchema })
+        ),
+        ...initialPromptTexts(initialPrompts),
+        promptText,
+      ],
       outputText
     );
     emit({

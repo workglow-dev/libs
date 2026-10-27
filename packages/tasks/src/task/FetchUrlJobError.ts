@@ -303,10 +303,12 @@ export function redactUrlForMessage(url: string): string {
  * authority. Everything up to the last
  * `@` before the query or fragment is treated as userinfo — from the authority's
  * `//` when one precedes it, otherwise from the start, since a scheme-less
- * `user:pw@host` cannot be told from a scheme. An unescaped `?` or `#` in the
- * password ends that head before its `@`, so after `//` the userinfo also runs
- * to the last `@` ahead of the path's first `/`. Over-redacting a malformed URL
- * in an error message costs nothing; under-redacting leaks the password.
+ * `user:pw@host` cannot be told from a scheme. An `@` in the authority past the
+ * first `?` or `#` is either a password holding an unescaped one or a query or
+ * fragment value holding an `@`, and the text cannot say which: whatever
+ * follows could be a password or a token, so nothing after the `//` is shown.
+ * Over-redacting a malformed URL in an error message costs nothing;
+ * under-redacting leaks the password.
  */
 function redactUnparsedUrl(url: string): string {
   const queryAt = url.search(/[?#]/);
@@ -315,6 +317,8 @@ function redactUnparsedUrl(url: string): string {
   if (slashes >= 0 && (queryAt < 0 || slashes < queryAt)) {
     const pathAt = url.indexOf("/", slashes + 2);
     const inAuthority = url.lastIndexOf("@", (pathAt < 0 ? url.length : pathAt) - 1);
+    if (queryAt >= 0 && inAuthority > queryAt)
+      return `${url.slice(0, slashes + 2)}${REDACTED_TEXT}`;
     if (inAuthority > slashes + 1) at = Math.max(at, inAuthority);
   }
   let head = "";

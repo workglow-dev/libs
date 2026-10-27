@@ -1107,6 +1107,39 @@ describe("WebBrowser_ToolCalling session lifecycle", () => {
     }
   });
 
+  it("counts the tool schemas in an input it has to estimate", async () => {
+    const big: ToolDefinition = {
+      ...toolA,
+      inputSchema: {
+        type: "object",
+        properties: Object.fromEntries(
+          Array.from({ length: 40 }, (_, i) => [`field_${i}`, { type: "string" }])
+        ),
+      },
+    };
+    const inputOf = async (tools: ToolDefinition[]): Promise<number> => {
+      const { factory } = makeFakeToolCallingModel();
+      const restore = installLanguageModelGlobal(factory);
+      try {
+        const events: Array<{ type?: string; usage?: { input?: number } }> = [];
+        await WebBrowser_ToolCalling(
+          asTCI({ prompt: "", tools, messages: [] }),
+          undefined,
+          new AbortController().signal,
+          (event: unknown) => {
+            events.push(event as { type?: string; usage?: { input?: number } });
+          },
+          undefined,
+          undefined
+        );
+        return events.find((e) => e.type === "finish")?.usage?.input ?? 0;
+      } finally {
+        restore();
+      }
+    };
+    expect(await inputOf([big])).toBeGreaterThan((await inputOf([toolA])) + 100);
+  });
+
   it("finishes with the full empty scaffold, leaving accumulation to the deltas", async () => {
     const { factory } = makeFakeToolCallingModel();
     const restore = installLanguageModelGlobal(factory);
@@ -1741,6 +1774,13 @@ describe("WebBrowser usage", () => {
     });
   });
 
+  // What the session holds besides the prompt: the tool's own schema text.
+  const toolText = JSON.stringify({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+  });
+
   it("estimates the tool-calling prompt from its text where Chrome cannot measure it", async () => {
     const { factory } = makeMeasuringModel("ok", undefined);
     const events = await runToolCalling(factory, {
@@ -1750,7 +1790,7 @@ describe("WebBrowser usage", () => {
       messages: [{ role: "user", content: [{ type: "text", text: "what now" }] }],
     });
     expect(finishOf(events).usage).toMatchObject({
-      input: Math.ceil("Be brief.\nwhat now".length / 4),
+      input: Math.ceil(`${toolText}\nBe brief.\nwhat now`.length / 4),
       output: 1,
       estimated: true,
     });
@@ -1762,7 +1802,11 @@ describe("WebBrowser usage", () => {
       perPrompt: () => Promise.reject(new Error("not supported")),
     });
     const events = await runToolCalling(factory, { prompt: "abcdefgh", tools: [tool] });
-    expect(finishOf(events).usage).toMatchObject({ input: 2, output: 1, estimated: true });
+    expect(finishOf(events).usage).toMatchObject({
+      input: Math.ceil(`${toolText}\nabcdefgh`.length / 4),
+      output: 1,
+      estimated: true,
+    });
   });
 
   it("reports a usage on single-shot text generation", async () => {
