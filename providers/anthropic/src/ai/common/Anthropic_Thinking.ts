@@ -7,11 +7,12 @@
 import { resolveEnabledEffort, type ModelEffort } from "@workglow/ai/worker";
 import { getLogger } from "@workglow/util/worker";
 import { anthropicEffortPolicy } from "./Anthropic_EffortPolicy";
+import { resolveAnthropicProfile } from "./Anthropic_ModelProfiles";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
 import {
   anthropicDefaultThinkingParams,
   anthropicMinimalThinkingParams,
-  parseAnthropicModelId,
+  modelNameOf,
 } from "./Anthropic_RequestParams";
 
 /** Token budgets for legacy `thinking.type = "enabled"` (and adaptive headroom). */
@@ -53,20 +54,14 @@ export interface AnthropicThinkingParams {
 }
 
 /**
- * Claude 4.6+ (and 5.x) accept adaptive thinking + `output_config.effort`.
- * Earlier thinking-capable ids use `thinking.type = "enabled"` + `budget_tokens`.
- * Unrecognized ids stay on the legacy path (safer than a 400 on adaptive).
+ * Whether the model takes adaptive thinking + `output_config.effort` (Claude
+ * 4.6 on) rather than `thinking.type = "enabled"` + `budget_tokens`, per its
+ * profile. An unrecognized id stays on the budget path (safer than a 400 on adaptive).
  */
 export function anthropicSupportsAdaptiveThinking(
   model: AnthropicModelConfig | undefined
 ): boolean {
-  const id = (model?.provider_config as AnthropicThinkingProviderConfig | undefined)?.model_name;
-  if (!id) return false;
-  const parsed = parseAnthropicModelId(id);
-  if (parsed === undefined) return false;
-  if (parsed.major > 4) return true;
-  if (parsed.major < 4) return false;
-  return (parsed.minor ?? 0) >= 6;
+  return resolveAnthropicProfile(modelNameOf(model)).profile.thinking === "adaptive";
 }
 
 function padMaxTokens(maxTokens: number, budget: number): number {

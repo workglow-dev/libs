@@ -15,6 +15,7 @@ import {
   inferWebBrowserCapabilities,
   WEB_BROWSER_RUN_FN_SPECS,
 } from "./common/WebBrowser_Capabilities";
+import { resolveWebBrowserApi } from "./common/WebBrowser_ApiBinding";
 import { _resetProbeCache, probeWebBrowserCapabilities } from "./common/WebBrowser_CapabilityProbe";
 import { WebBrowser_Chat } from "./common/WebBrowser_Chat";
 import {
@@ -42,6 +43,12 @@ import {
   touchWebBrowserSession,
   WEB_BROWSER_SESSION_IDLE_MS,
 } from "./common/WebBrowser_Sessions";
+import {
+  normalizeWebBrowserModelId,
+  resolveWebBrowserProfile,
+  WEB_BROWSER_MODEL_FAMILIES,
+  webBrowserProfileCapabilities,
+} from "./common/WebBrowser_ModelProfiles";
 import { WebBrowser_StructuredGeneration } from "./common/WebBrowser_StructuredGeneration";
 import { WebBrowser_ToolCalling } from "./common/WebBrowser_ToolCalling";
 import { WebBrowserProvider } from "./WebBrowserProvider";
@@ -54,6 +61,11 @@ export const _testOnly = {
   WEB_BROWSER_RUN_FN_SPECS,
   WEB_BROWSER_RUN_FNS,
   inferWebBrowserCapabilities,
+  WEB_BROWSER_MODEL_FAMILIES,
+  normalizeWebBrowserModelId,
+  resolveWebBrowserProfile,
+  webBrowserProfileCapabilities,
+  resolveWebBrowserApi,
   WebBrowser_Chat,
   WebBrowser_TextGeneration_Unified,
   WebBrowser_StructuredGeneration,

@@ -14,8 +14,17 @@ export * from "./registerLlamaCppServer";
 export * from "./registerLlamaCppServerInline";
 export * from "./registerLlamaCppServerWorker";
 
-import { LLAMACPP_SERVER_RUN_FN_SPECS } from "./common/LlamaCppServer_Capabilities";
+import {
+  inferLlamaCppServerCapabilities,
+  LLAMACPP_SERVER_RUN_FN_SPECS,
+} from "./common/LlamaCppServer_Capabilities";
 import { buildLlamaCppServerRunFns } from "./common/LlamaCppServer_JobRunFns";
+import {
+  LLAMACPP_SERVER_MODEL_FAMILIES,
+  llamaCppServerProfileCapabilities,
+  normalizeLlamaCppServerModelId,
+  resolveLlamaCppServerProfile,
+} from "./common/LlamaCppServer_ModelProfiles";
 import { LlamaCppServerQueuedProvider } from "./LlamaCppServerQueuedProvider";
 
 /**
@@ -25,4 +34,9 @@ export const _testOnly = {
   LlamaCppServerQueuedProvider,
   LLAMACPP_SERVER_RUN_FN_SPECS,
   buildLlamaCppServerRunFns,
+  LLAMACPP_SERVER_MODEL_FAMILIES,
+  normalizeLlamaCppServerModelId,
+  resolveLlamaCppServerProfile,
+  llamaCppServerProfileCapabilities,
+  inferLlamaCppServerCapabilities,
 } as const;

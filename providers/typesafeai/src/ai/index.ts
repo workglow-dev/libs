@@ -35,6 +35,13 @@ export * from "./registerTypeSafeAi";
 import { TYPESAFEAI_RUN_FN_SPECS } from "./common/TypeSafeAi_Capabilities";
 import { _testOnly as clientTestOnly } from "./common/TypeSafeAi_Client";
 import { TYPESAFEAI_RUN_FNS } from "./common/TypeSafeAi_JobRunFns";
+import {
+  normalizeTypeSafeAiModelId,
+  resolveTypeSafeAiProfile,
+  TYPESAFEAI_MODEL_PROFILES,
+  TYPESAFEAI_UNPRICED_PROFILE_IDS,
+  typeSafeAiProfileCapabilities,
+} from "./common/TypeSafeAi_ModelProfiles";
 import { addTypeSafeAiUsage, mapTypeSafeAiUsage } from "./common/TypeSafeAi_Usage";
 import { TypeSafeAiQueuedProvider } from "./TypeSafeAiQueuedProvider";
 
@@ -45,6 +52,11 @@ export const _testOnly = {
   TypeSafeAiQueuedProvider,
   TYPESAFEAI_RUN_FN_SPECS,
   TYPESAFEAI_RUN_FNS,
+  TYPESAFEAI_MODEL_PROFILES,
+  TYPESAFEAI_UNPRICED_PROFILE_IDS,
+  normalizeTypeSafeAiModelId,
+  resolveTypeSafeAiProfile,
+  typeSafeAiProfileCapabilities,
   addTypeSafeAiUsage,
   mapTypeSafeAiUsage,
   setTypeSafeAiClientForTests: clientTestOnly.setTypeSafeAiClientForTests,

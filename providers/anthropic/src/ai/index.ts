@@ -15,9 +15,19 @@ export * from "./common/Anthropic_Pricing";
 export * from "./registerAnthropic";
 
 import { AnthropicQueuedProvider } from "./AnthropicQueuedProvider";
-import { ANTHROPIC_RUN_FN_SPECS } from "./common/Anthropic_Capabilities";
+import {
+  ANTHROPIC_RUN_FN_SPECS,
+  inferAnthropicCapabilities,
+} from "./common/Anthropic_Capabilities";
 import { _testOnly as clientTestOnly } from "./common/Anthropic_Client";
 import { ANTHROPIC_RUN_FNS } from "./common/Anthropic_JobRunFns";
+import { normalizeAnthropicModelId } from "./common/Anthropic_ModelId";
+import {
+  ANTHROPIC_MODEL_PROFILES,
+  ANTHROPIC_UNPRICED_PROFILE_IDS,
+  anthropicProfileCapabilities,
+  resolveAnthropicProfile,
+} from "./common/Anthropic_ModelProfiles";
 import {
   anthropicSupportsOutputFormat,
   resolveAnthropicOutputFormatSupport,
@@ -27,6 +37,8 @@ import { maybeEmitAnthropicRefusal } from "./common/Anthropic_Refusal";
 import {
   anthropicAcceptsForcedToolChoice,
   anthropicAcceptsSamplingParams,
+  anthropicDefaultThinkingParams,
+  anthropicMinimalThinkingParams,
   applyAnthropicSamplingParams,
   resolveAnthropicForcedToolChoice,
 } from "./common/Anthropic_RequestParams";
@@ -45,12 +57,20 @@ export const _testOnly = {
   ANTHROPIC_RUN_FN_SPECS,
   ANTHROPIC_RUN_FNS,
   maybeEmitAnthropicRefusal,
+  ANTHROPIC_MODEL_PROFILES,
+  ANTHROPIC_UNPRICED_PROFILE_IDS,
+  normalizeAnthropicModelId,
+  resolveAnthropicProfile,
+  anthropicProfileCapabilities,
+  inferAnthropicCapabilities,
   anthropicAcceptsForcedToolChoice,
   anthropicSupportsOutputFormat,
   resolveAnthropicOutputFormatSupport,
   resolveAnthropicForcedToolChoice,
   toAnthropicOutputSchema,
   anthropicAcceptsSamplingParams,
+  anthropicDefaultThinkingParams,
+  anthropicMinimalThinkingParams,
   applyAnthropicSamplingParams,
   anthropicSupportsAdaptiveThinking,
   applyAnthropicThinkingParams,

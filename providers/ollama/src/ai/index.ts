@@ -11,8 +11,14 @@ export * from "./common/Ollama_EffortPolicy";
 export * from "./common/Ollama_ModelSchema";
 export * from "./registerOllama";
 
-import { OLLAMA_RUN_FN_SPECS } from "./common/Ollama_Capabilities";
+import { inferOllamaCapabilities, OLLAMA_RUN_FN_SPECS } from "./common/Ollama_Capabilities";
 import { OLLAMA_RUN_FNS } from "./common/Ollama_JobRunFns";
+import {
+  normalizeOllamaModelId,
+  OLLAMA_MODEL_FAMILIES,
+  ollamaProfileCapabilities,
+  resolveOllamaProfile,
+} from "./common/Ollama_ModelProfiles";
 import { mapOllamaUsage } from "./common/Ollama_Usage";
 import { OllamaQueuedProvider } from "./OllamaQueuedProvider";
 
@@ -24,4 +30,9 @@ export const _testOnly = {
   OLLAMA_RUN_FN_SPECS,
   OLLAMA_RUN_FNS,
   mapOllamaUsage,
+  OLLAMA_MODEL_FAMILIES,
+  normalizeOllamaModelId,
+  resolveOllamaProfile,
+  ollamaProfileCapabilities,
+  inferOllamaCapabilities,
 } as const;

@@ -47,6 +47,20 @@ describe("anthropicSupportsAdaptiveThinking", () => {
     );
     expect(anthropicSupportsAdaptiveThinking(model({ model_name: "not-a-claude" }))).toBe(false);
   });
+
+  it.each([
+    "anthropic/claude-sonnet-4.6",
+    "us.anthropic.claude-sonnet-5-v1:0",
+    "claude-opus-5@20251001",
+  ])("reads the generation through a gateway spelling: %s", (name) => {
+    expect(anthropicSupportsAdaptiveThinking(model({ model_name: name }))).toBe(true);
+  });
+
+  it("keeps a gateway-spelled pre-4.6 id on the legacy path", () => {
+    expect(
+      anthropicSupportsAdaptiveThinking(model({ model_name: "anthropic/claude-haiku-4.5" }))
+    ).toBe(false);
+  });
 });
 
 describe("buildAnthropicThinkingParams", () => {

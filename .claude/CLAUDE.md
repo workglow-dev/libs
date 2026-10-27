@@ -419,6 +419,19 @@ Standalone packages with optional peer deps, each exposing `./ai` (main thread) 
 huggingface-transformers, huggingface-inference, node-llama-cpp, tf-mediapipe, chrome-ai.
 Shared cloud helpers live in `@workglow/ai/provider-utils`.
 
+**Every per-model decision reads one profile.** Each provider has a `<Prefix>_ModelProfiles.ts`
+built with `makeModelProfileResolver` (`@workglow/ai`): rows keyed by canonical id, ordered
+family rules for ids with no row, a normalizer that reduces every spelling a gateway sends
+(`anthropic/…`, `us.anthropic.…-v1:0`, `…@date`, `models/…`, `:tag`) to that id, and one
+fallback — the only place the provider guesses. Capability inference, the effort policy
+(`makeProfileEffortPolicy`), request building, model search and pricing guards all read the
+resolver, never the raw id, so a model cannot be an image model to the list and a chat model
+to the request, and a gateway spelling cannot reach one site and miss another. A new model is
+a row; a new behavior is a profile field. A provider with a pricing table keeps the two in
+step: `describeModelProfileContract` (`packages/test/src/test/ai-provider/modelProfileContract.ts`)
+fails when a priced model has no row or a row has no price and is not named unpriced, and
+asserts that every reader agrees with every row in every spelling.
+
 **`*_JobRunFns.ts` runs inside a worker** with its own `globalServiceRegistry`. Never read
 main-thread state (credential stores, service registries) there — resolve it in the task
 class (e.g. `AiTask.getJobInput()`) and pass it through the serialized job input.

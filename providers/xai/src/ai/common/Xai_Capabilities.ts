@@ -6,6 +6,7 @@
 
 import type { Capability, ModelRecord } from "@workglow/ai/worker";
 import { XAI_CAPABILITY_SETS } from "./Xai_CapabilitySets";
+import { resolveXaiProfile, xaiProfileCapabilities } from "./Xai_ModelProfiles";
 
 /**
  * Closed list of capability-set specs the xAI provider serves. Derived from
@@ -20,18 +21,18 @@ export function xaiWorkerRunFnSpecs(): readonly { readonly serves: readonly Capa
 }
 
 /**
- * Shape used by the model-name regexes — `model_id` is required, the rest is
+ * Shape read for the model id — `model_id` is required, the rest is
  * loosely-typed metadata only used to opportunistically widen the inferred
  * capability set.
  */
 type CapabilityHints = Pick<ModelRecord, "model_id" | "provider_config" | "capabilities">;
 
 /**
- * Heuristic capability inference for an xAI {@link ModelRecord}. Pattern-
- * matches the canonical Grok model id strings (and the `provider_config.
- * model_name` if present) to a closed set of {@link Capability}s. Falls back
- * to the model's stored `capabilities` array (or a baseline of search + info)
- * when no pattern matches.
+ * Capability inference for an xAI {@link ModelRecord}. Reads the model's
+ * profile (see `XAI_MODEL_PROFILES`) by its id, or its
+ * `provider_config.model_name` when there is no id. Falls back to the model's
+ * stored `capabilities` array (or a baseline of search + info) when the id
+ * names no known family.
  *
  * Main-thread method only — workers do not run capability inference.
  */
@@ -42,32 +43,8 @@ export function inferXaiCapabilities(model: CapabilityHints): readonly Capabilit
       ""
   );
 
-  // Image models — grok-2-image and successors. Match "image" only as a
-  // dash-delimited id segment so substring collisions (e.g. "reimagine-*")
-  // don't get misrouted to image-only.
-  if (/(?:^|-)image(?:-|$)/i.test(id)) {
-    return ["image.generation", "model.info", "model.search"];
-  }
-
-  // Chat / reasoning models — grok-2, grok-3, grok-4, and future grok-* ids.
-  if (/^grok/i.test(id)) {
-    const caps: Capability[] = [
-      "text.generation",
-      "text.rewriter",
-      "text.summary",
-      "tool-use",
-      "json-mode",
-      "model.count-tokens",
-      "model.info",
-      "model.search",
-    ];
-    // grok-2-vision and the natively-multimodal grok-4 family accept images.
-    const supportsVision = /vision|grok-4/i.test(id);
-    if (supportsVision) {
-      caps.push("vision-input");
-    }
-    return caps;
-  }
+  const { profile, recognized } = resolveXaiProfile(id);
+  if (recognized) return xaiProfileCapabilities(profile);
 
   // Unknown model — fall back to whatever the record declared, or just expose
   // the meta-ops so the model can still be searched / inspected.

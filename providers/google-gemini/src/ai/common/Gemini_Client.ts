@@ -8,6 +8,7 @@ import type { GoogleGenAI } from "@google/genai";
 import { resolveApiKey } from "@workglow/ai/provider-utils";
 import { resolveEnabledEffort, type ModelEffort } from "@workglow/ai/worker";
 import { geminiEffortPolicy } from "./Gemini_EffortPolicy";
+import { resolveGeminiChatProfile } from "./Gemini_ModelProfiles";
 import type { GeminiModelConfig } from "./Gemini_ModelSchema";
 
 /** Maps coarse {@link ModelEffort} to Gemini thinkingBudget tokens. */
@@ -118,25 +119,21 @@ export function getModelName(model: GeminiModelConfig | undefined): string {
 }
 
 /**
- * Whether the model accepts images inside `functionResponse.parts`. Only the
- * Gemini 3 series and later do; older ids answer such a request with a 400.
- * Aliases such as `gemini-flash-latest` do not match and take the portable shape.
+ * Whether the model accepts images inside `functionResponse.parts`, read off
+ * its profile: Gemini 3 and later do, older ids answer such a request with a
+ * 400, and the `-latest` aliases take the portable shape.
  */
 export function geminiSupportsMultimodalFunctionResponses(modelName: string): boolean {
-  return /^gemini-(?:[3-9]|\d{2,})(?:[.-]|$)/i.test(modelName);
+  return resolveGeminiChatProfile(modelName)?.multimodalFunctionResponses === true;
 }
 
 /**
- * Whether the model returns thought summaries: Gemini 2.5 and later, and the
- * `-latest` aliases, which point at them. Earlier ids do not think and reject
+ * Whether the model thinks, and so returns thought summaries, read off its
+ * profile: Gemini 2.5 and later, and the `-latest` aliases. Earlier ids reject
  * `includeThoughts`.
  */
 export function geminiReturnsThoughts(modelName: string | undefined): boolean {
-  if (!modelName) return false;
-  return (
-    /^gemini-(?:2\.5|[3-9]|\d{2,})(?:[.-]|$)/i.test(modelName) ||
-    /^gemini-[a-z-]*-latest$/i.test(modelName)
-  );
+  return resolveGeminiChatProfile(modelName)?.thinks === true;
 }
 
 /**
@@ -188,11 +185,8 @@ export function resolveThinkingConfig(
 } {
   const budget = getThinkingBudget(model) ?? defaultBudget;
   // Thought summaries exist only when the model thinks: a zero budget turns
-  // thinking off, and models before Gemini 2.5 reject the config.
-  const thinks =
-    budget !== 0 &&
-    geminiEffortPolicy(model).supported.length > 0 &&
-    geminiReturnsThoughts(model?.provider_config?.model_name);
+  // thinking off, and a model the profile says does not think rejects the config.
+  const thinks = budget !== 0 && geminiReturnsThoughts(model?.provider_config?.model_name);
   const includeThoughts = options?.includeThoughts === true && thinks;
   if (budget === undefined && !includeThoughts) {
     return { thinkingConfig: undefined, maxOutputTokens: maxTokens };

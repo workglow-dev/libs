@@ -15,7 +15,7 @@ export * from "./common/OpenAI_ModelSearch";
 export * from "./common/OpenAI_Pricing";
 export * from "./registerOpenAi";
 
-import { OPENAI_RUN_FN_SPECS } from "./common/OpenAI_Capabilities";
+import { inferOpenAiCapabilities, OPENAI_RUN_FN_SPECS } from "./common/OpenAI_Capabilities";
 import {
   _testOnly as clientTestOnly,
   finalizeResponsesRequest,
@@ -31,6 +31,13 @@ import {
 } from "./common/OpenAI_ResponsesWarnings";
 import { isStrictCompatibleSchema } from "./common/OpenAI_StructuredGeneration";
 import { resolveOpenAiTemperatureWithReasoning } from "./common/OpenAI_TemperatureCapability";
+import {
+  normalizeOpenAiModelId,
+  OPENAI_MODEL_PROFILES,
+  OPENAI_UNPRICED_PROFILE_IDS,
+  openAiProfileCapabilities,
+  resolveOpenAiProfile,
+} from "./common/OpenAI_ModelProfiles";
 import { OpenAiQueuedProvider } from "./OpenAiQueuedProvider";
 
 /**
@@ -40,6 +47,12 @@ export const _testOnly = {
   OpenAiQueuedProvider,
   OPENAI_RUN_FN_SPECS,
   OPENAI_RUN_FNS,
+  OPENAI_MODEL_PROFILES,
+  OPENAI_UNPRICED_PROFILE_IDS,
+  normalizeOpenAiModelId,
+  resolveOpenAiProfile,
+  openAiProfileCapabilities,
+  inferOpenAiCapabilities,
   finalizeResponsesRequest,
   getReasoningConfig,
   resolvePromptCacheKey,

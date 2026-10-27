@@ -6,11 +6,12 @@
 
 import {
   EFFORT_POLICY_NONE,
-  makeEffortPolicy,
+  makeProfileEffortPolicy,
   MODEL_EFFORTS,
   type ModelEffortPolicy,
   type ModelEffortPolicyFn,
 } from "@workglow/ai/worker";
+import { resolveOpenAiProfile } from "./OpenAI_ModelProfiles";
 
 const REASONING = {
   supported: MODEL_EFFORTS,
@@ -18,7 +19,7 @@ const REASONING = {
 } as const satisfies ModelEffortPolicy;
 
 /**
- * The gpt-6 family always reasons: `reasoning.effort: "none"` is a 400
+ * A model that always reasons answers `reasoning.effort: "none"` with a 400
  * (`Supported values are: 'low', 'medium', 'high', 'xhigh', and 'max'`).
  */
 const ALWAYS_REASONING = {
@@ -27,16 +28,22 @@ const ALWAYS_REASONING = {
 } as const satisfies ModelEffortPolicy;
 
 /**
- * OpenAI rejects `reasoning` with a 400 on the chat models that do not take it,
- * and those — `gpt-4o`, `gpt-4.1`, `chatgpt-*` — are most of what does not match
- * a rule here, so an unrecognized id keeps the plain no-reasoning path. A new
- * reasoning family is one entry below rather than a live request that 400s.
+ * Read off the profile's `reasoning`. OpenAI rejects `reasoning` with a 400 on
+ * the chat models that do not take it, so a model the profile table cannot
+ * place keeps the plain no-reasoning path; a new reasoning family is one row
+ * or family entry there rather than a live request that 400s.
  */
-export const openaiEffortPolicy: ModelEffortPolicyFn = makeEffortPolicy({
-  rules: [
-    { when: [/^text-embedding/i, /^gpt-image/i, /^dall-e/i], policy: EFFORT_POLICY_NONE },
-    { when: /^gpt-6/i, policy: ALWAYS_REASONING },
-    { when: [/^gpt-5/i, /^o[134]/i], policy: REASONING },
-  ],
-  fallback: EFFORT_POLICY_NONE,
-});
+export const openaiEffortPolicy: ModelEffortPolicyFn = makeProfileEffortPolicy(
+  resolveOpenAiProfile,
+  (profile) => {
+    if (profile.kind !== "chat") return EFFORT_POLICY_NONE;
+    switch (profile.reasoning) {
+      case "always":
+        return ALWAYS_REASONING;
+      case "optional":
+        return REASONING;
+      case "none":
+        return EFFORT_POLICY_NONE;
+    }
+  }
+);

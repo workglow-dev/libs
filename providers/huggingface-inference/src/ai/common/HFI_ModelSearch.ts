@@ -16,29 +16,44 @@ import {
   searchHfModels,
 } from "@workglow/ai/provider-utils";
 import { HF_INFERENCE } from "./HFI_Constants";
+import { hfiProfileCapabilities, resolveHfiProfile } from "./HFI_ModelProfiles";
 
-/** Models with explicit capability overrides (HF pipeline tags don't cover image.generation/image.editing). */
-const HFI_IMAGE_MODELS: Array<{ id: string; capabilities: string[] }> = [
-  { id: "black-forest-labs/FLUX.1-schnell", capabilities: ["image.generation"] },
-  { id: "black-forest-labs/FLUX.1-Kontext-dev", capabilities: ["image.editing"] },
+/**
+ * The image tasks a model's profile row states, or `undefined` for a model with
+ * no row. HF pipeline tags map to neither `image.generation` nor
+ * `image.editing`, so a row is what says which of the two a model serves.
+ */
+function rowImageCapabilities(id: string): string[] | undefined {
+  const { profile, source } = resolveHfiProfile(id);
+  if (source !== "table") return undefined;
+  return hfiProfileCapabilities(profile).filter((c) => c.startsWith("image."));
+}
+
+/** Offered without a key, in the Hub's own spelling of each id; every one has a profile row. */
+const HFI_FALLBACK_MODEL_IDS: readonly string[] = [
+  "black-forest-labs/FLUX.1-schnell",
+  "black-forest-labs/FLUX.1-Kontext-dev",
 ];
 
 function buildFallbackResults(): ModelSearchResultItem[] {
-  return HFI_IMAGE_MODELS.map((m) => ({
-    id: m.id,
-    label: m.id,
-    description: "",
-    record: {
-      model_id: m.id,
-      provider: HF_INFERENCE,
-      title: m.id.split("/").pop() ?? m.id,
+  return HFI_FALLBACK_MODEL_IDS.map((id) => {
+    const capabilities = rowImageCapabilities(id) ?? [];
+    return {
+      id,
+      label: id,
       description: "",
-      capabilities: m.capabilities,
-      provider_config: { model_name: m.id },
-      metadata: {},
-    },
-    raw: m,
-  }));
+      record: {
+        model_id: id,
+        provider: HF_INFERENCE,
+        title: id.split("/").pop() ?? id,
+        description: "",
+        capabilities,
+        provider_config: { model_name: id },
+        metadata: {},
+      },
+      raw: { id, capabilities },
+    };
+  });
 }
 
 export const HFI_ModelSearch: AiProviderRunFn<ModelSearchTaskInput, ModelSearchTaskOutput> = async (
@@ -60,12 +75,9 @@ export const HFI_ModelSearch: AiProviderRunFn<ModelSearchTaskInput, ModelSearchT
 
   const entries = await searchHfModels(query, undefined, undefined, signal, input.credential_key);
   const results = entries.map((entry) => {
-    const imageEntry = HFI_IMAGE_MODELS.find((m) => m.id === entry.id);
     const mapped = mapHfModelResult(entry, HF_INFERENCE);
-    if (imageEntry) {
-      // Merge explicit task list into the mapped record.
-      mapped.record.capabilities = imageEntry.capabilities;
-    }
+    const capabilities = rowImageCapabilities(entry.id);
+    if (capabilities !== undefined) mapped.record.capabilities = capabilities;
     return mapped;
   });
   emit({ type: "finish", data: { results } });

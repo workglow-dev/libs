@@ -7,31 +7,24 @@
 import {
   EFFORT_POLICY_ALL,
   EFFORT_POLICY_NONE,
-  makeEffortPolicy,
+  makeProfileEffortPolicy,
   resolveEnabledEffort,
   type ModelEffort,
   type ModelEffortPolicyFn,
 } from "@workglow/ai/worker";
+import { resolveHfiProfile } from "./HFI_ModelProfiles";
 import type { HfInferenceModelConfig } from "./HFI_ModelSchema";
 
-/** Ids on the router that are not chat models, so take no reasoning dial. */
-const NON_TEXT = [
-  /embed/i,
-  /(?:^|\/)(?:bge|gte|e5)-/i,
-  /rerank/i,
-  /stable-diffusion|flux|sdxl/i,
-  /(?:^|[/-])(?:whisper|tts)/i,
-];
-
 /**
- * The router forwards to many backends and drops nothing on its own, so an id
- * no rule recognizes keeps the dial; the field is sent only when a caller set
- * an effort.
+ * Read off the profile's kind: only a chat model takes the reasoning dial. The
+ * router forwards to many backends and drops nothing on its own, so an id the
+ * profile cannot place — taken for a chat model — keeps the dial; the field is
+ * sent only when a caller set an effort.
  */
-export const hfiEffortPolicy: ModelEffortPolicyFn = makeEffortPolicy({
-  rules: [{ when: NON_TEXT, policy: EFFORT_POLICY_NONE }],
-  fallback: EFFORT_POLICY_ALL,
-});
+export const hfiEffortPolicy: ModelEffortPolicyFn = makeProfileEffortPolicy(
+  resolveHfiProfile,
+  (profile) => (profile.kind === "chat" ? EFFORT_POLICY_ALL : EFFORT_POLICY_NONE)
+);
 
 const EFFORT_TO_REASONING_EFFORT: Record<Exclude<ModelEffort, "none">, string> = {
   low: "low",
