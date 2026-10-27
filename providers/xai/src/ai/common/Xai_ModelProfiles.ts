@@ -71,6 +71,9 @@ function grokTakesImages(id: string): boolean {
  */
 export const XAI_MODEL_FAMILIES: readonly ModelProfileFamily<XaiModelProfile>[] = [
   { when: /(?:^|-)image(?:-|$)/, profile: IMAGE },
+  // The retired beta ids predate reasoning, as Grok 2 does.
+  { when: /^grok-beta$/, profile: chat(false, false) },
+  { when: /^grok-vision-beta$/, profile: chat(true, false) },
   {
     when: (id) => id.startsWith("grok") && id.includes("non-reasoning") && grokTakesImages(id),
     profile: chat(true, false),

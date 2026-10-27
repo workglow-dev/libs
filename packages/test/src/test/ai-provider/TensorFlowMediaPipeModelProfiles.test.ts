@@ -100,6 +100,22 @@ describe("TF MediaPipe record profile", () => {
     ]);
   });
 
+  it("reads the task from a MediaPipe bucket URL where the file name is shared", () => {
+    const embedder = {
+      model_id: "mobilenet-embedder",
+      provider_config: {
+        model_path:
+          "https://storage.googleapis.com/mediapipe-models/image_embedder/mobilenet_v3_small/float32/1/mobilenet_v3_small.tflite",
+      },
+    } as never;
+    expect(resolveTfmpRecordProfile(embedder).profile).toEqual({
+      kind: "task",
+      pipeline: "vision-image-embedder",
+    });
+    expect(inferTfmpCapabilities(embedder)).toContain("image.embedding");
+    expect(inferTfmpCapabilities(embedder)).not.toContain("image.classification");
+  });
+
   it("profiles the file the download opens, not the record's id", () => {
     for (const model_id of ["universal-sentence-encoder", "gemma-embedder"]) {
       const embedder = {

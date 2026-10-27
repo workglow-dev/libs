@@ -106,3 +106,12 @@ describe("xAI profile invariants", () => {
     );
   });
 });
+
+describe("xAI models that predate reasoning", () => {
+  it.each(["grok-2", "grok-2-vision-1212", "grok-beta", "grok-vision-beta"])(
+    "offers %s no effort dial",
+    (name) => {
+      expect(xaiEffortPolicy(grok(name)).supported).toEqual([]);
+    }
+  );
+});

@@ -162,16 +162,50 @@ export function tfmpModelName(model: ProfileHints): string {
 }
 
 /**
+ * The task directory of MediaPipe's own model buckets
+ * (`mediapipe-models/image_embedder/mobilenet_v3_small/…/mobilenet_v3_small.tflite`).
+ * It names the pipeline where the file name cannot: the same MobileNet file
+ * ships as an embedder and as a classifier.
+ */
+const MEDIAPIPE_TASK_DIRECTORIES: Readonly<Record<string, TfmpServedPipeline>> = {
+  text_embedder: "text-embedder",
+  text_classifier: "text-classifier",
+  language_detector: "text-language-detector",
+  image_classifier: "vision-image-classifier",
+  image_embedder: "vision-image-embedder",
+  image_segmenter: "vision-image-segmenter",
+  object_detector: "vision-object-detector",
+  face_detector: "vision-face-detector",
+  face_landmarker: "vision-face-landmarker",
+  gesture_recognizer: "vision-gesture-recognizer",
+  hand_landmarker: "vision-hand-landmarker",
+  pose_landmarker: "vision-pose-landmarker",
+};
+
+function mediaPipeTaskDirectory(path: string): TfmpServedPipeline | undefined {
+  const directory = /\/mediapipe-(?:models|tasks)\/([a-z_]+)\//.exec(path.toLowerCase())?.[1];
+  return directory !== undefined && Object.hasOwn(MEDIAPIPE_TASK_DIRECTORIES, directory)
+    ? MEDIAPIPE_TASK_DIRECTORIES[directory]
+    : undefined;
+}
+
+/**
  * The profile for a record: its `provider_config.pipeline` when that names a
  * pipeline this provider serves — it is what the download opens the file
- * with — else the profile its file name resolves to.
+ * with — else the task directory of a MediaPipe bucket URL, else the profile
+ * its file name resolves to.
  */
 export function resolveTfmpRecordProfile(model: ProfileHints): TfmpRecordProfile {
   const pipeline = (model.provider_config as { readonly pipeline?: unknown } | undefined)?.pipeline;
   if (isServedPipeline(pipeline)) {
     return { profile: PIPELINE_PROFILES[pipeline], source: "pipeline", recognized: true };
   }
-  const { profile, source, recognized } = resolveTfmpProfile(tfmpModelName(model));
+  const name = tfmpModelName(model);
+  const directory = mediaPipeTaskDirectory(name);
+  if (directory !== undefined) {
+    return { profile: PIPELINE_PROFILES[directory], source: "family", recognized: true };
+  }
+  const { profile, source, recognized } = resolveTfmpProfile(name);
   return { profile, source, recognized };
 }
 
