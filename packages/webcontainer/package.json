@@ -15,14 +15,10 @@
   "homepage": "https://workglow.dev",
   "scripts": {
     "watch": "concurrently -c 'auto' 'bun:watch-*'",
-    "watch-js": "bun run watch-sandbox && bun run watch-container",
-    "watch-sandbox": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/sandbox.ts",
-    "watch-container": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/container.ts",
+    "watch-js": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/sandbox.ts ./src/container.ts",
     "watch-types": "tsc --watch --preserveWatchOutput",
     "build-package": "bun run build-js && bun run build-types",
-    "build-js": "bun run build-sandbox && bun run build-container",
-    "build-sandbox": "bun build --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/sandbox.ts",
-    "build-container": "bun build --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/container.ts",
+    "build-js": "bun build --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/sandbox.ts ./src/container.ts",
     "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
     "build-types": "rm -f tsconfig.tsbuildinfo && tsc",
     "test": "vitest run --config ../../vitest.config.ts --project webcontainer"

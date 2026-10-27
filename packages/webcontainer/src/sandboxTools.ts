@@ -79,6 +79,9 @@ export interface SandboxListing {
  * `readdir` calls. Shared by the `list_files` tool and any UI showing the tree.
  */
 export async function listSandboxFiles(port: SandboxPort, root = "."): Promise<SandboxListing> {
+  // Exported, so a caller other than the tool can hand it any path: the port is
+  // promised project-relative paths and must never be sent one that leaves it.
+  root = resolveSandboxPath(root);
   const lines: string[] = [];
   let truncated = false;
   const walk = async (dir: string, depth: number): Promise<void> => {

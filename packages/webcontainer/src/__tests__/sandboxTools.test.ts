@@ -160,6 +160,21 @@ describe("listSandboxFiles", () => {
     expect((await listSandboxFiles(sandbox)).truncated).toBe(true);
   });
 
+  it("refuses a root that leaves the project before asking the port", async () => {
+    const sandbox = new FakeSandbox();
+    const asked: string[] = [];
+    const spy = Object.create(sandbox) as FakeSandbox;
+    spy.readdir = async (path) => {
+      asked.push(path);
+      return sandbox.readdir(path);
+    };
+    await expect(listSandboxFiles(spy, "../")).rejects.toThrow(/leaves the project/);
+    expect(asked).toEqual([]);
+    sandbox.files.set("src/a.js", "");
+    expect((await listSandboxFiles(spy, "/src/")).lines).toEqual(["src/a.js"]);
+    expect(asked).toEqual(["src"]);
+  });
+
   it("skips node_modules", async () => {
     const sandbox = new FakeSandbox();
     sandbox.files.set("node_modules/x/index.js", "");
