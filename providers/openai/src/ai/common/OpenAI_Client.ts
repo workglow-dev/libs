@@ -50,7 +50,11 @@ interface ResolvedProviderConfig {
   readonly base_url?: string;
   readonly organization?: string;
   readonly prompt_cache_key?: string;
-  readonly reasoning?: { readonly effort?: string; readonly mode?: string };
+  readonly reasoning?: {
+    readonly effort?: string;
+    readonly mode?: string;
+    readonly summary?: string;
+  };
   /**
    * When `true`, accept the `base_url` even if its hostname is not in
    * {@link OPENAI_ALLOWED_HOSTS}. Use only for known-good custom enterprise
@@ -139,8 +143,16 @@ export function getReasoningConfig(
   const cannotDisable = policy.supported.length > 0 && !policy.supported.includes("none");
   const reasoning = (model?.provider_config as ResolvedProviderConfig | undefined)?.reasoning;
   if (reasoning && (reasoning.effort !== undefined || reasoning.mode !== undefined)) {
-    if (!cannotDisable || reasoning.effort !== "none") return reasoning;
-    return reasoning.mode !== undefined ? { mode: reasoning.mode } : undefined;
+    // `summary` is left to {@link requestReasoningSummary}: only a run-fn with a
+    // port for the summary asks for one.
+    const { effort, mode } = reasoning;
+    if (!cannotDisable || effort !== "none") {
+      return {
+        ...(effort !== undefined ? { effort } : {}),
+        ...(mode !== undefined ? { mode } : {}),
+      };
+    }
+    return mode !== undefined ? { mode } : undefined;
   }
   const effort = resolveEnabledEffort(model, policy);
   if (effort === undefined || (cannotDisable && effort === "none")) return undefined;
@@ -235,5 +247,29 @@ export function finalizeResponsesRequest(
     }
   }
   params.prompt_cache_key = resolvePromptCacheKey(model, params);
+  return params;
+}
+
+/**
+ * Adds the `provider_config.reasoning.summary` the model record opted into to
+ * a request {@link finalizeResponsesRequest} already gave reasoning. Only the
+ * tool-calling run-fn calls it, since its task is the one with a `reasoning`
+ * port; any other run-fn would pay the summary's latency to drop it.
+ *
+ * Never on by default: a model asked to summarize for an organization that has
+ * not been verified for it refuses the whole request. Nothing is added when
+ * reasoning is off (`effort: "none"`) or the request carries none, since there
+ * is then nothing to summarize.
+ */
+export function requestReasoningSummary(
+  model: OpenAiModelConfig | undefined,
+  params: Record<string, unknown>
+): Record<string, unknown> {
+  const summary = (model?.provider_config as ResolvedProviderConfig | undefined)?.reasoning
+    ?.summary;
+  const reasoning = params.reasoning as { readonly effort?: string } | undefined;
+  if (summary !== undefined && reasoning !== undefined && reasoning.effort !== "none") {
+    params.reasoning = { ...reasoning, summary };
+  }
   return params;
 }

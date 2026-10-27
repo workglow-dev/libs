@@ -14,12 +14,14 @@ import {
   withHftPipelineInUse,
 } from "./HFT_Pipeline";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
+import { refuseHftVisionModel } from "./HFT_VisionLanguage";
 
 export const HFT_TextRewriter: AiProviderRunFn<
   TextRewriterTaskInput,
   TextRewriterTaskOutput,
   HfTransformersOnnxModelConfig
 > = async (input, model, signal, emit) => {
+  refuseHftVisionModel(model!, "HFT_TextRewriter");
   await withHftPipelineInUse(getPipelineCacheKey(model!), async () => {
     const generateText = (await getPipeline(model!, emit, {}, signal)) as TextGenerationPipeline;
     const { TextStreamer, InterruptableStoppingCriteria } = await loadTransformersSDK();

@@ -8,6 +8,7 @@ import "@workglow/a2a/tasks";
 import { registerAiTasks } from "@workglow/ai";
 import { registerBaseTasks, registerBuiltInTransforms } from "@workglow/task-graph";
 import { registerCommonTasks } from "@workglow/tasks";
+import { registerWebSearchTasks } from "@workglow/web-search";
 
 /**
  * Fills the ambient `TaskRegistry` with the surface the CLI resolves type names
@@ -23,6 +24,12 @@ import { registerCommonTasks } from "@workglow/tasks";
  * `@workglow/a2a/tasks` registers on import, which is why it is imported here
  * rather than called: a remote A2A agent is a node a saved workflow can name.
  *
+ * `WebSearchTask` is registered and no search provider is, so a saved graph
+ * naming it opens, and running it fails with the registry's own instruction to
+ * register one. Which vendor serves a search decides its cost, its quota and
+ * where the query goes, so a host that wants search says so by registering
+ * providers itself; the CLI never picks one on the operator's behalf.
+ *
  * Its own module rather than a few lines inside the boot sequence so the set is
  * assertable without standing up a program, a config directory and a model
  * repository.
@@ -32,4 +39,5 @@ export function registerCliTasks(): void {
   registerCommonTasks({ fileSystemTasks: true });
   registerAiTasks();
   registerBuiltInTransforms();
+  registerWebSearchTasks();
 }

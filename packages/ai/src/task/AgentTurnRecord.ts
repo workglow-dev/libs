@@ -6,6 +6,7 @@
 
 import { isRetryableError, RetryableJobError } from "@workglow/job-queue";
 import type { Usage } from "@workglow/task-graph";
+import { USAGE_PROMPT_FIELDS } from "@workglow/task-graph";
 import type { ServiceRegistry } from "@workglow/util";
 import { estimateCost } from "../capability/CostEstimate";
 import type { ModelPricing } from "../model/ModelPricing";
@@ -83,6 +84,16 @@ export function promptTokens(usage: Usage | undefined): number {
     (usage.imageInput ?? 0) +
     (usage.imageCached ?? 0)
   );
+}
+
+/**
+ * Whether a round's usage says anything about its prompt. A round without
+ * (no usage at all, or only output counted) has nothing to add to an input
+ * budget, and adding {@link promptTokens}' 0 would let a capped turn run every
+ * round for free.
+ */
+export function reportsPromptTokens(usage: Usage | undefined): boolean {
+  return usage !== undefined && USAGE_PROMPT_FIELDS.some((field) => usage[field] !== undefined);
 }
 
 /**

@@ -43,6 +43,9 @@ describeModelProfileContract({
     ["Xenova/slimsam-77-uniform", "family", true],
     ["Xenova/segformer-b0-finetuned-ade-512-512", "family", true],
     ["Xenova/blip-image-captioning-base", "family", true],
+    ["HuggingFaceTB/SmolVLM-256M-Instruct", "family", true],
+    ["onnx-community/Qwen2-VL-2B-Instruct", "family", true],
+    ["onnx-community/llava-onevision-qwen2-0.5b-ov-hf", "family", true],
     ["onnx-community/Qwen3-0.6B-ONNX", "family", true],
     ["onnx-community/Llama-3.2-1B-Instruct-q4f16", "family", true],
     ["HuggingFaceTB/SmolLM2-135M-Instruct", "family", true],
@@ -91,6 +94,33 @@ describe("HuggingFace Transformers profile precedence", () => {
       "family",
       "zero-shot-image-classification",
     ]);
+  });
+
+  it("reads the pipeline a record loads with over its hint and its name", () => {
+    // An image-text-to-text load is a vision-language model whatever it is called.
+    expect(
+      resolveHftRecordProfile(
+        record("Xenova/clip-vit-base-patch32", {
+          pipeline: "image-text-to-text",
+          pipeline_task: "zero-shot-image-classification",
+        })
+      ).profile.kind
+    ).toBe("vision-language");
+    // Any other load runs text-only, so neither a vision-language name nor hint counts.
+    for (const config of [{}, { pipeline_task: "image-text-to-text" }]) {
+      const resolved = resolveHftRecordProfile(
+        record("onnx-community/Qwen2-VL-2B-Instruct", { pipeline: "text-generation", ...config })
+      );
+      expect(resolved.profile.kind).toBe("text-generation");
+    }
+    // A name no family knows falls back to the load.
+    expect(
+      resolveHftRecordProfile(record("someone/mystery-model", { pipeline: "fill-mask" }))
+    ).toEqual({
+      profile: HFT_PIPELINE_TASK_PROFILES["fill-mask"],
+      source: "pipeline",
+      recognized: true,
+    });
   });
 
   it("keeps declared capabilities over every profile", () => {

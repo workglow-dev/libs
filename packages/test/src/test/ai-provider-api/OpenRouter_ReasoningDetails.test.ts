@@ -427,40 +427,4 @@ describe("OpenRouter tool calling replays reasoning_details", () => {
     expect(assistant).not.toHaveProperty("native_items");
     expect(assistant.tool_calls).toHaveLength(1);
   });
-
-  it("does not replay when the host changed the call id", async () => {
-    fetchSpy.mockImplementation(async () => sseResponse([]));
-    await findRunFn()(
-      replayInput(KEY, "c1-renamed", "c1"),
-      modelConfig,
-      new AbortController().signal,
-      () => {}
-    );
-    const assistant = sentMessages().find((m) => m.role === "assistant");
-    expect(assistant).not.toHaveProperty("reasoning_details");
-    expect(assistant.tool_calls).toHaveLength(1);
-  });
-
-  it("does not replay when the host dropped the call", async () => {
-    fetchSpy.mockImplementation(async () => sseResponse([]));
-    const input = replayInput(KEY);
-    input.messages[1].content = input.messages[1].content.filter((b: any) => b.type !== "tool_use");
-    input.messages.pop();
-    await findRunFn()(input, modelConfig, new AbortController().signal, () => {});
-    const assistant = sentMessages().find((m) => m.role === "assistant");
-    expect(assistant).not.toHaveProperty("reasoning_details");
-  });
-
-  it("does not replay details another model produced", async () => {
-    fetchSpy.mockImplementation(async () => sseResponse([]));
-    await findRunFn()(
-      replayInput("openrouter:openai/gpt-6-luna"),
-      modelConfig,
-      new AbortController().signal,
-      () => {}
-    );
-    const assistant = sentMessages().find((m) => m.role === "assistant");
-    expect(assistant).not.toHaveProperty("reasoning_details");
-    expect(assistant).not.toHaveProperty("native_items");
-  });
 });

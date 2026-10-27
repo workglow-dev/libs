@@ -240,6 +240,7 @@
     "@workglow/a2ui": "workspace:*",
     "@workglow/tasks": "workspace:*",
     "@workglow/util": "workspace:*",
+    "@workglow/web-search": "workspace:*",
     "tslog": "^5.2.0"
   }
 }

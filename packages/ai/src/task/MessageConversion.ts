@@ -14,6 +14,7 @@
  */
 
 import { asText } from "@workglow/util";
+import { textOnlyToolResult } from "../provider-utils/TextOnlyToolResult";
 import type { ChatMessage, ContentBlock } from "./ChatMessage";
 import type { ToolCallingTaskInput } from "./ToolCallingTask";
 
@@ -74,6 +75,13 @@ export interface OpenAIMessageOptions {
    * it they stay inline in the tool message, for APIs that accept that.
    */
   readonly toolImagesInUserMessage?: boolean | undefined;
+  /**
+   * For a model that reads text only: an image a tool returned is named in the
+   * tool message ({@link textOnlyToolResult}) and never sent. Wins over
+   * `toolImagesInUserMessage`, which would put image parts in front of a model
+   * that refuses them.
+   */
+  readonly textOnlyToolResults?: boolean | undefined;
   /**
    * Attach an assistant turn's native items (`native_items`) when its reasoning
    * block was produced by this provider, for the Responses converter to replay.
@@ -248,6 +256,8 @@ export function toOpenAIMessages(
           // Several text blocks, or none, still become one string: some chat-completions
           // APIs reject a parts array in a tool message.
           content = block.content.map((inner) => (inner as { text: string }).text).join("\n");
+        } else if (options.textOnlyToolResults) {
+          content = textOnlyToolResult(block.content);
         } else if (options.toolImagesInUserMessage) {
           // Each image leaves a numbered marker where it stood, and the user message
           // labels it with the same number, so text around an image still points at

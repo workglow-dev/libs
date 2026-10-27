@@ -68,6 +68,12 @@ export const OpenAiModelSchema = {
               description:
                 "Set to 'pro' for the quality-first pro configuration on supported models.",
             },
+            summary: {
+              type: "string",
+              enum: ["auto", "concise", "detailed"],
+              description:
+                "Ask for a summary of the model's reasoning, streamed on a tool-calling round's reasoning port. Off by default: some organizations must be verified before a model will summarize, and are refused otherwise.",
+            },
           },
           additionalProperties: false,
         },

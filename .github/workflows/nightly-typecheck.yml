@@ -9,6 +9,10 @@
 # nobody touched the code. That is the trade — finding out on the day Bun ships
 # it, rather than at the next manual bump. One spelling in every job, so there
 # is no version to keep in sync; `packageManager` still pins local installs.
+#
+# A red run on main opens a `ci-nightly` issue (`ci-alert.yml`), which watches
+# this workflow by its `name:` -- rename it there too. `require-green-ci` also
+# refuses a release while the latest finished run here is red.
 name: Nightly type-drift guard
 permissions:
   contents: read

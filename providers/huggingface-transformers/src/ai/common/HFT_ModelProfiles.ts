@@ -33,6 +33,9 @@ export type HftModelKind =
   | "image-to-text"
   | "object-detection"
   | "background-removal"
+  | "vision-language"
+  | "text2text-generation"
+  | "image-embedding"
   | "unknown";
 
 /**
@@ -49,6 +52,22 @@ const profile = (kind: HftModelKind): HftModelProfile => ({ kind });
 const TEXT_GENERATION = profile("text-generation");
 const TEXT_EMBEDDING = profile("text-embedding");
 const ZERO_SHOT_IMAGE = profile("zero-shot-image-classification");
+const TEXT_CLASSIFICATION = profile("text-classification");
+const OBJECT_DETECTION = profile("object-detection");
+const IMAGE_TO_TEXT = profile("image-to-text");
+const VISION_LANGUAGE = profile("vision-language");
+
+/**
+ * Repo names of vision-language families that hold a chat. Florence-2,
+ * Moondream and PaliGemma load as image-text-to-text but ship no chat template
+ * and are refused at load, so they are not named. Qwen3.5 checkpoints are
+ * multimodal unless named `-Text`; Gemma 3 is not named, since its 1B
+ * checkpoint reads text only.
+ */
+const VISION_LANGUAGE_FAMILY: ModelProfileFamily<HftModelProfile> = {
+  when: /llava|smolvlm|idefics|gemma-?3n|gemma-?4|lighton-?ocr|glm-?ocr|qwen3\.5(?!.*-text)|-vl(?:-|$)|vision/,
+  profile: VISION_LANGUAGE,
+};
 
 /**
  * Ordered: the first match wins, so a narrower family sits ahead of a broader
@@ -59,9 +78,11 @@ export const HFT_MODEL_FAMILIES: readonly ModelProfileFamily<HftModelProfile>[] 
   { when: /language.?detect|langid/, profile: profile("language-detection") },
   { when: /embed|minilm|bge-|gte-|e5-/, profile: TEXT_EMBEDDING },
   { when: /clip|siglip/, profile: ZERO_SHOT_IMAGE },
-  { when: /yolo|detr|owl/, profile: profile("object-detection") },
+  { when: /yolo|detr|owl/, profile: OBJECT_DETECTION },
   { when: /sam|segformer|mask/, profile: profile("image-segmentation") },
-  { when: /blip|llava|vision/, profile: profile("image-to-text") },
+  VISION_LANGUAGE_FAMILY,
+  // Captioners, which the image-to-text pipeline serves.
+  { when: /blip|vit-gpt2/, profile: IMAGE_TO_TEXT },
   { when: /llama|mistral|gemma|phi|qwen|tinyllama|smollm/, profile: TEXT_GENERATION },
 ];
 
@@ -74,7 +95,7 @@ export const HFT_PIPELINE_TASK_PROFILES: Readonly<Record<string, HftModelProfile
   "text-generation": TEXT_GENERATION,
   "feature-extraction": TEXT_EMBEDDING,
   "sentence-similarity": TEXT_EMBEDDING,
-  "text-classification": profile("text-classification"),
+  "text-classification": TEXT_CLASSIFICATION,
   "token-classification": profile("token-classification"),
   "fill-mask": profile("fill-mask"),
   translation: profile("translation"),
@@ -82,10 +103,15 @@ export const HFT_PIPELINE_TASK_PROFILES: Readonly<Record<string, HftModelProfile
   "question-answering": profile("question-answering"),
   "image-classification": profile("image-classification"),
   "image-segmentation": profile("image-segmentation"),
-  "image-to-text": profile("image-to-text"),
-  "object-detection": profile("object-detection"),
+  "image-to-text": IMAGE_TO_TEXT,
+  "object-detection": OBJECT_DETECTION,
   "background-removal": profile("background-removal"),
   "zero-shot-image-classification": ZERO_SHOT_IMAGE,
+  "image-text-to-text": VISION_LANGUAGE,
+  "text2text-generation": profile("text2text-generation"),
+  "zero-shot-classification": TEXT_CLASSIFICATION,
+  "zero-shot-object-detection": OBJECT_DETECTION,
+  "image-feature-extraction": profile("image-embedding"),
 };
 
 const UNKNOWN = profile("unknown");
@@ -109,6 +135,14 @@ export const resolveHftProfile: (modelName: string | undefined) => HftResolvedPr
     fallback: UNKNOWN,
   });
 
+/** The name families a record loaded through a pipeline other than image-text-to-text can be. */
+const resolveHftTextOnlyProfile: (modelName: string | undefined) => HftResolvedProfile =
+  makeModelProfileResolver<HftModelProfile>({
+    families: HFT_MODEL_FAMILIES.filter((family) => family !== VISION_LANGUAGE_FAMILY),
+    normalize: normalizeHftModelId,
+    fallback: UNKNOWN,
+  });
+
 /**
  * The fields a profile is read from. Optional, as on a model config, so both a
  * stored record and the config a run-fn receives satisfy it.
@@ -118,10 +152,13 @@ interface ProfileHints {
   readonly provider_config?: unknown;
 }
 
-/** A record's profile, and whether it came from the `pipeline_task` hint or the name. */
+/**
+ * A record's profile, and what it came from: the `pipeline` it loads with, the
+ * `pipeline_task` hint, or the name.
+ */
 export interface HftRecordProfile {
   readonly profile: HftModelProfile;
-  readonly source: "pipeline-task" | ModelProfileSource;
+  readonly source: "pipeline" | "pipeline-task" | ModelProfileSource;
   readonly recognized: boolean;
 }
 
@@ -135,20 +172,44 @@ export function hftModelName(model: ProfileHints): string {
 
 /**
  * The profile for a record: its `pipeline_task` hint when it names a task the
- * provider serves, else the profile its name resolves to.
+ * provider serves, else the profile its name resolves to, else the `pipeline`
+ * it loads with.
+ *
+ * `pipeline` decides how the model loads, so an image-text-to-text load is a
+ * vision-language model whatever its name or hint says, and a load through any
+ * other pipeline is never one: that load runs text-only, and a vision-language
+ * profile would promise images that never reach the model. The load comes last
+ * otherwise, because the hint and the name refine it — rerankers and language
+ * detectors load `text-classification` too — but it still answers for a record
+ * written by hand with a name no family knows.
  */
 export function resolveHftRecordProfile(model: ProfileHints): HftRecordProfile {
-  const pipelineTask = (
-    model.provider_config as { readonly pipeline_task?: string | undefined } | undefined
-  )?.pipeline_task;
-  if (pipelineTask !== undefined && Object.hasOwn(HFT_PIPELINE_TASK_PROFILES, pipelineTask)) {
-    return {
-      profile: HFT_PIPELINE_TASK_PROFILES[pipelineTask]!,
-      source: "pipeline-task",
-      recognized: true,
-    };
+  const config = model.provider_config as
+    | {
+        readonly pipeline_task?: string | undefined;
+        readonly pipeline?: string | undefined;
+      }
+    | undefined;
+  const pipeline = config?.pipeline;
+  if (pipeline === "image-text-to-text") {
+    return { profile: VISION_LANGUAGE, source: "pipeline", recognized: true };
   }
-  const { profile: resolved, source, recognized } = resolveHftProfile(hftModelName(model));
+  const pipelineTask = config?.pipeline_task;
+  if (pipelineTask !== undefined && Object.hasOwn(HFT_PIPELINE_TASK_PROFILES, pipelineTask)) {
+    const fromTask = HFT_PIPELINE_TASK_PROFILES[pipelineTask]!;
+    if (fromTask !== VISION_LANGUAGE || pipeline === undefined) {
+      return { profile: fromTask, source: "pipeline-task", recognized: true };
+    }
+  }
+  const resolve = pipeline === undefined ? resolveHftProfile : resolveHftTextOnlyProfile;
+  const { profile: resolved, source, recognized } = resolve(hftModelName(model));
+  if (
+    !recognized &&
+    pipeline !== undefined &&
+    Object.hasOwn(HFT_PIPELINE_TASK_PROFILES, pipeline)
+  ) {
+    return { profile: HFT_PIPELINE_TASK_PROFILES[pipeline]!, source: "pipeline", recognized: true };
+  }
   return { profile: resolved, source, recognized };
 }
 
@@ -186,6 +247,21 @@ const HFT_KIND_CAPABILITIES: Readonly<Record<HftModelKind, readonly Capability[]
   "image-to-text": ["image.to-text", ...HFT_META],
   "object-detection": ["image.object-detection", ...HFT_META],
   "background-removal": ["image.background-removal", ...HFT_META],
+  // Chat, text generation and tool calling with images in the conversation. Not
+  // json-mode, rewriter or summary, whose run-fns drive a text pipeline, and not
+  // `cache.checkpoint` / `session.dispose`: such a model keeps no KV session, so
+  // a checkpoint would warm nothing.
+  "vision-language": [
+    "text.generation",
+    "tool-use",
+    "vision-input",
+    "model.count-tokens",
+    ...HFT_META,
+  ],
+  // Encoder-decoder models (T5, FLAN): the text run-fns drive their pipeline,
+  // but they have no chat template, tool format or KV session.
+  "text2text-generation": ["text.generation", "text.rewriter", ...HFT_META],
+  "image-embedding": ["image.embedding", ...HFT_META],
   // Nothing says what the model does: only the meta-ops that need no answer.
   unknown: ["model.search", "model.info"],
 };

@@ -5,6 +5,7 @@
  */
 
 import type { AiProviderRunFn, TextRewriterTaskInput, TextRewriterTaskOutput } from "@workglow/ai";
+import { llamaCppThoughtBudgetOption } from "./LlamaCpp_EffortPolicy";
 import type { LlamaCppModelConfig } from "./LlamaCpp_ModelSchema";
 import {
   getActualModelPath,
@@ -44,6 +45,7 @@ export const LlamaCpp_TextRewriter_Stream: AiProviderRunFn<
                 signal,
                 onTextChunk,
                 ...llamaCppSeedPromptSpread(model.provider_config),
+                ...llamaCppThoughtBudgetOption(model),
               });
             },
             signal,

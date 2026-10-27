@@ -15,7 +15,11 @@ import type {
 import { buildToolDescription } from "@workglow/ai/worker";
 import { getClient, getModelName } from "./Anthropic_Client";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
-import { buildAnthropicMessages } from "./Anthropic_ToolCalling";
+import {
+  buildAnthropicMessages,
+  requestAllowsThinkingReplay,
+  withoutThinking,
+} from "./Anthropic_NativeTurn";
 import { applyAnthropicThinkingParams } from "./Anthropic_Thinking";
 import { mapAnthropicUsage } from "./Anthropic_Usage";
 
@@ -73,35 +77,6 @@ export function annotateLastBlock(message: { content: unknown }): void {
  * with no messages gets a throwaway user message (not annotated — the
  * system/tools breakpoints cover the cached content).
  */
-const CHECKPOINT_THINKING_BLOCK_TYPES: ReadonlySet<string> = new Set([
-  "thinking",
-  "redacted_thinking",
-]);
-
-/**
- * The messages with every thinking block removed (a message left empty is
- * dropped), or `undefined` when there was none to remove. Local copy of the
- * tool-calling retry helper: this module cannot import it back without
- * widening the existing import cycle with `Anthropic_ToolCalling`.
- */
-function stripCheckpointThinking(messages: readonly unknown[]): unknown[] | undefined {
-  const out: unknown[] = [];
-  let removed = false;
-  for (const msg of messages) {
-    const m = msg as { role?: unknown; content?: unknown };
-    if (m?.role !== "assistant" || !Array.isArray(m.content)) {
-      out.push(msg);
-      continue;
-    }
-    const content = (m.content as unknown[]).filter(
-      (b) => !CHECKPOINT_THINKING_BLOCK_TYPES.has((b as { type?: unknown })?.type as string)
-    );
-    if (content.length !== (m.content as unknown[]).length) removed = true;
-    if (content.length > 0) out.push({ ...(m as Record<string, unknown>), content });
-  }
-  return removed ? out : undefined;
-}
-
 export function buildAnthropicCheckpointParams(
   prefix: CheckpointPrefix,
   modelName: string,
@@ -120,25 +95,16 @@ export function buildAnthropicCheckpointParams(
   }
   // Guard on the CONVERTED array: buildAnthropicMessages skips system-role
   // entries, so a non-empty prefix.messages can still convert to [].
-  const messages =
+  let messages =
     prefix.messages && prefix.messages.length > 0
       ? buildAnthropicMessages(prefix.messages, "", `anthropic:${modelName}`)
       : [];
-  // A replayed signed thinking block without thinking enabled is a 400,
-  // so when a known model left no thinking on the request, strip the blocks
-  // rather than fail the warm-up. Without a model the thinking params are
-  // unknown and the replay is preserved.
-  if (
-    model !== undefined &&
-    messages.length > 0 &&
-    params.thinking === undefined &&
-    (params.output_config as { effort?: unknown } | undefined)?.effort === undefined
-  ) {
-    const stripped = stripCheckpointThinking(messages);
-    if (stripped !== undefined) {
-      messages.length = 0;
-      messages.push(...stripped);
-    }
+  // A warm-up known to run without thinking cannot carry signed thinking
+  // blocks, so they go rather than fail it — the same rule a consuming call
+  // applies, which keeps the cached prefix the one that call sends. Without a
+  // model nothing is known and the replay is preserved.
+  if (messages.length > 0 && !requestAllowsThinkingReplay(params, model)) {
+    messages = withoutThinking(messages) ?? messages;
   }
   if (messages.length > 0) {
     annotateLastBlock(messages[messages.length - 1] as { content: unknown });
@@ -188,6 +154,8 @@ export function applyAnthropicPrefixReplay(
   // entries, so a non-empty prefix.messages can still convert to [].
   // The prefix's own turns replay with their signed thinking, keyed as tool
   // calling keys them, so a checkpointed turn reaches the model as it wrote it.
+  // A consuming call that runs without thinking removes them afterwards
+  // (`omitThinkingUnlessReplayAllowed`); only it knows its thinking fields.
   const nativeKey = typeof params.model === "string" ? `anthropic:${params.model}` : undefined;
   const prefixMessages =
     prefix.messages && prefix.messages.length > 0

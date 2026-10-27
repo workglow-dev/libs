@@ -15,6 +15,7 @@ import {
   mapOpenAIChatUsage,
 } from "@workglow/ai/provider-utils";
 import { getClient, getModelName, getProvider } from "./HFI_Client";
+import { hfiReasoningParams } from "./HFI_EffortPolicy";
 import type { HfInferenceModelConfig } from "./HFI_ModelSchema";
 
 export const HFI_TextSummary_Stream: AiProviderRunFn<
@@ -39,6 +40,7 @@ export const HFI_TextSummary_Stream: AiProviderRunFn<
         { role: "user", content: input.text },
       ],
       provider,
+      ...hfiReasoningParams(model),
     },
     { signal }
   );

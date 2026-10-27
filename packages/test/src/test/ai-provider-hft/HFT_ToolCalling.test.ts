@@ -237,6 +237,53 @@ describe("HFT_ToolCalling chat history", () => {
       { role: "user", content: "And now?" },
     ]);
   });
+
+  it("names a tool's image in the result the template reads, in place of its data", async () => {
+    const pipeline = makeFakePipeline(["A sunny map."]);
+    const rendered: unknown[] = [];
+    pipeline.tokenizer.apply_chat_template = (messages: unknown) => {
+      rendered.push(messages);
+      return RENDERED_PROMPT;
+    };
+    pipelines.set(cacheKey, pipeline);
+
+    await HFT_ToolCalling(
+      {
+        ...input,
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Weather?" }] },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "c1", name: "get_weather", input: {} }],
+          },
+          {
+            role: "tool",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "c1",
+                content: [
+                  { type: "text", text: "Map attached." },
+                  { type: "image", mimeType: "image/png", data: "iVBORw0KGgo" },
+                ],
+              },
+            ],
+          },
+        ],
+      } as unknown as ToolCallingTaskInput,
+      model,
+      new AbortController().signal,
+      () => {}
+    );
+
+    const tool = (rendered[0] as Array<{ role: string; content: string }>).find(
+      (message) => message.role === "tool"
+    );
+    expect(tool?.content).toBe(
+      "Map attached.\n[image/png image returned; this model reads text only]"
+    );
+    expect(JSON.stringify(rendered[0])).not.toContain("iVBORw0KGgo");
+  });
 });
 
 describe("createHftDeltaRouter", () => {
@@ -293,7 +340,13 @@ describe("buildHFTMessages", () => {
       role: "assistant",
       content: "Checking.",
       reasoning_content: "Need the weather tool.",
-      tool_calls: [{ id: "call_1", name: "get_weather", arguments: { city: "Paris" } }],
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: { name: "get_weather", arguments: { city: "Paris" } },
+        },
+      ],
     });
   });
 

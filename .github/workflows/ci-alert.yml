@@ -1,0 +1,68 @@
+# Turns a red run on `main` into an issue someone will see.
+#
+# A red scheduled run is only a row in the Actions tab: the nightly type-drift
+# guard once failed every night for a month before anyone looked. So every
+# completed run of a watched workflow lands here, and `scripts/ci-alert.ts`
+# keeps ONE open issue per workflow, labelled `ci-nightly` and titled
+# `CI red on main: <workflow name>`:
+#
+# - a failed (or timed-out) run opens it, naming the run, commit and failed jobs;
+# - each further failure comments on that issue instead of opening another;
+# - the next successful run closes it.
+#
+# Only `push`, `schedule` and `workflow_dispatch` runs of `main` in this
+# repository count. A `pull_request` run never does, and neither does a
+# cancelled one: `Build & Test` cancels an in-flight `main` run when the next
+# push lands, which says nothing about the code.
+#
+# `workflow_run` matches workflows by their `name:`, not their file, so renaming
+# a watched workflow silently stops its alerts. `scripts/ciAlert.test.ts` fails
+# when a listed name matches no workflow, or a scheduled workflow is not listed.
+#
+# Like every `workflow_run` workflow, this one only runs from the default
+# branch: a change here takes effect once merged, and cannot be tried on a PR.
+name: CI alert
+
+on:
+  workflow_run:
+    workflows:
+      - Build & Test
+      - CodeQL
+      - Nightly Bun parity & coverage
+      - Nightly type-drift guard
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One alert at a time per watched workflow, so two runs finishing together
+# cannot both find no issue and both open one. A burst can drop a queued
+# middle run's comment (a group holds one pending run), never the newest
+# outcome, which is the one that decides whether the issue stays open.
+concurrency:
+  group: ci-alert-${{ github.event.workflow_run.workflow_id }}
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      # The default branch's own script, never the code the run built.
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      # No `bun i`: the script imports only `node:` modules, so the alert still
+      # goes out when the install is what broke.
+      - name: Open, update or close the tracking issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/ci-alert.ts
