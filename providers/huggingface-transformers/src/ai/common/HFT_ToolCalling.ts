@@ -5,7 +5,9 @@
  */
 
 import { asText } from "@workglow/util";
-import type { TextGenerationPipeline } from "@huggingface/transformers";
+import { getLogger } from "@workglow/util/worker";
+import type { LogitsProcessorList, TextGenerationPipeline } from "@huggingface/transformers";
+import type { ResponseFormat } from "@huggingface/transformers-structured-output";
 import type {
   AiProviderRunFn,
   ChatMessage,
@@ -29,6 +31,8 @@ import {
   toTextFlatMessages,
 } from "@workglow/ai/worker";
 import { renderHftPrefixPrompt, resolveHftParityAnchor } from "./HFT_CacheCheckpoint";
+import type { ConstrainedToolCall } from "./HFT_ConstrainedToolCall";
+import { resolveConstrainedToolCall } from "./HFT_ConstrainedToolCall";
 import type { HfTransformersOnnxModelConfig } from "./HFT_ModelSchema";
 import {
   deleteHftSession,
@@ -453,6 +457,12 @@ export function createHftDeltaRouter(
 // Provider run functions
 // ============================================================================
 
+/** A forced-call constraint paired with the logits processor that enforces it. */
+interface ToolCallGrammar {
+  readonly constraint: ConstrainedToolCall;
+  readonly processor: LogitsProcessorList;
+}
+
 export const HFT_ToolCalling: AiProviderRunFn<
   ToolCallingTaskInput,
   ToolCallingTaskOutput,
@@ -498,114 +508,220 @@ export const HFT_ToolCalling: AiProviderRunFn<
       }
       promptParts = buildPromptAndPrefix(generateText.tokenizer, input, modelFamily);
     }
-    const { prompt, responsePrefix } = promptParts;
 
-    // Accumulate raw tokens (the KV cache encodes them verbatim), and route
-    // each delta: thinking to `reasoning`, the rest through the tool-call
-    // markup filter to `text`. A template that opens `<think>` in the prompt
-    // leaves the generation starting inside the block.
-    let fullText = "";
-    const filter = createHftDeltaRouter(
-      (event) => emit(event),
-      prompt.trimEnd().endsWith("<think>")
-    );
-
-    const streamer = createStreamingTextStreamer(
-      generateText.tokenizer,
-      (text) => {
-        fullText += text;
-        filter.feed(text);
-      },
-      TextStreamer,
-      emit
-    );
-    const stopping_criteria = new InterruptableStoppingCriteria();
-    if (signal) {
-      signal.addEventListener("abort", () => stopping_criteria.interrupt(), { once: true });
+    // A turn that must end in one call is decoded under a grammar when the
+    // family's call format allows it. A schema the engine rejects (it refuses
+    // `pattern` and most `format`s, which cannot be enforced incrementally)
+    // leaves the turn unconstrained, as it was before. A generation prefix has
+    // already opened the call itself, so there is no body left to constrain.
+    const constrained =
+      promptParts.responsePrefix === undefined
+        ? resolveConstrainedToolCall(
+            input,
+            modelFamily,
+            getModelTextCandidates(model!),
+            promptParts.prompt,
+            sessionContext?.prefix
+          )
+        : undefined;
+    let grammar: ToolCallGrammar | undefined;
+    if (constrained) {
+      try {
+        const { StructuredOutputProcessor } =
+          await import("@huggingface/transformers-structured-output");
+        grammar = {
+          constraint: constrained,
+          processor: new StructuredOutputProcessor(generateText.tokenizer, {
+            type: "json_schema",
+            json_schema: constrained.schema,
+          } as Extract<ResponseFormat, { type: "json_schema" }>),
+        };
+      } catch (error) {
+        getLogger().debug("HFT_ToolCalling: tool-call grammar not applied", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
-    // Session cache: prefix-rewind for tool calling (streaming)
-    let past_key_values: any = undefined;
+    // Usage snapshots replace one another downstream, and each decode starts its
+    // own count. A retry adds what the failed attempt had reported, so the
+    // totals a budget reads only grow, and the prompt it read twice is counted
+    // twice.
+    let carried = { input: 0, output: 0 };
+    let reported = { input: 0, output: 0 };
+    const emitCounted = (event: Parameters<typeof emit>[0]): void => {
+      if (event.type !== "usage") {
+        emit(event);
+        return;
+      }
+      const { input: seen, output: made } = event.usage;
+      const usage = {
+        ...event.usage,
+        input: seen === undefined ? undefined : seen + carried.input,
+        output: made === undefined ? undefined : made + carried.output,
+      };
+      reported = { input: usage.input ?? reported.input, output: usage.output ?? reported.output };
+      emit({ ...event, usage });
+    };
 
-    // prefix-rewind trusts cached KV tokens positionally, so a snapshot is
-    // only warmed / attached when the fed prompt provably starts with the
-    // exact text the stored KV encodes; otherwise generation falls back to a
-    // full re-encode of `prompt`, which stays correct.
-    const prefixParityOk = prefixPrompt !== undefined && prompt.startsWith(prefixPrompt);
+    // One decode of the turn, under `grammar` or free. Everything a decode
+    // touches is built here, so a second attempt starts from nothing: a failed
+    // one leaves its streamer, its text and its KV cache half-written.
+    const decode = async (
+      active: ToolCallGrammar | undefined
+    ): Promise<{
+      readonly prompt: string;
+      readonly responsePrefix: string | undefined;
+      readonly fullText: string;
+      readonly answerText: string;
+      readonly past_key_values: any;
+    }> => {
+      const prompt = active
+        ? `${promptParts.prompt}${active.constraint.prefix}`
+        : promptParts.prompt;
+      const responsePrefix = active ? active.constraint.prefix : promptParts.responsePrefix;
 
-    if (sessionId && !hftSession && prefixParityOk) {
-      // Warm the shared region — the fingerprint's tools+systemPrompt block or
-      // a checkpoint's re-encoded prefix (worker restarted / state evicted).
-      // Never the full prompt: snapshotting this call's user turn would poison
-      // the cache for the next caller, whose different turn would be
-      // positionally misaligned with the stored KV.
-      const { DynamicCache } = await loadTransformersSDK();
-      const cache = new DynamicCache();
-      const tokenized = generateText.tokenizer(prefixPrompt!);
-      await generateText.model.generate({
-        ...tokenized,
-        max_new_tokens: 0,
-        past_key_values: cache,
-      });
-      hftSession = snapshotHftSession(
-        sessionId,
-        cache as Record<string, any>,
-        modelPath,
-        cacheKey,
-        prefixPrompt
+      // Accumulate raw tokens (the KV cache encodes them verbatim), and route
+      // each delta: thinking to `reasoning`, the rest through the tool-call
+      // markup filter to `text`. A template that opens `<think>` in the prompt
+      // leaves the generation starting inside the block.
+      let fullText = "";
+      const filter = createHftDeltaRouter(
+        (event) => emit(event),
+        prompt.trimEnd().endsWith("<think>")
       );
-    }
 
-    if (
-      hftSession?.mode === "prefix-rewind" &&
-      hftSession.modelPath === modelPath &&
-      prefixParityOk &&
-      // WebGPU snapshots cannot be shared: the first decode step's update()
-      // would dispose the snapshot's gpu-buffer tensors, so skip the attach
-      // and re-encode the full prompt instead.
-      !hasGpuBufferEntries(hftSession.baseEntries)
-    ) {
-      // Create a fresh DynamicCache from the prefix snapshot for this call
-      const { DynamicCache } = await loadTransformersSDK();
-      past_key_values = new DynamicCache(hftSession.baseEntries);
-    }
+      const streamer = createStreamingTextStreamer(
+        generateText.tokenizer,
+        (text) => {
+          fullText += text;
+          // A constrained body is the call itself, with no tags around it for the
+          // markup filter to hide, so none of it is the assistant's text.
+          if (!active) filter.feed(text);
+        },
+        TextStreamer,
+        emitCounted
+      );
+      const stopping_criteria = new InterruptableStoppingCriteria();
+      if (signal) {
+        signal.addEventListener("abort", () => stopping_criteria.interrupt(), { once: true });
+      }
 
-    if (sessionContext?.emitCheckpointId && !past_key_values) {
-      // Emitting without a consumable prefix KV (no parent checkpoint, or
-      // parity fell back to a full re-encode): attach an empty cache so this
-      // turn's KV can still be snapshotted under the emitted checkpoint id.
-      const { DynamicCache } = await loadTransformersSDK();
-      past_key_values = new DynamicCache();
-    }
+      // Session cache: prefix-rewind for tool calling (streaming)
+      let past_key_values: any = undefined;
 
+      // prefix-rewind trusts cached KV tokens positionally, so a snapshot is
+      // only warmed / attached when the fed prompt provably starts with the
+      // exact text the stored KV encodes; otherwise generation falls back to a
+      // full re-encode of `prompt`, which stays correct.
+      const prefixParityOk = prefixPrompt !== undefined && prompt.startsWith(prefixPrompt);
+
+      if (sessionId && !hftSession && prefixParityOk) {
+        // Warm the shared region — the fingerprint's tools+systemPrompt block or
+        // a checkpoint's re-encoded prefix (worker restarted / state evicted).
+        // Never the full prompt: snapshotting this call's user turn would poison
+        // the cache for the next caller, whose different turn would be
+        // positionally misaligned with the stored KV.
+        const { DynamicCache } = await loadTransformersSDK();
+        const cache = new DynamicCache();
+        const tokenized = generateText.tokenizer(prefixPrompt!);
+        await generateText.model.generate({
+          ...tokenized,
+          max_new_tokens: 0,
+          past_key_values: cache,
+        });
+        hftSession = snapshotHftSession(
+          sessionId,
+          cache as Record<string, any>,
+          modelPath,
+          cacheKey,
+          prefixPrompt
+        );
+      }
+
+      if (
+        hftSession?.mode === "prefix-rewind" &&
+        hftSession.modelPath === modelPath &&
+        prefixParityOk &&
+        // WebGPU snapshots cannot be shared: the first decode step's update()
+        // would dispose the snapshot's gpu-buffer tensors, so skip the attach
+        // and re-encode the full prompt instead.
+        !hasGpuBufferEntries(hftSession.baseEntries)
+      ) {
+        // Create a fresh DynamicCache from the prefix snapshot for this call
+        const { DynamicCache } = await loadTransformersSDK();
+        past_key_values = new DynamicCache(hftSession.baseEntries);
+      }
+
+      if (sessionContext?.emitCheckpointId && !past_key_values) {
+        // Emitting without a consumable prefix KV (no parent checkpoint, or
+        // parity fell back to a full re-encode): attach an empty cache so this
+        // turn's KV can still be snapshotted under the emitted checkpoint id.
+        const { DynamicCache } = await loadTransformersSDK();
+        past_key_values = new DynamicCache();
+      }
+
+      try {
+        await generateText(prompt, {
+          max_new_tokens: input.maxTokens ?? 1024,
+          // As for a chat turn, an unset temperature defers to the model's config.
+          ...hftSamplingOptions(input.temperature, "model-default"),
+          return_full_text: false,
+          streamer,
+          stopping_criteria: [stopping_criteria],
+          ...(active ? { logits_processor: active.processor } : {}),
+          ...(past_key_values ? { past_key_values } : {}),
+        });
+      } catch (error) {
+        // A generate() that threw never reached its own end(), which is where the
+        // throttled tail of the usage count is flushed; the retry carries it.
+        streamer.end();
+        throw error;
+      } finally {
+        filter.flush();
+      }
+
+      // Thinking is left out: a call quoted inside it was never made.
+      const answerText = active ? `${fullText}${active.constraint.suffix}` : filter.answerText();
+      return { prompt, responsePrefix, fullText, answerText, past_key_values };
+    };
+
+    // A grammar that cannot finish (the engine reaches a dead end, or its EOS is
+    // not the model's) must not turn a call that decoded freely before into a
+    // failed turn. Nothing of a constrained attempt reached the text ports, so
+    // the free attempt starts clean.
+    let turn: Awaited<ReturnType<typeof decode>>;
     try {
-      await generateText(prompt, {
-        max_new_tokens: input.maxTokens ?? 1024,
-        // As for a chat turn, an unset temperature defers to the model's config.
-        ...hftSamplingOptions(input.temperature, "model-default"),
-        return_full_text: false,
-        streamer,
-        stopping_criteria: [stopping_criteria],
-        ...(past_key_values ? { past_key_values } : {}),
+      turn = await decode(grammar);
+    } catch (error) {
+      if (!grammar || signal?.aborted) throw error;
+      getLogger().warn("HFT_ToolCalling: constrained decoding failed; decoding without it", {
+        error: error instanceof Error ? error.message : String(error),
       });
-    } finally {
-      filter.flush();
+      carried = reported;
+      turn = await decode(undefined);
     }
+    const { prompt, responsePrefix, fullText, answerText, past_key_values } = turn;
 
     // Parse the accumulated text for tool calls using the model-family-aware parser.
     // For models that use a generation prefix, prepend it so the parser sees the
     // full markup pattern.
-    // Thinking is left out: a call quoted inside it was never made.
-    const answerText = filter.answerText();
     const parseableFullText = responsePrefix ? `${responsePrefix}${answerText}` : answerText;
     // Only the calls are taken: the parser's cleaned text is the same text the
     // markup filter already streamed, and the stream is the one copy.
     const { toolCalls } = adaptParserResult(
       parseToolCalls(parseableFullText, { parser: modelFamily })
     );
+    // A checkpoint turn may name a tool only its prefix holds, and the prompt
+    // and the constraint both list that one, so a call to it is a valid call.
+    const prefixTools = sessionContext?.prefix?.tools ?? [];
+    const allowedTools = [
+      ...(input.tools ?? []),
+      ...prefixTools.filter((tool) => !input.tools?.some((own) => own.name === tool.name)),
+    ];
     const validToolCalls = filterValidToolCalls(
       normalizeParsedToolCalls(input, toolCalls),
-      input.tools
+      allowedTools
     );
 
     if (validToolCalls.length > 0) {
