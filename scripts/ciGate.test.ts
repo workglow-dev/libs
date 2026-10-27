@@ -73,13 +73,14 @@ describe("evaluateCiRuns", () => {
 
 describe("evaluateNightlyGuard", () => {
   const GUARD = "nightly-typecheck.yml";
+  const LIMIT = 30;
 
   it("passes when the latest run is green", () => {
-    expect(evaluateNightlyGuard([run(), run({ conclusion: "failure" })], GUARD).ok).toBe(true);
+    expect(evaluateNightlyGuard([run(), run({ conclusion: "failure" })], GUARD, LIMIT).ok).toBe(true);
   });
 
   it("refuses when the latest run is red, naming it and how to re-run the guard", () => {
-    const verdict = evaluateNightlyGuard([run({ conclusion: "failure" }), run()], GUARD);
+    const verdict = evaluateNightlyGuard([run({ conclusion: "failure" }), run()], GUARD, LIMIT);
     expect(verdict.ok).toBe(false);
     expect(verdict.ok === false && verdict.reason).toContain("actions/runs/1");
     expect(verdict.ok === false && verdict.reason).toContain(`gh workflow run ${GUARD}`);
@@ -93,11 +94,26 @@ describe("evaluateNightlyGuard", () => {
       run({ conclusion: "cancelled" }),
       run({ conclusion: "failure" }),
     ];
-    expect(evaluateNightlyGuard(runs, GUARD).ok).toBe(false);
+    expect(evaluateNightlyGuard(runs, GUARD, LIMIT).ok).toBe(false);
   });
 
   it("refuses nothing when the guard has never finished a run", () => {
-    const verdict = evaluateNightlyGuard([], GUARD);
+    const verdict = evaluateNightlyGuard([], GUARD, LIMIT);
     expect(verdict).toEqual({ ok: true, run: undefined });
+  });
+
+  it("refuses a full page with no finished run, which hides the run that decides it", () => {
+    const runs = [
+      run({ status: "in_progress", conclusion: "" }),
+      run({ conclusion: "cancelled" }),
+      run({ conclusion: "cancelled" }),
+    ];
+    const verdict = evaluateNightlyGuard(runs, GUARD, runs.length);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.ok === false && verdict.reason).toMatch(/None of the latest 3/);
+    expect(evaluateNightlyGuard(runs, GUARD, runs.length + 1)).toEqual({
+      ok: true,
+      run: undefined,
+    });
   });
 });

@@ -47,6 +47,8 @@ const OVERRIDE = "WORKGLOW_SKIP_CI_GATE";
 const WORKFLOW = "test.yml";
 /** The scheduled guard on main a release also waits for; see `evaluateNightlyGuard`. */
 const NIGHTLY_GUARD = "nightly-typecheck.yml";
+/** How many guard runs to read back through for one that finished. */
+const NIGHTLY_GUARD_RUNS = 30;
 
 /** `gh run list` with `filters`, newest first. */
 function listRuns(filters: readonly string[], sha: string): WorkflowRun[] {
@@ -117,8 +119,12 @@ function main(): void {
   // so a red one is invisible above. It once stayed red for a month; a release
   // cut in that window ships the drift it exists to catch.
   const nightly = evaluateNightlyGuard(
-    listRuns(["--workflow", NIGHTLY_GUARD, "--branch", "main", "--limit", "10"], sha),
-    NIGHTLY_GUARD
+    listRuns(
+      ["--workflow", NIGHTLY_GUARD, "--branch", "main", "--limit", String(NIGHTLY_GUARD_RUNS)],
+      sha
+    ),
+    NIGHTLY_GUARD,
+    NIGHTLY_GUARD_RUNS
   );
   if (!nightly.ok) fail(nightly.reason);
   console.log(

@@ -480,6 +480,20 @@ describe("HFT_ToolCalling on a vision-language model", () => {
     expect(finish.data).toEqual({ text: "", toolCalls: [] });
   });
 
+  it("drops a call to a tool other than the one the turn forces", async () => {
+    const timeTool = { ...weatherTool, name: "get_time", description: "Current time." };
+    fake.reply([
+      '<tool_call>{"name": "get_time", "arguments": {"city": "Paris"}}</tool_call>',
+      '<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>',
+    ]);
+    const { output } = await runToolCalling({
+      tools: [weatherTool, timeTool],
+      toolChoice: "get_weather",
+      messages: [{ role: "user", content: [{ type: "text", text: "Where?" }, PHOTO] }],
+    });
+    expect(output.toolCalls).toEqual([expect.objectContaining({ name: "get_weather" })]);
+  });
+
   it("reports prefill and usage, and samples as a text model does", async () => {
     fake.reply(["a", "b"]);
     const { events } = await runToolCalling({ prompt: "Hi", temperature: 0.7, maxTokens: 12 });

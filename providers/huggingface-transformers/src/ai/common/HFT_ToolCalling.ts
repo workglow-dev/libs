@@ -512,17 +512,22 @@ function emitParsedToolCalls(
 /**
  * The tools a parsed call may name. A checkpoint turn may name a tool only its
  * prefix holds: the prompt (and, on a text model, the constraint) both list
- * that one, so a call to it is a valid call.
+ * that one, so a call to it is a valid call. A call forced by name admits that
+ * tool alone: a grammar enforces it only when one applies, and a turn decoded
+ * free (a vision-language model, a family with no grammar, a grammar that
+ * failed) can still name another.
  */
 function allowedTools(
   input: ToolCallingTaskInput,
   sessionContext: AiSessionContext | undefined
 ): ReadonlyArray<ToolDefinition> {
   const prefixTools = sessionContext?.prefix?.tools ?? [];
-  return [
+  const tools = [
     ...(input.tools ?? []),
     ...prefixTools.filter((tool) => !input.tools?.some((own) => own.name === tool.name)),
   ];
+  const forced = forcedToolSelection(input);
+  return forced === undefined ? tools : tools.filter((tool) => tool.name === forced);
 }
 
 // ============================================================================
