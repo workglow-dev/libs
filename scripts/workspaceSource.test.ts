@@ -176,7 +176,10 @@ describe("workspace source resolution", () => {
       const exclude = config.test?.coverage?.exclude ?? [];
       const silent = packages.filter((pkg) => !pkg.publishes);
       // A gate matching nothing would pass the loop below vacuously.
-      expect(silent.map((pkg) => pkg.name)).toEqual(["@workglow/web"]);
+      expect(silent.map((pkg) => pkg.name)).toEqual([
+        "@workglow/web",
+        "@workglow/webcontainer-agent",
+      ]);
       for (const pkg of packages) {
         // Root-relative, like the include globs: an absolute exclude subtracts
         // from nothing.

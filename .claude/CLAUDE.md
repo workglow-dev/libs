@@ -667,6 +667,23 @@ like a rendering bug and is a resolution one.
 JSON naming `"A2UISurfaceTask"` resolve for a host that installed `workglow` rather than
 reaching for this package by name — the same reason `@workglow/a2a/tasks` is.
 
+### `@workglow/webcontainer`
+
+A coding agent whose tools run inside a [WebContainer](https://webcontainers.io) in the browser
+tab, so model-written code executes there and cannot reach the host. Two subpaths:
+`./sandbox` (tools, prompt, `runSandboxAgent`; written against a `SandboxPort`, so it imports no
+WebContainer code) and `./container` (the only module that loads `@webcontainer/api`, an optional
+peer). `examples/webcontainer-agent` is the demo page; builder's agent chat uses the same package.
+
+Three properties are easy to break. **The tools are created once per sandbox and kept across
+turns** (`sandboxTools` on `runSandboxAgent`): servers outlive a turn so the preview stays live,
+and a run given them never stops them, not even when it fails or is stopped; creating them per turn
+kills the preview on every follow-up. **Background starts are serialized**, because the container
+announces a listening port without saying which process owns it; `stop_servers` bumps an epoch so a
+start still queued or spawning stands down. **Cancellation is listened for before `spawn`**, or a
+Stop clicked mid-start leaves the program running. The page must be cross-origin isolated
+(`COEP: require-corp`, `COOP: same-origin`); one container boots per page.
+
 ### `@workglow/triggers`
 
 Pure-timer triggers — `IntervalTrigger`, `PollingTrigger`, `CronTrigger` — plus the

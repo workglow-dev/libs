@@ -1,0 +1,69 @@
+{
+  "name": "@workglow/webcontainer",
+  "type": "module",
+  "version": "0.6.13",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/workglow-dev/libs.git",
+    "directory": "packages/webcontainer"
+  },
+  "bugs": {
+    "url": "https://github.com/workglow-dev/libs/issues"
+  },
+  "description": "Sandbox tools and an AgentTask runner that let a coding agent write and run a web project inside a WebContainer, so model-written code executes in the browser tab and cannot reach the host.",
+  "homepage": "https://workglow.dev",
+  "scripts": {
+    "watch": "concurrently -c 'auto' 'bun:watch-*'",
+    "watch-js": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/sandbox.ts ./src/container.ts",
+    "watch-types": "tsc --watch --preserveWatchOutput",
+    "build-package": "bun run build-js && bun run build-types",
+    "build-js": "bun build --target=browser --sourcemap=external --packages=external --outdir ./dist ./src/sandbox.ts ./src/container.ts",
+    "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
+    "build-types": "rm -f tsconfig.tsbuildinfo && tsc",
+    "test": "vitest run --config ../../vitest.config.ts --project webcontainer"
+  },
+  "exports": {
+    "./sandbox": {
+      "types": "./dist/sandbox.d.ts",
+      "import": "./dist/sandbox.js"
+    },
+    "./container": {
+      "types": "./dist/container.d.ts",
+      "import": "./dist/container.js"
+    }
+  },
+  "peerDependencies": {
+    "@webcontainer/api": "^1.6.4",
+    "@workglow/ai": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@webcontainer/api": {
+      "optional": true
+    },
+    "@workglow/ai": {
+      "optional": false
+    },
+    "@workglow/task-graph": {
+      "optional": false
+    },
+    "@workglow/util": {
+      "optional": false
+    }
+  },
+  "devDependencies": {
+    "@webcontainer/api": "^1.6.4",
+    "@workglow/ai": "workspace:*",
+    "@workglow/task-graph": "workspace:*",
+    "@workglow/util": "workspace:*"
+  },
+  "files": [
+    "dist",
+    "src/**/*.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
