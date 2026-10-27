@@ -1222,52 +1222,57 @@ const doGetPipeline = async (
 };
 
 /**
- * Load a vision-language model as processor + `AutoModelForImageTextToText`,
- * in parallel as `pipeline()` loads its parts. The processor reads only small
- * config and tokenizer files, so it is handed the revision and the raw progress
- * callback; the model gets every pipeline option (dtype, device, external data
- * format) and is what reports the aggregate `progress_total` a download is
- * measured by.
+ * Load a vision-language model as processor + `AutoModelForImageTextToText`.
  *
- * A processor without an image processor or a tokenizer means the cache is
- * incomplete, which is reported as {@link HFT_NULL_PROCESSOR_PREFIX} so the job
- * retries and re-fetches it. The model is released on any failure: one whose
- * processor failed would otherwise pin its ONNX sessions with no cache entry
- * left to evict.
+ * Two refusals come first, each from a file of a few kilobytes, so a model that
+ * cannot hold a conversation is turned away before its weights download:
+ *
+ * - `config.json`'s `model_type` must be one `AutoModelForImageTextToText`
+ *   loads. An any-to-any model such as Janus (`multi_modality`) is not, and
+ *   would otherwise fail deep in the weight load with "Unsupported model type".
+ * - The processor must carry a tokenizer and a chat template, its own or its
+ *   tokenizer's. Florence-2, Moondream and PaliGemma load as image-text-to-text
+ *   but ship no template: they are driven by task prompts (`<CAPTION>`, `caption en`), not by a
+ *   conversation, and every turn would fail rendering one.
+ *
+ * A processor without an image processor means the cache is incomplete
+ * (`preprocessor_config.json` never arrived), which is reported as
+ * {@link HFT_NULL_PROCESSOR_PREFIX} so the job retries and re-fetches it. The model loads last and alone, so nothing is
+ * left holding ONNX sessions when an earlier step fails; it is what reports the
+ * aggregate `progress_total` a download is measured by.
  */
 async function loadVisionLanguageModel(
   sdk: TransformersSDKModule,
   modelPath: string,
   options: PretrainedModelOptions
 ): Promise<HftVisionLanguageModel> {
-  const [processorResult, modelResult] = await Promise.allSettled([
-    sdk.AutoProcessor.from_pretrained(modelPath, {
-      revision: options.revision,
-      progress_callback: options.progress_callback,
-    }),
-    sdk.AutoModelForImageTextToText.from_pretrained(modelPath, options),
-  ]);
-  const release = async (): Promise<void> => {
-    if (modelResult.status !== "fulfilled") return;
-    try {
-      await modelResult.value.dispose();
-    } catch {
-      // Best-effort: the load already failed, and that failure is the one to report.
-    }
-  };
-  if (processorResult.status === "rejected") {
-    await release();
-    throw processorResult.reason;
-  }
-  if (modelResult.status === "rejected") throw modelResult.reason;
-  const processor = processorResult.value;
-  const tokenizer = processor.tokenizer;
-  if (processor.image_processor == null || tokenizer == null) {
-    await release();
+  const small = { revision: options.revision, progress_callback: options.progress_callback };
+  const config = await sdk.AutoConfig.from_pretrained(modelPath, small);
+  const modelType = config.model_type ?? "unknown";
+  if (!sdk.AutoModelForImageTextToText.MODEL_CLASS_MAPPINGS.some((m) => m.has(modelType))) {
     throw new Error(
-      `${HFT_NULL_PROCESSOR_PREFIX} Image processor or tokenizer not initialized for ` +
+      `"${modelPath}" is a ${modelType} model, which transformers.js does not load as ` +
+        `image-text-to-text, so it cannot be used with pipeline "image-text-to-text".`
+    );
+  }
+  const processor = await sdk.AutoProcessor.from_pretrained(modelPath, small);
+  if (processor.image_processor == null) {
+    throw new Error(
+      `${HFT_NULL_PROCESSOR_PREFIX} Image processor not initialized for ` +
         `image-text-to-text/${modelPath}. Model cache may be incomplete.`
     );
   }
-  return { task: "image-text-to-text", processor, tokenizer, model: modelResult.value };
+  // A processor with no tokenizer is not a cache gap: a chat model's processor
+  // class always bundles one, and the generic processor a prompt-driven model
+  // gets (Moondream) carries only what its config lists.
+  const tokenizer = processor.tokenizer;
+  if (tokenizer == null || (!processor.chat_template && !tokenizer.chat_template)) {
+    throw new Error(
+      `"${modelPath}" (${modelType}) ships no chat template, so it cannot hold the ` +
+        `conversation chat, text generation and tool calling send it: models like it are ` +
+        `driven by task prompts rather than by chat.`
+    );
+  }
+  const model = await sdk.AutoModelForImageTextToText.from_pretrained(modelPath, options);
+  return { task: "image-text-to-text", processor, tokenizer, model };
 }

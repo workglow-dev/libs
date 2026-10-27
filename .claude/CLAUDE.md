@@ -459,6 +459,10 @@ transformers.js has no `pipeline()` for it, so `getPipeline` caches `{ processor
 (`AutoProcessor` + `AutoModelForImageTextToText`) under the same key, in-use count and LRU, and
 chat, text generation and tool calling hand its images to the processor (`HFT_VisionLanguage.ts`).
 Which argument a processor takes first differs by class (LFM2-VL and LLaVA take the images first).
+Before any weights download it refuses what cannot chat: a `model_type`
+`AutoModelForImageTextToText` does not map (Janus is `multi_modality`), and a processor with no
+tokenizer or chat template (Florence-2, Moondream and PaliGemma are driven by task prompts). Only
+a missing image processor is reported as a retryable incomplete cache.
 It keeps no KV session — image features sit in the positions a prefix cache would skip — so a
 checkpoint's prefix is rendered in full each round, and it declares neither `cache.checkpoint` nor
 the json-mode / rewriter / summary capabilities, whose run-fns drive a text pipeline.

@@ -146,19 +146,34 @@ function textOn(events: ReadonlyArray<StreamEvent<never>>, port: string): string
 }
 
 describe("HFT vision-language loading", () => {
-  it("loads processor + AutoModelForImageTextToText with the pipeline's options, and caches them", async () => {
-    pipelines.delete(cacheKey);
-    const processor = Object.assign(async () => ({}), {
+  /** A processor whose image processor, tokenizer and chat template are all present unless overridden. */
+  function loadableProcessor(overrides: Record<string, unknown> = {}) {
+    return Object.assign(async () => ({}), {
       image_processor: {},
-      tokenizer: { all_special_ids: [] },
+      tokenizer: { all_special_ids: [], chat_template: null },
+      chat_template: "{{ messages }}",
+      ...overrides,
     });
+  }
+
+  function spyOnLoad(modelType: string, processor: unknown) {
     const model = { dispose: vi.fn(async () => {}) };
+    const loadConfig = vi
+      .spyOn(sdk.AutoConfig, "from_pretrained")
+      .mockResolvedValue({ model_type: modelType } as never);
     const loadProcessor = vi
       .spyOn(sdk.AutoProcessor, "from_pretrained")
       .mockResolvedValue(processor as never);
     const loadModel = vi
       .spyOn(sdk.AutoModelForImageTextToText, "from_pretrained")
       .mockResolvedValue(model as never);
+    return { model, loadConfig, loadProcessor, loadModel };
+  }
+
+  it("loads processor + AutoModelForImageTextToText with the pipeline's options, and caches them", async () => {
+    pipelines.delete(cacheKey);
+    const processor = loadableProcessor();
+    const { model, loadConfig, loadProcessor, loadModel } = spyOnLoad("qwen2_vl", processor);
 
     const loaded = await getPipeline(vlmModel, () => {});
 
@@ -168,6 +183,10 @@ describe("HFT vision-language loading", () => {
       tokenizer: processor.tokenizer,
       model,
     });
+    expect(loadConfig).toHaveBeenCalledWith(
+      "test-org/qwen-vl-fake",
+      expect.objectContaining({ revision: "v1" })
+    );
     expect(loadProcessor).toHaveBeenCalledWith(
       "test-org/qwen-vl-fake",
       expect.objectContaining({ revision: "v1" })
@@ -185,28 +204,72 @@ describe("HFT vision-language loading", () => {
     expect(model.dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("reports an incomplete cache as a retryable null-processor failure and releases the model", async () => {
+  it("takes the tokenizer's chat template when the processor has none of its own", async () => {
     pipelines.delete(cacheKey);
-    const model = { dispose: vi.fn(async () => {}) };
-    vi.spyOn(sdk.AutoProcessor, "from_pretrained").mockResolvedValue({
-      image_processor: undefined,
-      tokenizer: {},
-    } as never);
-    vi.spyOn(sdk.AutoModelForImageTextToText, "from_pretrained").mockResolvedValue(model as never);
+    const processor = loadableProcessor({
+      chat_template: null,
+      tokenizer: { all_special_ids: [], chat_template: "{{ messages }}" },
+    });
+    const { loadModel } = spyOnLoad("lfm2_vl", processor);
 
-    await expect(getPipeline(vlmModel, () => {})).rejects.toThrow(HFT_NULL_PROCESSOR_PREFIX);
-    expect(model.dispose).toHaveBeenCalledTimes(1);
+    await expect(getPipeline(vlmModel, () => {})).resolves.toMatchObject({ processor });
+    expect(loadModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a model type transformers.js does not load as image-text-to-text, before any weights", async () => {
+    pipelines.delete(cacheKey);
+    // Janus is an any-to-any model, loaded through its own class.
+    const { loadProcessor, loadModel } = spyOnLoad("multi_modality", loadableProcessor());
+
+    await expect(getPipeline(vlmModel, () => {})).rejects.toThrow(
+      /is a multi_modality model, which transformers\.js does not load as image-text-to-text/
+    );
+    expect(loadProcessor).not.toHaveBeenCalled();
+    expect(loadModel).not.toHaveBeenCalled();
     expect(pipelines.has(cacheKey)).toBe(false);
   });
 
-  it("releases the model when the processor fails to load", async () => {
+  it("refuses a model with no chat template, before its weights download", async () => {
     pipelines.delete(cacheKey);
-    const model = { dispose: vi.fn(async () => {}) };
-    vi.spyOn(sdk.AutoProcessor, "from_pretrained").mockRejectedValue(new Error("no processor"));
-    vi.spyOn(sdk.AutoModelForImageTextToText, "from_pretrained").mockResolvedValue(model as never);
+    // Florence-2: an image-text-to-text model driven by task prompts.
+    const { loadModel } = spyOnLoad("florence2", loadableProcessor({ chat_template: null }));
+
+    const failure = getPipeline(vlmModel, () => {});
+    await expect(failure).rejects.toThrow(/\(florence2\) ships no chat template/);
+    await expect(failure).rejects.not.toThrow(HFT_NULL_PROCESSOR_PREFIX);
+    expect(loadModel).not.toHaveBeenCalled();
+  });
+
+  it("refuses a processor that bundles no tokenizer as prompt-driven, not as a cache gap", async () => {
+    pipelines.delete(cacheKey);
+    // Moondream: the generic processor carries an image processor and nothing else.
+    const { loadModel } = spyOnLoad(
+      "moondream1",
+      loadableProcessor({ tokenizer: undefined, chat_template: null })
+    );
+
+    const failure = getPipeline(vlmModel, () => {});
+    await expect(failure).rejects.toThrow(/\(moondream1\) ships no chat template/);
+    await expect(failure).rejects.not.toThrow(HFT_NULL_PROCESSOR_PREFIX);
+    expect(loadModel).not.toHaveBeenCalled();
+  });
+
+  it("reports an incomplete cache as a retryable null-processor failure, before any weights", async () => {
+    pipelines.delete(cacheKey);
+    const { loadModel } = spyOnLoad("qwen2_vl", loadableProcessor({ image_processor: undefined }));
+
+    await expect(getPipeline(vlmModel, () => {})).rejects.toThrow(HFT_NULL_PROCESSOR_PREFIX);
+    expect(loadModel).not.toHaveBeenCalled();
+    expect(pipelines.has(cacheKey)).toBe(false);
+  });
+
+  it("loads no weights when the processor fails to load", async () => {
+    pipelines.delete(cacheKey);
+    const { loadProcessor, loadModel } = spyOnLoad("qwen2_vl", loadableProcessor());
+    loadProcessor.mockRejectedValue(new Error("no processor"));
 
     await expect(getPipeline(vlmModel, () => {})).rejects.toThrow("no processor");
-    expect(model.dispose).toHaveBeenCalledTimes(1);
+    expect(loadModel).not.toHaveBeenCalled();
   });
 });
 
@@ -529,5 +592,30 @@ describe("inferHftCapabilities for vision-language models", () => {
     expect(inferHftCapabilities(record("Xenova/blip-image-captioning-base", {}))).toContain(
       "image.to-text"
     );
+  });
+
+  // Repo ids as they appear on the Hub, each checked against its config.json
+  // model_type and whether it ships a chat template.
+  it.each([
+    "onnx-community/gemma-3n-E2B-it-ONNX",
+    "onnx-community/gemma-4-E2B-it-ONNX",
+    "onnx-community/Qwen3.5-0.8B-ONNX",
+    "onnx-community/LightOnOCR-2-1B-ONNX",
+    "onnx-community/GLM-OCR-ONNX",
+    "onnx-community/Qwen2.5-VL-3B-Instruct-ONNX",
+  ])("names %s a vision-language model", (id) => {
+    expect(inferHftCapabilities(record(id, {}))).toContain("vision-input");
+  });
+
+  it.each([
+    // No chat template: driven by task prompts, refused at load.
+    "onnx-community/Florence-2-base-ft",
+    "Xenova/moondream2",
+    "onnx-community/paligemma2-3b-pt-224",
+    // Text-only: a Qwen3.5 export of the language model alone, and Gemma 3's 1B.
+    "onnx-community/Qwen3.5-0.8B-Text-ONNX",
+    "onnx-community/gemma-3-1b-it-ONNX",
+  ])("does not name %s a vision-language model", (id) => {
+    expect(inferHftCapabilities(record(id, {}))).not.toContain("vision-input");
   });
 });

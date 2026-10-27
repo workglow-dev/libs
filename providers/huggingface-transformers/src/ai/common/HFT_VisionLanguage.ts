@@ -242,16 +242,17 @@ export async function decodeHftImage(
 
 /**
  * Processors whose call takes the images first and the text second. The rest
- * (Idefics3/SmolVLM, the Qwen-VL family, Gemma 3, Phi-3 Vision) take the text
- * first. Matched by class rather than by reading the call's parameter names,
- * which a minified build does not keep.
+ * (Idefics3/SmolVLM, the Qwen-VL family, GLM, Gemma 3, 3n and 4, Phi-3 Vision)
+ * take the text first. Matched by class rather than by reading the call's
+ * parameter names, which a minified build does not keep. Florence-2's processor
+ * also takes images first, but a Florence-2 model has no chat template and is
+ * refused at load.
  */
 const IMAGES_FIRST_PROCESSORS = [
   "Lfm2VlProcessor",
   "LlavaProcessor",
   "PaliGemmaProcessor",
   "PixtralProcessor",
-  "Florence2Processor",
 ] as const;
 
 export function processorTakesImagesFirst(sdk: object, processor: object): boolean {
