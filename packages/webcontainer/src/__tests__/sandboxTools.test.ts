@@ -253,6 +253,42 @@ describe("run_command", () => {
     expect(result).toContain("exited with code 1 before listening");
   });
 
+  it("returns the output a failing server printed after it exited", async () => {
+    const sandbox = new FakeSandbox();
+    // `exit` settles at once; the diagnostic is still on its way through the stream.
+    sandbox.spawn = async () => ({
+      output: new ReadableStream<string>({
+        start: (controller) => {
+          setTimeout(() => {
+            controller.enqueue("Error: EADDRINUSE");
+            controller.close();
+          }, 20);
+        },
+      }),
+      exit: Promise.resolve(1),
+      kill: () => {},
+    });
+    const { tools } = createSandboxTools(sandbox);
+    const result = (await call(tools, "run_command", {
+      command: "node",
+      background: true,
+    })) as string;
+    expect(result).toContain("Error: EADDRINUSE");
+    expect(result).toContain("exited with code 1");
+  });
+
+  it("returns the output of a server that never listened, after killing it", async () => {
+    const sandbox = new FakeSandbox({ node: { chunks: ["still booting"], exitCode: undefined } });
+    const { tools } = createSandboxTools(sandbox, { serverReadyTimeoutSec: 0.05 });
+    const result = (await call(tools, "run_command", {
+      command: "node",
+      background: true,
+    })) as string;
+    expect(result).toContain("still booting");
+    expect(result).toContain("no server was listening");
+    expect(sandbox.killed).toEqual(["node"]);
+  });
+
   it("caps the servers left running", async () => {
     const sandbox = new FakeSandbox({
       node: { chunks: [], exitCode: undefined, listensOn: 3000 },

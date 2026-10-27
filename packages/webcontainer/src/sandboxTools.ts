@@ -438,9 +438,14 @@ export function createSandboxTools(
         }
         process.kill();
         background.delete(process);
+        // `exit` can settle before the last output has been read, and the last
+        // line is usually the diagnostic: drain it, as the foreground path does.
         if (typeof result === "object") {
+          await pumped.done;
           return `${buffer.read()}\n[the program exited with code ${result.code} before listening on a port]`;
         }
+        pumped.stop();
+        await pumped.done;
         return `${buffer.read()}\n[no server was listening after ${deadlineMs / 1000}s; killed]`;
       } finally {
         cleanup();
