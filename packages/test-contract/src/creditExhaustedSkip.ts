@@ -32,19 +32,20 @@ const BILLING_CODES = new Set([
 ]);
 
 const CREDIT_MESSAGE =
-  /insufficient credits|not enough credits|no credits remaining|out of credits|insufficient[\s_-]balance|balance is (?:too low|insufficient)|exceeded[\s\S]{0,80}credits|monthly included credits|payment required|exceeded your current quota|check your plan and billing|billing_hard_limit/i;
+  /insufficient credits|not enough credits|no (?:credits remaining|remaining credits)|out of credits|credits are depleted|prepayment credits|insufficient[\s_-]balance|balance is (?:too low|insufficient)|exceeded[\s\S]{0,80}credits|monthly included credits|payment required|exceeded your current quota|check your plan and billing|billing_hard_limit/i;
 
 /**
  * A 402 that survives only as text. `classifyProviderError` rebuilds the error
  * as a `PermanentJobError` carrying the message and no `cause`, so by the time
  * a live test sees a DeepSeek billing failure the numeric `status` is gone and
  * the OpenAI-SDK message shape (`402 Insufficient Balance`) is all that is
- * left. Anchored to an HTTP-shaped position — start of a line, or after a
- * summary line's colon — so prose that merely contains the number
+ * left. Anchored to an HTTP-shaped position — start of a line, after a
+ * summary line's colon, or a JSON error body's `"code": 402`, which is how
+ * Gemini's billing failure arrives — so prose that merely contains the number
  * ("Item 402(c)") is not scavenged as a status.
  */
 const HTTP_402_MESSAGE =
-  /\bHTTP\/?\d?(?:\.\d)?\s*402\b|\bstatus(?:\s*code)?\s*[:=]\s*402\b|\berror code:?\s*402\b|(?:^|:\s+)402\s+[a-z]/im;
+  /\bHTTP\/?\d?(?:\.\d)?\s*402\b|\bstatus(?:\s*code)?\s*[:=]\s*402\b|\berror code:?\s*402\b|"code"\s*:\s*402\b|(?:^|:\s+)402\s+[a-z]/im;
 
 export function isCreditExhaustedError(err: unknown): boolean {
   const seen = new Set<unknown>();
