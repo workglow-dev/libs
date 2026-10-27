@@ -17,17 +17,12 @@ import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
 import { runAiProviderConformance } from "@workglow/test-contract/ai-provider";
 
-// Skipped while tool calling is unroutable: the pinned provider no longer
-// resolves for this model ("no inference provider information"), so every
-// ToolCallingTask run fails. Declaring `tools: false` instead would trip the
-// honesty check, since the provider does register a tool-calling run function.
-// Re-enable by flipping this once a routable model/provider pair is pinned.
-const TOOL_CALLING_ROUTABLE = false;
-const RUN = !!process.env.HF_TOKEN && TOOL_CALLING_ROUTABLE;
-// meta-llama/Llama-3.1-8B-Instruct is no longer routable via HF Inference
-// ("no inference provider information for model"). Llama-3.3-70B-Instruct is
-// broadly served; see the provider pin below for tool-calling support.
-const MODEL_ID = "hf-inference:meta-llama/Llama-3.3-70B-Instruct";
+const RUN = !!process.env.HF_TOKEN;
+// Under the default "auto" policy this model can route to backends that reject
+// `tools`/`tool_choice`, so the provider is pinned below. Re-check the HF router
+// listing for a live provider with tool support if "no inference provider
+// information for model" returns.
+const MODEL_ID = "hf-inference:meta-llama/Llama-3.1-8B-Instruct";
 const EMBED_MODEL_ID = "hf-inference:sentence-transformers/all-MiniLM-L6-v2";
 
 runAiProviderConformance({
@@ -43,14 +38,12 @@ runAiProviderConformance({
       await registerHfInferenceInline();
       await getGlobalModelRepository().addModel({
         model_id: MODEL_ID,
-        title: "Llama 3.3 70B Instruct (HF Inference)",
-        description: "Llama 3.3 70B Instruct via HuggingFace Inference API",
+        title: "Llama 3.1 8B Instruct (HF Inference)",
+        description: "Llama 3.1 8B Instruct via HuggingFace Inference API",
         capabilities: ["text.generation", "text.rewriter", "text.summary", "tool-use"],
         provider: HF_INFERENCE as typeof HF_INFERENCE,
-        // Pin a router provider that supports tool calling for this model. The
-        // default "auto" policy can route to backends that reject
-        // `tools`/`tool_choice`.
-        provider_config: { model_name: "meta-llama/Llama-3.3-70B-Instruct", provider: "together" },
+        // Pin a router provider that supports tool calling for this model.
+        provider_config: { model_name: "meta-llama/Llama-3.1-8B-Instruct", provider: "deepinfra" },
         metadata: {},
       });
       await getGlobalModelRepository().addModel({
