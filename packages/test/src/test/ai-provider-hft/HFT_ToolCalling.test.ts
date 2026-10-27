@@ -543,6 +543,18 @@ describe("HFT_ToolCalling constrained decoding", () => {
     expect(events.some((e: any) => e.port === "text")).toBe(false);
   });
 
+  it("keeps a call to a tool only the checkpoint prefix holds", async () => {
+    const { output } = await runForced(
+      "get_time",
+      ['{"name": "get_time", "arguments": {"zone": "UTC"}}'],
+      { tools: [] },
+      { sessionId: "cp", prefix: { tools: [timeTool] } } as AiSessionContext
+    );
+    expect(output.toolCalls).toEqual([
+      expect.objectContaining({ name: "get_time", input: { zone: "UTC" } }),
+    ]);
+  });
+
   it("does not constrain an auto turn", async () => {
     const { opts } = await runForced("auto", [TOOL_PIECES.join("")]);
     expect(opts[0].logits_processor).toBe(undefined);

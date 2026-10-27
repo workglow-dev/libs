@@ -685,9 +685,16 @@ export const HFT_ToolCalling: AiProviderRunFn<
     const { toolCalls } = adaptParserResult(
       parseToolCalls(parseableFullText, { parser: modelFamily })
     );
+    // A checkpoint turn may name a tool only its prefix holds, and the prompt
+    // and the constraint both list that one, so a call to it is a valid call.
+    const prefixTools = sessionContext?.prefix?.tools ?? [];
+    const allowedTools = [
+      ...(input.tools ?? []),
+      ...prefixTools.filter((tool) => !input.tools?.some((own) => own.name === tool.name)),
+    ];
     const validToolCalls = filterValidToolCalls(
       normalizeParsedToolCalls(input, toolCalls),
-      input.tools
+      allowedTools
     );
 
     if (validToolCalls.length > 0) {
