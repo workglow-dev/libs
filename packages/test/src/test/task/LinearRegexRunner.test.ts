@@ -10,6 +10,7 @@ import {
   defaultRegexRunnerFactory,
   registerRegexRunnerFactory,
   RegexTask,
+  toLinearRegexSource,
 } from "@workglow/tasks";
 import type { RegexRunnerFactory } from "@workglow/tasks";
 import { RE2JS } from "re2js";
@@ -42,6 +43,23 @@ const PATTERNS: readonly [string, string][] = [
   ["[a-c]{2,}", "g"],
   ["\\d+(?:\\.\\d+)?", "g"],
   ["colou?r", "g"],
+  // A `[` inside a class is a literal, not the start of a POSIX class.
+  ["[[:digit:]]", "g"],
+  // Without `u`, these escapes are the letter itself, not RE2's operator.
+  ["\\A", "g"],
+  ["a\\z", "g"],
+  ["\\a", "g"],
+  ["\\Qa.b", "g"],
+  ["\\pL", "g"],
+  ["\\x{2}", "g"],
+  ["\\u{2}", "g"],
+  ["\\c1", "g"],
+  ["[\\c1]", "g"],
+  // A `-` beside `\s` / `\S` in a class is a literal, as JavaScript reads it.
+  ["[\\s-z]", "g"],
+  ["[%-\\s]", "g"],
+  ["[\\d\\s-()]+", "g"],
+  ["[\\S-]+", "g"],
 ];
 
 const INPUTS: readonly string[] = [
@@ -59,6 +77,8 @@ const INPUTS: readonly string[] = [
   "pi is 3.14 and e is 2.718",
   "color colour colr",
   "back\bspace",
+  "A [:] d] 5 az pL Qaxb xx uu \\c1 \u0011 \u0007",
+  "call (555) 123-4567 or -z %",
 ];
 
 describe("createLinearRegexRunnerFactory", () => {
@@ -93,6 +113,17 @@ describe("createLinearRegexRunnerFactory", () => {
         expect(() => linear(new RegExp(source, flags))).toThrow(reason);
       });
     }
+
+    it("reports what matching a rewritten pattern still has to check", () => {
+      expect(toLinearRegexSource(/^a$/m)).toMatchObject({
+        multilineDollar: true,
+        usesLookbehind: true,
+      });
+      expect(toLinearRegexSource(/^a$/)).toMatchObject({
+        multilineDollar: false,
+        usesLookbehind: false,
+      });
+    });
 
     it("refuses a multiline $ only over an input with \\r line endings", () => {
       const runner = linear(/\w+$/gm);

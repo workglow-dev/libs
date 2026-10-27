@@ -11,24 +11,42 @@
  * The engine is handed in rather than imported, so this package takes no
  * dependency; `re2js`'s `RE2JS` class satisfies {@link ILinearRegexEngine} as is.
  *
- * Matching runs in time linear in the input, which is the containment. The cost
- * is syntax: a linear engine cannot express backreferences or lookaround, so a
- * pattern using them is refused with a {@link TaskInvalidInputError} rather than
- * matched without a bound. Where JavaScript and RE2 read the same syntax
- * differently, the source is rewritten to JavaScript's meaning:
+ * One match runs in time linear in the input, which is the containment. A global
+ * scan is not one match: each `find` restarts where the last match ended, and a
+ * pattern whose preferred branch must read to the end before it fails
+ * (`/a[^z]*z|a/g` over a run of `a`) makes every `find` linear, so `execAll` is
+ * quadratic in the worst case, as the native engine is. A host has no clock to
+ * bound it with either: workerd's timers do not advance during synchronous work.
+ *
+ * The cost is syntax: a linear engine cannot express backreferences or
+ * lookaround, so a pattern using them is refused with a
+ * {@link TaskInvalidInputError} rather than matched without a bound. Where
+ * JavaScript and RE2 read the same syntax differently, the source is rewritten to
+ * JavaScript's meaning:
  *
  * - `\s` / `\S` cover JavaScript's whitespace set, not RE2's ASCII one.
  * - `.` excludes `\r`, `\u2028` and `\u2029` as well as `\n`.
  * - Under `m`, `^` also matches after `\r`, `\u2028` and `\u2029`.
- * - `[^]` matches any character; `[\b]` is a backspace.
+ * - `[^]` matches any character; `[\b]` is a backspace; `[` inside a class is a
+ *   literal, never the start of a POSIX class (`[[:digit:]]`).
+ * - Without `u`, an escaped letter JavaScript reads as itself stays that letter
+ *   (`\A`, `\z`, `\a`, `\Q`, `\E`, `\p`, `\P`, and `\x` / `\u` before `{`), and
+ *   `\c` before a non-letter is a literal backslash.
  *
- * Two differences remain and are refused or accepted explicitly:
+ * These differences remain and are refused or accepted explicitly:
  *
  * - Under `m`, RE2's `$` matches only before `\n`. A pattern with a multiline
  *   `$` is refused for an input holding `\r`, `\u2028` or `\u2029`.
  * - Without the `u` flag JavaScript sees an astral character as two code units;
  *   RE2 always sees one code point. A pattern that counts characters (`^.$`)
  *   can therefore match an emoji here that the native engine would not.
+ * - Without the `u` flag, `i` folds case by JavaScript's legacy rule; RE2 always
+ *   uses Unicode folding, so `/s/i` matches the long s (`\u017f`) and `/k/i` the
+ *   Kelvin sign (`\u212a`) here.
+ * - A quantified group keeps the captures of its last iteration that set them,
+ *   where JavaScript clears them each iteration (`/(?:x(y)?)+/` on `"xyx"`), and
+ *   an iteration that matches empty does not end the loop (`/(|a)+/` on `"aa"`
+ *   matches `""` here, `"aa"` natively).
  */
 
 import { TaskInvalidInputError } from "@workglow/task-graph";
@@ -70,8 +88,11 @@ const EXTRA_LINE_TERMINATORS = "\\r\\u2028\\u2029";
 
 const EXTRA_LINE_TERMINATOR_IN_INPUT = /[\r\u2028\u2029]/;
 
+/** Letters RE2 gives a meaning that JavaScript, without `u`, reads as the letter itself. */
+const RE2_ONLY_ESCAPES = "aAzQEpP";
+
 /** The pattern rewritten for the linear engine, and what matching it still has to check. */
-export interface LinearRegexSource {
+export interface ILinearRegexSource {
   /** JavaScript regex syntax, still to go through {@link ILinearRegexEngine.translateRegExp}. */
   readonly source: string;
   /** True when a multiline `$` cannot be matched faithfully over an input holding `\r`. */
@@ -87,19 +108,30 @@ function refuse(regex: RegExp, feature: string): never {
   );
 }
 
+function isAsciiLetter(ch: string | undefined): boolean {
+  return ch !== undefined && ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z"));
+}
+
 /**
  * Rewrites `regex`'s source to JavaScript's meaning under RE2 syntax, refusing
  * what a linear engine cannot express. Exported for its tests.
  */
-export function toLinearRegexSource(regex: RegExp): LinearRegexSource {
+export function toLinearRegexSource(regex: RegExp): ILinearRegexSource {
   if (regex.sticky) refuse(regex, "the sticky (y) flag");
   if (regex.unicodeSets) refuse(regex, "the v flag");
 
   const src = regex.source;
+  const legacy = !regex.unicode;
   let out = "";
   let inClass = false;
   let multilineDollar = false;
   let usesLookbehind = false;
+  // JavaScript reads `[\s-z]` and `[a-\s]` as a union, never a range. Spelled out as code
+  // points, `\s` / `\S` end in a single character that would turn that `-` into a range
+  // operator, so a `-` beside one is escaped: `rawDashEnd` is where a raw class `-` ends in
+  // `out`, `literalDashAt` the source index of the `-` right after a spelled-out escape.
+  let rawDashEnd = -1;
+  let literalDashAt = -1;
 
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
@@ -109,10 +141,26 @@ export function toLinearRegexSource(regex: RegExp): LinearRegexSource {
       i++;
       if (next === "k") refuse(regex, "a named backreference (\\k)");
       if (next >= "1" && next <= "9") refuse(regex, `a backreference or octal escape (\\${next})`);
-      if (inClass) {
-        if (next === "s") out += JS_WHITESPACE;
-        else if (next === "S") out += JS_NON_WHITESPACE;
-        else if (next === "b") out += "\\x08";
+      if (
+        legacy &&
+        (RE2_ONLY_ESCAPES.includes(next) || ((next === "x" || next === "u") && src[i + 1] === "{"))
+      ) {
+        // An identity escape: the letter itself, and a following `{n}` stays a quantifier.
+        out += next;
+      } else if (legacy && next === "c" && !isAsciiLetter(src[i + 1])) {
+        const after = src[i + 1];
+        if (inClass && after !== undefined && ((after >= "0" && after <= "9") || after === "_")) {
+          out += "\\x" + (after.charCodeAt(0) % 32).toString(16).padStart(2, "0");
+          i++;
+        } else {
+          out += "\\\\c";
+        }
+      } else if (inClass) {
+        if (next === "s" || next === "S") {
+          if (rawDashEnd === out.length) out = out.slice(0, -1) + "\\-";
+          out += next === "s" ? JS_WHITESPACE : JS_NON_WHITESPACE;
+          literalDashAt = i + 1;
+        } else if (next === "b") out += "\\x08";
         else out += "\\" + next;
       } else if (next === "s") {
         out += `[${JS_WHITESPACE}]`;
@@ -125,8 +173,18 @@ export function toLinearRegexSource(regex: RegExp): LinearRegexSource {
     }
 
     if (inClass) {
-      if (ch === "]") inClass = false;
-      out += ch;
+      if (ch === "]") {
+        inClass = false;
+        out += ch;
+      } else if (ch === "[") {
+        // A literal in a JavaScript class; RE2 would read `[:digit:]` as a POSIX class.
+        out += "\\[";
+      } else if (ch === "-" && i === literalDashAt) {
+        out += "\\-";
+      } else {
+        out += ch;
+        if (ch === "-") rawDashEnd = out.length;
+      }
       continue;
     }
 
@@ -170,12 +228,29 @@ export function toLinearRegexSource(regex: RegExp): LinearRegexSource {
   return { source: out, multilineDollar, usesLookbehind };
 }
 
+/** Compiled programs a factory keeps, by source and flags. */
+const COMPILED_CACHE_SIZE = 64;
+
+interface ICompiledLinearRegex {
+  readonly linear: ILinearRegexSource;
+  readonly pattern: ILinearRegexPattern;
+}
+
 /**
- * Builds a runner factory over `engine`. Each regex is compiled once, when the
- * factory is called with it; a pattern the engine cannot compile is refused.
+ * Builds a runner factory over `engine`. A regex is compiled the first time the
+ * factory sees its source and flags, and the most recent programs are kept:
+ * `RegexTask` asks for a runner on every run, so a Map fan-out over one
+ * pattern would otherwise recompile it per item. A pattern the engine cannot
+ * compile is refused.
  */
 export function createLinearRegexRunnerFactory(engine: ILinearRegexEngine): RegexRunnerFactory {
-  return (regex): RegexRunner => {
+  const compiled = new Map<string, ICompiledLinearRegex>();
+
+  const compile = (regex: RegExp): ICompiledLinearRegex => {
+    const key = `${regex.flags}/${regex.source}`;
+    const hit = compiled.get(key);
+    if (hit !== undefined) return hit;
+
     const linear = toLinearRegexSource(regex);
     let flags = 0;
     if (regex.ignoreCase) flags |= engine.CASE_INSENSITIVE;
@@ -190,6 +265,18 @@ export function createLinearRegexRunnerFactory(engine: ILinearRegexEngine): Rege
       const reason = err instanceof Error ? err.message : String(err);
       refuse(regex, `syntax a linear-time engine does not support (${reason})`);
     }
+
+    if (compiled.size >= COMPILED_CACHE_SIZE) {
+      const oldest = compiled.keys().next();
+      if (oldest.done !== true) compiled.delete(oldest.value);
+    }
+    const entry: ICompiledLinearRegex = { linear, pattern };
+    compiled.set(key, entry);
+    return entry;
+  };
+
+  return (regex): RegexRunner => {
+    const { linear, pattern } = compile(regex);
 
     const scan = (value: string): ILinearRegexMatcher => {
       if (linear.multilineDollar && EXTRA_LINE_TERMINATOR_IN_INPUT.test(value)) {
