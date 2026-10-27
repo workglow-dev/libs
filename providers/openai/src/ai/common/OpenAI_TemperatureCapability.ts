@@ -4,10 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { ModelProfileSource } from "@workglow/ai/worker";
 import { resolveOpenAiProfile } from "./OpenAI_ModelProfiles";
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
 
-export type OpenAiCapabilitySource = "override" | "table" | "default";
+export type OpenAiCapabilitySource = "override" | ModelProfileSource;
 
 export interface OpenAiTemperatureResolution {
   readonly value: boolean;
@@ -33,5 +34,5 @@ export function resolveOpenAiTemperatureWithReasoning(
   )?.accepts_temperature_with_reasoning;
   if (typeof override === "boolean") return { value: override, source: "override" };
   const { profile, source } = resolveOpenAiProfile(model?.provider_config?.model_name);
-  return { value: profile?.acceptsTemperatureWithReasoning ?? false, source };
+  return { value: profile.kind === "chat" && profile.acceptsTemperatureWithReasoning, source };
 }

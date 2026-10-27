@@ -6,34 +6,24 @@
 
 import {
   EFFORT_POLICY_NONE,
-  makeEffortPolicy,
+  makeProfileEffortPolicy,
   MODEL_EFFORTS,
   type ModelEffortPolicy,
   type ModelEffortPolicyFn,
 } from "@workglow/ai/worker";
-import { normalizeAnthropicModelId, parseAnthropicModelId } from "./Anthropic_ModelId";
+import { resolveAnthropicProfile } from "./Anthropic_ModelProfiles";
 
 const CLAUDE = { supported: MODEL_EFFORTS, default: "none" } as const satisfies ModelEffortPolicy;
 
-/** Extended thinking arrived in Claude 3.7; older generations 400 on any thinking field. */
-function isPreThinkingClaude(id: string): boolean {
-  const parsed = parseAnthropicModelId(normalizeAnthropicModelId(id));
-  if (parsed === undefined) return false;
-  if (parsed.major !== 3) return parsed.major < 3;
-  return (parsed.minor ?? 0) < 7;
-}
-
 /**
- * Anthropic serves one family, and every generation from 3.7 up takes the
- * coarse dial on one path or the other, so only the generations that predate
- * thinking are denied. An id this package cannot parse is far likelier to be a
- * spelling it has not seen than a model without thinking, so it keeps the dial:
- * {@link anthropicSupportsAdaptiveThinking} already routes an unparsed id to the
- * legacy `thinking.type = "enabled"` budget, which is the safe landing. Denying
- * whatever the parser declined made that fallback unreachable from
- * `model.effort` — the setting was dropped before anything could use it.
+ * Every generation from 3.7 up takes the coarse dial on one path or the other,
+ * so only a profile whose thinking is `none` — the generations that predate
+ * thinking, which 400 on any thinking field — is denied. An id the profile
+ * table cannot read keeps the dial: it is far likelier a spelling not yet seen
+ * than a model without thinking, and its profile routes it to the
+ * `thinking.type = "enabled"` budget, which is the safe landing.
  */
-export const anthropicEffortPolicy: ModelEffortPolicyFn = makeEffortPolicy({
-  rules: [{ when: isPreThinkingClaude, policy: EFFORT_POLICY_NONE }],
-  fallback: CLAUDE,
-});
+export const anthropicEffortPolicy: ModelEffortPolicyFn = makeProfileEffortPolicy(
+  resolveAnthropicProfile,
+  (profile) => (profile.thinking === "none" ? EFFORT_POLICY_NONE : CLAUDE)
+);

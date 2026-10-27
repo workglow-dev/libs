@@ -35,6 +35,7 @@ import {
   normalizeOpenAiModelId,
   OPENAI_MODEL_PROFILES,
   OPENAI_UNPRICED_PROFILE_IDS,
+  openAiProfileCapabilities,
   resolveOpenAiProfile,
 } from "./common/OpenAI_ModelProfiles";
 import { OpenAiQueuedProvider } from "./OpenAiQueuedProvider";
@@ -50,6 +51,7 @@ export const _testOnly = {
   OPENAI_UNPRICED_PROFILE_IDS,
   normalizeOpenAiModelId,
   resolveOpenAiProfile,
+  openAiProfileCapabilities,
   inferOpenAiCapabilities,
   finalizeResponsesRequest,
   getReasoningConfig,

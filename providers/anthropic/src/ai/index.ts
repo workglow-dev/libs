@@ -25,6 +25,7 @@ import { normalizeAnthropicModelId } from "./common/Anthropic_ModelId";
 import {
   ANTHROPIC_MODEL_PROFILES,
   ANTHROPIC_UNPRICED_PROFILE_IDS,
+  anthropicProfileCapabilities,
   resolveAnthropicProfile,
 } from "./common/Anthropic_ModelProfiles";
 import {
@@ -36,6 +37,8 @@ import { maybeEmitAnthropicRefusal } from "./common/Anthropic_Refusal";
 import {
   anthropicAcceptsForcedToolChoice,
   anthropicAcceptsSamplingParams,
+  anthropicDefaultThinkingParams,
+  anthropicMinimalThinkingParams,
   applyAnthropicSamplingParams,
   resolveAnthropicForcedToolChoice,
 } from "./common/Anthropic_RequestParams";
@@ -58,6 +61,7 @@ export const _testOnly = {
   ANTHROPIC_UNPRICED_PROFILE_IDS,
   normalizeAnthropicModelId,
   resolveAnthropicProfile,
+  anthropicProfileCapabilities,
   inferAnthropicCapabilities,
   anthropicAcceptsForcedToolChoice,
   anthropicSupportsOutputFormat,
@@ -65,6 +69,8 @@ export const _testOnly = {
   resolveAnthropicForcedToolChoice,
   toAnthropicOutputSchema,
   anthropicAcceptsSamplingParams,
+  anthropicDefaultThinkingParams,
+  anthropicMinimalThinkingParams,
   applyAnthropicSamplingParams,
   anthropicSupportsAdaptiveThinking,
   applyAnthropicThinkingParams,

@@ -43,8 +43,8 @@ export function inferOpenAiCapabilities(model: CapabilityHints): readonly Capabi
       ""
   );
 
-  const { profile } = resolveOpenAiProfile(id);
-  if (profile !== undefined) return openAiProfileCapabilities(profile);
+  const { profile, recognized } = resolveOpenAiProfile(id);
+  if (recognized) return openAiProfileCapabilities(profile);
 
   // Unknown model — fall back to whatever the record declared, or just
   // expose the meta-ops so the model can still be searched / inspected.

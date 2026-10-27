@@ -4,22 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { ModelProfileSource } from "@workglow/ai/worker";
 import { getLogger } from "@workglow/util/worker";
-import { normalizeAnthropicModelId, parseAnthropicModelId } from "./Anthropic_ModelId";
 import { resolveAnthropicProfile } from "./Anthropic_ModelProfiles";
 import type { AnthropicModelConfig } from "./Anthropic_ModelSchema";
-
-/**
- * Highest Claude generation that still accepts `temperature` / `top_p`.
- * Newer generations reject them with HTTP 400, which maps to a
- * non-retryable `PermanentJobError`.
- */
-export const ANTHROPIC_LAST_SAMPLING_MAJOR = 4;
-/** Highest minor within {@link ANTHROPIC_LAST_SAMPLING_MAJOR} that accepts them. */
-export const ANTHROPIC_LAST_SAMPLING_MINOR = 6;
-
-/** Families that never accepted sampling parameters, whatever their version. */
-const REJECTED_FAMILY = /^claude-(?:fable|mythos)(?:$|[-.])/;
 
 interface AnthropicSamplingProviderConfig {
   readonly model_name?: string;
@@ -28,12 +16,10 @@ interface AnthropicSamplingProviderConfig {
 
 /**
  * Whether the configured model accepts `temperature` / `top_p`.
- *
- * This is an allow-list of generations known to accept them, not a deny-list
- * of the ones that reject them: an id that does not match a known-accepting
- * shape is treated as rejecting. A wrong `false` changes sampling behavior; a
- * wrong `true` is an unrecoverable 400, so an unrecognized id defaults to
- * omitting. `provider_config.sampling_params` overrides the decision either way.
+ * `provider_config.sampling_params` overrides the decision either way;
+ * otherwise the model's row in `ANTHROPIC_MODEL_PROFILES` answers, in any
+ * spelling a gateway uses for it. An id the table cannot place answers `false`:
+ * a wrong `false` changes sampling behavior, a wrong `true` is an unrecoverable 400.
  */
 export function anthropicAcceptsSamplingParams(model: AnthropicModelConfig | undefined): boolean {
   const config = model?.provider_config as AnthropicSamplingProviderConfig | undefined;
@@ -42,22 +28,7 @@ export function anthropicAcceptsSamplingParams(model: AnthropicModelConfig | und
   if (override === "send") return true;
   if (override === "omit") return false;
 
-  const id = (config?.model_name ?? "").trim().toLowerCase();
-  if (REJECTED_FAMILY.test(id)) return false;
-
-  const parsed = parseAnthropicModelId(id);
-  if (parsed === undefined) return false;
-  if (parsed.major > ANTHROPIC_LAST_SAMPLING_MAJOR) return false;
-  // A missing minor means generation `.0` (e.g. `claude-sonnet-4-20250514`),
-  // which predates the cutoff — deliberately permissive.
-  if (
-    parsed.major === ANTHROPIC_LAST_SAMPLING_MAJOR &&
-    parsed.minor !== undefined &&
-    parsed.minor > ANTHROPIC_LAST_SAMPLING_MINOR
-  ) {
-    return false;
-  }
-  return true;
+  return resolveAnthropicProfile(modelNameOf(model)).profile.acceptsSamplingParams;
 }
 
 interface AnthropicSamplingInput {
@@ -136,13 +107,8 @@ export function modelNameOf(model: AnthropicModelConfig | undefined): string {
   return (model?.provider_config as { model_name?: string } | undefined)?.model_name ?? "";
 }
 
-/** The configured model's id, parsed, with any cloud-gateway spelling reduced to the canonical one. */
-export function parsedModelName(model: AnthropicModelConfig | undefined) {
-  return parseAnthropicModelId(normalizeAnthropicModelId(modelNameOf(model)));
-}
-
 /** Where a capability decision came from. `"default"` means no table entry covered the id. */
-export type AnthropicCapabilitySource = "override" | "table" | "default";
+export type AnthropicCapabilitySource = "override" | ModelProfileSource;
 
 export interface AnthropicCapabilityResolution {
   readonly value: boolean;
@@ -183,12 +149,12 @@ export function anthropicAcceptsForcedToolChoice(model: AnthropicModelConfig | u
 }
 
 /**
- * Request fields that come closest to "no thinking" on a Claude 5+ model, where
- * omitting `thinking` still runs adaptive thinking at the model's default
- * effort. Sonnet 5.5 has a real off switch (`between_tools`); every other
- * generation-5 model is held to `low` effort, which Anthropic recommends over
- * `{type: "disabled"}` even where that is still accepted. Returns `undefined`
- * for models where omitting thinking already means none.
+ * Request fields that come closest to "no thinking" on a model that runs
+ * adaptive thinking at its default effort whenever `thinking` is omitted (the
+ * profile's `minimalThinking`). Sonnet 5.5 has a real off switch
+ * (`between_tools`); the others are held to `low` effort, which Anthropic
+ * recommends over `{type: "disabled"}` even where that is still accepted.
+ * Returns `undefined` for models where omitting thinking already means none.
  */
 export function anthropicMinimalThinkingParams(
   model: AnthropicModelConfig | undefined
@@ -196,25 +162,26 @@ export function anthropicMinimalThinkingParams(
   | { readonly thinking: { readonly type: "between_tools" } }
   | { readonly output_config: { readonly effort: "low" } }
   | undefined {
-  const parsed = parsedModelName(model);
-  if (parsed === undefined || parsed.major < 5) return undefined;
-  if (parsed.family === "sonnet" && parsed.major === 5 && (parsed.minor ?? 0) >= 5) {
-    return { thinking: { type: "between_tools" } };
+  switch (resolveAnthropicProfile(modelNameOf(model)).profile.minimalThinking) {
+    case "between_tools":
+      return { thinking: { type: "between_tools" } };
+    case "low_effort":
+      return { output_config: { effort: "low" } };
+    case "omit":
+      return undefined;
   }
-  return { output_config: { effort: "low" } };
 }
 
 /**
- * Request fields for a Claude 5+ model when no effort or thinking is
- * configured: adaptive thinking at the model's own default effort. The API
- * already runs adaptive when `thinking` is omitted on these models; sending it
- * says so on the wire instead of depending on that default. Returns
- * `undefined` for earlier generations, where omitting thinking means none.
+ * Request fields when no effort or thinking is configured, for a model that
+ * thinks when `thinking` is omitted: adaptive thinking at the model's own
+ * default effort. The API already runs it; sending it says so on the wire
+ * instead of depending on that default. Returns `undefined` for a model where
+ * omitting thinking means none.
  */
 export function anthropicDefaultThinkingParams(
   model: AnthropicModelConfig | undefined
 ): { readonly thinking: { readonly type: "adaptive" } } | undefined {
-  const parsed = parsedModelName(model);
-  if (parsed === undefined || parsed.major < 5) return undefined;
-  return { thinking: { type: "adaptive" } };
+  const { minimalThinking } = resolveAnthropicProfile(modelNameOf(model)).profile;
+  return minimalThinking === "omit" ? undefined : { thinking: { type: "adaptive" } };
 }

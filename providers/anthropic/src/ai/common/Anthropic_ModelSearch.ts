@@ -11,10 +11,12 @@ import type {
   ModelSearchTaskOutput,
 } from "@workglow/ai";
 import { filterLabeledModelsByQuery } from "@workglow/ai/provider-utils";
+import type { Capability } from "@workglow/ai/worker";
 import { stampEffortOptions } from "@workglow/ai/worker";
 import { getClient } from "./Anthropic_Client";
 import { ANTHROPIC } from "./Anthropic_Constants";
 import { anthropicEffortPolicy } from "./Anthropic_EffortPolicy";
+import { anthropicProfileCapabilities, resolveAnthropicProfile } from "./Anthropic_ModelProfiles";
 
 interface AnthropicModelListItem {
   readonly label: string;
@@ -55,6 +57,12 @@ async function listAnthropicModels(credentialKey: string): Promise<AnthropicMode
   return models;
 }
 
+/** What the profile table says a listed model serves; nothing for an id it does not recognize. */
+function listedCapabilities(modelName: string): readonly Capability[] {
+  const { profile, recognized } = resolveAnthropicProfile(modelName);
+  return recognized ? anthropicProfileCapabilities(profile) : [];
+}
+
 function mapModelList(models: AnthropicModelListItem[]): ModelSearchResultItem[] {
   return models.map((m) => ({
     id: m.value,
@@ -66,7 +74,7 @@ function mapModelList(models: AnthropicModelListItem[]): ModelSearchResultItem[]
         provider: ANTHROPIC,
         title: m.value,
         description: "",
-        capabilities: [],
+        capabilities: [...listedCapabilities(m.value)],
         provider_config: { model_name: m.value },
         metadata: {},
       },

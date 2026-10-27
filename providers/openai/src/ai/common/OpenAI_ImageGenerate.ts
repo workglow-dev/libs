@@ -19,6 +19,7 @@ import {
   modelIdForError,
 } from "@workglow/ai/provider-utils";
 import { getClient, getModelName } from "./OpenAI_Client";
+import { resolveOpenAiProfile } from "./OpenAI_ModelProfiles";
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
 
 /** Maps the normalized aspect ratio to gpt-image-2 / DALL-E supported sizes. */
@@ -59,7 +60,8 @@ export const OpenAI_ImageGenerate_Stream: AiProviderRunFn<
   const size = aspectRatioToSize(input.aspectRatio);
 
   // DALL-E 2 and DALL-E 3 do not support streaming — fall back to non-streaming.
-  if (modelName.startsWith("dall-e")) {
+  const { profile } = resolveOpenAiProfile(modelName);
+  if (profile.kind !== "image" || !profile.streamsPartialImages) {
     try {
       const resp = await (
         client.images.generate as unknown as (

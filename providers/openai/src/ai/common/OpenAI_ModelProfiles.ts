@@ -4,19 +4,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Capability } from "@workglow/ai/worker";
-
-export type OpenAiModelKind = "chat" | "embedding" | "image-generation" | "image-editing";
+import type { Capability, ModelProfileFamily, ResolvedModelProfile } from "@workglow/ai/worker";
+import { makeModelProfileResolver } from "@workglow/ai/worker";
 
 /**
- * What differs per OpenAI model. Request building, capability inference and
- * model search all read this one shape, so a model cannot be an image model to
- * the list and a chat model to the request.
+ * Whether a chat model takes the Responses `reasoning` field:
+ * - `none` — it does not, and answers one with a 400.
+ * - `optional` — every effort, `none` included.
+ * - `always` — it always reasons, and answers `effort: "none"` with a 400.
  */
-export interface OpenAiModelProfile {
-  readonly kind: OpenAiModelKind;
-  /** Chat models only: takes image input. */
+export type OpenAiReasoning = "none" | "optional" | "always";
+
+export interface OpenAiChatProfile {
+  readonly kind: "chat";
+  /** Takes image input. */
   readonly vision: boolean;
+  readonly reasoning: OpenAiReasoning;
   /**
    * A pinned `temperature` is accepted when reasoning is switched to `none`.
    * Reasoning at any other effort rejects a temperature on every model, so this
@@ -26,65 +29,119 @@ export interface OpenAiModelProfile {
   readonly acceptsTemperatureWithReasoning: boolean;
 }
 
-const chat = (acceptsTemperatureWithReasoning = false): OpenAiModelProfile => ({
+export interface OpenAiEmbeddingProfile {
+  readonly kind: "embedding";
+}
+
+export interface OpenAiImageProfile {
+  readonly kind: "image";
+  /** Which edits the model takes: none, one input image, or several. */
+  readonly editing: "none" | "single" | "multi";
+  /** Streams partial frames (`stream: true`); otherwise one non-streaming call. */
+  readonly streamsPartialImages: boolean;
+}
+
+/**
+ * What differs per OpenAI model. Request building, capability inference, the
+ * effort policy, image validation and model search all read this one shape, so
+ * a model cannot be an image model to the list and a chat model to the request.
+ */
+export type OpenAiModelProfile = OpenAiChatProfile | OpenAiEmbeddingProfile | OpenAiImageProfile;
+
+const chat = (
+  reasoning: OpenAiReasoning,
+  overrides: Partial<Omit<OpenAiChatProfile, "kind" | "reasoning">> = {}
+): OpenAiChatProfile => ({
   kind: "chat",
   vision: true,
-  acceptsTemperatureWithReasoning,
+  reasoning,
+  acceptsTemperatureWithReasoning: false,
+  ...overrides,
 });
-const CHAT = chat();
-const CHAT_TEMPERATURE_WITH_REASONING_NONE = chat(true);
-const EMBEDDING: OpenAiModelProfile = {
-  kind: "embedding",
-  vision: false,
-  acceptsTemperatureWithReasoning: false,
-};
-const IMAGE_EDITING: OpenAiModelProfile = {
-  kind: "image-editing",
-  vision: false,
-  acceptsTemperatureWithReasoning: false,
+
+/** The gpt-6 family always reasons. */
+const ALWAYS_REASONING = chat("always");
+const REASONING = chat("optional");
+/** The GPT-5.6 family keeps a pinned temperature when reasoning is turned off. */
+const REASONING_WITH_TEMPERATURE = chat("optional", { acceptsTemperatureWithReasoning: true });
+const NO_REASONING = chat("none");
+const EMBEDDING: OpenAiEmbeddingProfile = { kind: "embedding" };
+const GPT_IMAGE: OpenAiImageProfile = {
+  kind: "image",
+  editing: "multi",
+  streamsPartialImages: true,
 };
 
 /**
  * One row per canonical id (see {@link normalizeOpenAiModelId}): adding a model
  * is a row here plus its price in `OPENAI_PRICING`, and the contract test fails
- * until both exist.
+ * until both exist. An id with no row is answered by {@link OPENAI_MODEL_FAMILIES}.
  */
 export const OPENAI_MODEL_PROFILES: Readonly<Record<string, OpenAiModelProfile>> = {
-  "gpt-6-astra": CHAT,
-  "gpt-6.1-sol": CHAT,
-  "gpt-6-sol": CHAT,
-  "gpt-6-luna": CHAT,
-  "gpt-5.6": CHAT_TEMPERATURE_WITH_REASONING_NONE,
-  "gpt-5.6-sol": CHAT_TEMPERATURE_WITH_REASONING_NONE,
-  "gpt-5.6-terra": CHAT_TEMPERATURE_WITH_REASONING_NONE,
-  "gpt-5.6-luna": CHAT_TEMPERATURE_WITH_REASONING_NONE,
-  "gpt-5.5": CHAT,
-  "gpt-5.4-mini": CHAT,
-  "gpt-5.4-nano": CHAT,
-  "gpt-5.4": CHAT,
-  "gpt-5.2-mini": CHAT,
-  "gpt-5.2": CHAT,
-  "gpt-5-mini": CHAT,
-  "gpt-5-nano": CHAT,
-  "gpt-5": CHAT,
-  "gpt-4.5": CHAT,
-  "gpt-4.1": CHAT,
-  "gpt-4.1-mini": CHAT,
-  "gpt-4o": CHAT,
-  "gpt-4o-mini": CHAT,
-  "o3-mini": CHAT,
-  o3: CHAT,
-  o1: CHAT,
-  "o1-mini": CHAT,
+  "gpt-6-astra": ALWAYS_REASONING,
+  "gpt-6.1-sol": ALWAYS_REASONING,
+  "gpt-6-sol": ALWAYS_REASONING,
+  "gpt-6-luna": ALWAYS_REASONING,
+  "gpt-5.6": REASONING_WITH_TEMPERATURE,
+  "gpt-5.6-sol": REASONING_WITH_TEMPERATURE,
+  "gpt-5.6-terra": REASONING_WITH_TEMPERATURE,
+  "gpt-5.6-luna": REASONING_WITH_TEMPERATURE,
+  "gpt-5.5": REASONING,
+  "gpt-5.4-mini": REASONING,
+  "gpt-5.4-nano": REASONING,
+  "gpt-5.4": REASONING,
+  "gpt-5.2-mini": REASONING,
+  "gpt-5.2": REASONING,
+  "gpt-5-mini": REASONING,
+  "gpt-5-nano": REASONING,
+  "gpt-5": REASONING,
+  "gpt-4.5": NO_REASONING,
+  "gpt-4.1": NO_REASONING,
+  "gpt-4.1-mini": NO_REASONING,
+  "gpt-4o": NO_REASONING,
+  "gpt-4o-mini": NO_REASONING,
+  // The small o-series models take text only.
+  "o3-mini": chat("optional", { vision: false }),
+  o3: REASONING,
+  o1: REASONING,
+  "o1-mini": chat("optional", { vision: false }),
   "text-embedding-3-small": EMBEDDING,
   "text-embedding-3-large": EMBEDDING,
-  "gpt-image-2.5-sunburst": IMAGE_EDITING,
-  "gpt-image-2.5-flare": IMAGE_EDITING,
-  "gpt-image-2": IMAGE_EDITING,
+  "gpt-image-2.5-sunburst": GPT_IMAGE,
+  "gpt-image-2.5-flare": GPT_IMAGE,
+  "gpt-image-2": GPT_IMAGE,
 };
 
 /** Rows for models `OPENAI_PRICING` has no card for; the contract test allows exactly these. */
 export const OPENAI_UNPRICED_PROFILE_IDS: ReadonlySet<string> = new Set(["gpt-5.6"]);
+
+/**
+ * The answer for an id with no row, read from its family prefix and nothing
+ * beyond it. A temperature is never assumed to survive disabled reasoning, since
+ * a wrong `true` is a 400 where a wrong `false` only drops the temperature with
+ * a warning; and a chat family not named here takes no `reasoning` field, since
+ * the chat models that reject it — `gpt-4o`, `gpt-4.1` — are most of what is left.
+ */
+export const OPENAI_MODEL_FAMILIES: readonly ModelProfileFamily<OpenAiModelProfile>[] = [
+  { when: /^text-embedding/, profile: EMBEDDING },
+  // DALL-E streams nothing; DALL-E 2 edits one image, DALL-E 3 none.
+  {
+    when: /^dall-e-2/,
+    profile: { kind: "image", editing: "single", streamsPartialImages: false },
+  },
+  { when: /^dall-e/, profile: { kind: "image", editing: "none", streamsPartialImages: false } },
+  { when: /^gpt-image/, profile: GPT_IMAGE },
+  { when: /^gpt-6/, profile: ALWAYS_REASONING },
+  { when: [/^gpt-5/, /^o[134]/], profile: REASONING },
+  {
+    when: [/^o\d/, /^gpt-4o/, /^gpt-4\.\d/, /^gpt-4-vision/, /^gpt-4-turbo/],
+    profile: NO_REASONING,
+  },
+  { when: /^gpt-/, profile: chat("none", { vision: false }) },
+];
+
+/** An id no row or family names: a text-only chat model with no reasoning, not recognized. */
+const UNKNOWN: OpenAiModelProfile = chat("none", { vision: false });
 
 /**
  * The canonical id for any spelling of an OpenAI model: the gateway's `openai/`
@@ -98,50 +155,28 @@ export function normalizeOpenAiModelId(id: string): string {
     .replace(/-\d{4}-\d{2}-\d{2}$/, "");
 }
 
-export type OpenAiProfileSource = "table" | "default";
+export type OpenAiResolvedProfile = ResolvedModelProfile<OpenAiModelProfile>;
 
-export interface OpenAiResolvedProfile {
-  /** `undefined` when the id is not recognizable as any OpenAI model family. */
-  readonly profile: OpenAiModelProfile | undefined;
-  readonly source: OpenAiProfileSource;
-}
-
-/**
- * The one answer for an id with no row, and the only place that guesses: the
- * family is read from the id's prefix, and nothing is assumed beyond it. A
- * temperature is never assumed to survive disabled reasoning, since a wrong
- * `true` is a 400 where a wrong `false` only drops the temperature with a warning.
- */
-function defaultOpenAiProfile(id: string): OpenAiModelProfile | undefined {
-  const base = { vision: false, acceptsTemperatureWithReasoning: false };
-  if (id.startsWith("text-embedding")) return { ...base, kind: "embedding" };
-  if (id.startsWith("dall-e")) return { ...base, kind: "image-generation" };
-  if (id.startsWith("gpt-image")) return { ...base, kind: "image-editing" };
-  if (/^gpt-/.test(id) || /^o\d/.test(id)) {
-    const vision =
-      /gpt-4o|gpt-4\.\d|gpt-5|gpt-6|gpt-4-vision|gpt-4-turbo/.test(id) || /^o\d/.test(id);
-    return { ...base, kind: "chat", vision };
-  }
-  return undefined;
-}
-
-export function resolveOpenAiProfile(modelName: string | undefined): OpenAiResolvedProfile {
-  const id = normalizeOpenAiModelId(modelName ?? "");
-  if (Object.hasOwn(OPENAI_MODEL_PROFILES, id)) {
-    return { profile: OPENAI_MODEL_PROFILES[id], source: "table" };
-  }
-  return { profile: defaultOpenAiProfile(id), source: "default" };
-}
+export const resolveOpenAiProfile: (modelName: string | undefined) => OpenAiResolvedProfile =
+  makeModelProfileResolver<OpenAiModelProfile>({
+    models: OPENAI_MODEL_PROFILES,
+    families: OPENAI_MODEL_FAMILIES,
+    normalize: normalizeOpenAiModelId,
+    fallback: UNKNOWN,
+  });
 
 /** The task capabilities a profile serves. */
 export function openAiProfileCapabilities(profile: OpenAiModelProfile): readonly Capability[] {
   switch (profile.kind) {
     case "embedding":
       return ["text.embedding", "model.count-tokens", "model.info", "model.search"];
-    case "image-generation":
-      return ["image.generation", "model.info", "model.search"];
-    case "image-editing":
-      return ["image.generation", "image.editing", "model.info", "model.search"];
+    case "image":
+      return [
+        "image.generation",
+        ...(profile.editing === "none" ? [] : (["image.editing"] as const)),
+        "model.info",
+        "model.search",
+      ];
     case "chat":
       return [
         "text.generation",

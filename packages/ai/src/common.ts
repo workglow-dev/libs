@@ -15,6 +15,7 @@ export * from "./model/ModelRegistry";
 export * from "./model/ModelRepository";
 export * from "./model/ModelSchema";
 export * from "./model/ModelPricing";
+export * from "./model/ModelProfile";
 
 export * from "./errors/ImageGenerationErrors";
 

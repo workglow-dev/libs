@@ -49,6 +49,12 @@ const OPENAI_FALLBACK: Array<{ label: string; value: string }> = [
   { label: "o1-mini", value: "o1-mini" },
 ];
 
+/** Chat models sort first: they are what a model picker is usually opened for. */
+function isChatModel(modelName: string): boolean {
+  const { profile, recognized } = resolveOpenAiProfile(modelName);
+  return recognized && profile.kind === "chat";
+}
+
 async function listOpenAiModels(credentialKey: string): Promise<OpenAiModelListItem[]> {
   const client = await getClient({
     provider: OPENAI,
@@ -59,9 +65,9 @@ async function listOpenAiModels(credentialKey: string): Promise<OpenAiModelListI
     models.push({ label: m.id, value: m.id, description: m.owned_by });
   }
   models.sort((a, b) => {
-    const aGpt = a.value.startsWith("gpt") || a.value.startsWith("o1") ? 0 : 1;
-    const bGpt = b.value.startsWith("gpt") || b.value.startsWith("o1") ? 0 : 1;
-    if (aGpt !== bGpt) return aGpt - bGpt;
+    const aChat = isChatModel(a.value) ? 0 : 1;
+    const bChat = isChatModel(b.value) ? 0 : 1;
+    if (aChat !== bChat) return aChat - bChat;
     return a.value.localeCompare(b.value);
   });
   return models;
@@ -69,9 +75,9 @@ async function listOpenAiModels(credentialKey: string): Promise<OpenAiModelListI
 
 function mapModelList(models: OpenAiModelListItem[]): ModelSearchResultItem[] {
   return models.map((m) => {
-    const { profile } = resolveOpenAiProfile(m.value);
+    const { profile, recognized } = resolveOpenAiProfile(m.value);
     const imageCapabilities =
-      profile?.kind === "image-generation" || profile?.kind === "image-editing"
+      recognized && profile.kind === "image"
         ? openAiProfileCapabilities(profile).filter((c) => c.startsWith("image."))
         : [];
     return {

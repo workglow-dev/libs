@@ -87,6 +87,8 @@ export function parseAnthropicModelId(id: string): ParsedAnthropicModelId | unde
  * - vendor prefixes, OpenRouter's `anthropic/` and Bedrock's `[us.]anthropic.`
  * - Bedrock's `-v1:0` revision and Vertex's `@20250929` / `@latest` suffix
  * - a trailing release date (`-20250929`), which names a snapshot of the same model
+ * - a bracketed context-window tag (`claude-opus-4-8[1m]`), which selects a
+ *   window of the same model rather than naming another one
  * - OpenRouter's dotted versions (`claude-opus-4.5`, `claude-3.5-sonnet`)
  *
  * The bare legacy shape `claude-2.1` keeps its dot, since that is its canonical spelling.
@@ -95,6 +97,7 @@ export function normalizeAnthropicModelId(id: string): string {
   let out = id
     .trim()
     .toLowerCase()
+    .replace(/\[[^\]]*\]$/, "")
     .replace(/^anthropic\//, "")
     .replace(ANTHROPIC_GATEWAY_PREFIX, "")
     .replace(/@(?:\d{8}|latest)$/, "")
