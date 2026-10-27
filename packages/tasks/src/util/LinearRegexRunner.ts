@@ -17,8 +17,9 @@
  * (`/a[^z]*z|a/g` over a run of `a`) makes every `find` linear, so `execAll` is
  * quadratic in the worst case, as the native engine is. A host has no clock to
  * bound it with either: workerd's timers do not advance during synchronous work,
- * so the input is capped instead, at {@link LINEAR_REGEX_MAX_INPUT_LENGTH} UTF-16
- * code units; a longer one is refused rather than scanned.
+ * so the input is capped instead: {@link LINEAR_REGEX_MAX_GLOBAL_INPUT_LENGTH} UTF-16
+ * code units for a global scan, {@link LINEAR_REGEX_MAX_INPUT_LENGTH} for one match.
+ * A longer input is refused rather than scanned.
  *
  * The cost is syntax: a linear engine cannot express backreferences or
  * lookaround, so a pattern using them is refused with a
@@ -238,8 +239,15 @@ export function toLinearRegexSource(regex: RegExp): ILinearRegexSource {
   return { source: out, multilineDollar, usesLookbehind };
 }
 
-/** The longest input, in UTF-16 code units, a runner from this factory scans. */
+/** The longest input, in UTF-16 code units, a runner from this factory matches once. */
 export const LINEAR_REGEX_MAX_INPUT_LENGTH = 64 * 1024;
+
+/**
+ * The longest input a global scan reads. Lower than {@link LINEAR_REGEX_MAX_INPUT_LENGTH}
+ * because a scan can be quadratic: `/a[^z]*z|a/g` over 16 Ki `a`s takes about 8 s under
+ * Node, and four times that at twice the length.
+ */
+export const LINEAR_REGEX_MAX_GLOBAL_INPUT_LENGTH = 16 * 1024;
 
 /** Compiled programs a factory keeps, by source and flags. */
 const COMPILED_CACHE_SIZE = 64;
@@ -291,11 +299,12 @@ export function createLinearRegexRunnerFactory(engine: ILinearRegexEngine): Rege
   return (regex): RegexRunner => {
     const { linear, pattern } = compile(regex);
 
-    const scan = (value: string): ILinearRegexMatcher => {
-      if (value.length > LINEAR_REGEX_MAX_INPUT_LENGTH) {
+    const scan = (value: string, limit: number): ILinearRegexMatcher => {
+      if (value.length > limit) {
         throw new TaskInvalidInputError(
-          `Regex input is ${value.length} characters; this host matches at most ` +
-            `${LINEAR_REGEX_MAX_INPUT_LENGTH}. Split the input or match a shorter part of it.`
+          `Regex input is ${value.length} characters; this host ` +
+            `${limit === LINEAR_REGEX_MAX_INPUT_LENGTH ? "matches" : "scans globally"} at most ` +
+            `${limit}. Split the input or match a shorter part of it.`
         );
       }
       if (linear.multilineDollar && EXTRA_LINE_TERMINATOR_IN_INPUT.test(value)) {
@@ -306,14 +315,17 @@ export function createLinearRegexRunnerFactory(engine: ILinearRegexEngine): Rege
 
     return {
       exec: (value) => {
-        const m = scan(value);
+        const m = scan(value, LINEAR_REGEX_MAX_INPUT_LENGTH);
         if (!m.find()) return undefined;
         const groups: (string | undefined)[] = [];
         for (let g = 0; g <= m.groupCount(); g++) groups.push(m.group(g) ?? undefined);
         return groups;
       },
       execAll: (value) => {
-        const m = scan(value);
+        const m = scan(
+          value,
+          regex.global ? LINEAR_REGEX_MAX_GLOBAL_INPUT_LENGTH : LINEAR_REGEX_MAX_INPUT_LENGTH
+        );
         const matches: string[] = [];
         while (m.find()) {
           const match = m.group(0) ?? "";

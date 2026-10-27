@@ -8,6 +8,7 @@ import { TaskInvalidInputError } from "@workglow/task-graph";
 import {
   createLinearRegexRunnerFactory,
   defaultRegexRunnerFactory,
+  LINEAR_REGEX_MAX_GLOBAL_INPUT_LENGTH,
   LINEAR_REGEX_MAX_INPUT_LENGTH,
   registerRegexRunnerFactory,
   RegexTask,
@@ -130,13 +131,22 @@ describe("createLinearRegexRunnerFactory", () => {
       });
     });
 
-    it("refuses an input longer than the cap, for one match and a global scan", () => {
+    it("refuses an input longer than one match's cap", () => {
       const atCap = "a".repeat(LINEAR_REGEX_MAX_INPUT_LENGTH);
       expect(linear(/b/).exec(atCap)).toBeUndefined();
-      expect(linear(/b/g).execAll(atCap)).toEqual([]);
+      expect(linear(/b/).execAll(atCap)).toEqual([]);
       const over = atCap + "b";
       expect(() => linear(/b/).exec(over)).toThrow(TaskInvalidInputError);
-      expect(() => linear(/b/g).execAll(over)).toThrow("at most 65536");
+      expect(() => linear(/b/).execAll(over)).toThrow("matches at most 65536");
+    });
+
+    it("refuses a global scan over an input longer than its lower cap", () => {
+      const atCap = "a".repeat(LINEAR_REGEX_MAX_GLOBAL_INPUT_LENGTH);
+      expect(linear(/a/g).execAll(atCap)).toHaveLength(LINEAR_REGEX_MAX_GLOBAL_INPUT_LENGTH);
+      const over = atCap + "b";
+      expect(() => linear(/b/g).execAll(over)).toThrow("scans globally at most 16384");
+      // One match over the same input is still served.
+      expect(linear(/b/g).exec(over)).toEqual(["b"]);
     });
 
     it("refuses a multiline $ only over an input with \\r line endings", () => {
