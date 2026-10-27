@@ -811,8 +811,6 @@ const IMAGE_PIPELINE_TYPES = new Set([
   "image-to-text",
   "image-feature-extraction",
   "zero-shot-image-classification",
-  "depth-estimation",
-  "mask-generation",
 ]);
 
 /**
