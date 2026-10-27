@@ -16,7 +16,9 @@
  * pattern whose preferred branch must read to the end before it fails
  * (`/a[^z]*z|a/g` over a run of `a`) makes every `find` linear, so `execAll` is
  * quadratic in the worst case, as the native engine is. A host has no clock to
- * bound it with either: workerd's timers do not advance during synchronous work.
+ * bound it with either: workerd's timers do not advance during synchronous work,
+ * so the input is capped instead, at {@link LINEAR_REGEX_MAX_INPUT_LENGTH} UTF-16
+ * code units; a longer one is refused rather than scanned.
  *
  * The cost is syntax: a linear engine cannot express backreferences or
  * lookaround, so a pattern using them is refused with a
@@ -228,6 +230,9 @@ export function toLinearRegexSource(regex: RegExp): ILinearRegexSource {
   return { source: out, multilineDollar, usesLookbehind };
 }
 
+/** The longest input, in UTF-16 code units, a runner from this factory scans. */
+export const LINEAR_REGEX_MAX_INPUT_LENGTH = 64 * 1024;
+
 /** Compiled programs a factory keeps, by source and flags. */
 const COMPILED_CACHE_SIZE = 64;
 
@@ -279,6 +284,12 @@ export function createLinearRegexRunnerFactory(engine: ILinearRegexEngine): Rege
     const { linear, pattern } = compile(regex);
 
     const scan = (value: string): ILinearRegexMatcher => {
+      if (value.length > LINEAR_REGEX_MAX_INPUT_LENGTH) {
+        throw new TaskInvalidInputError(
+          `Regex input is ${value.length} characters; this host matches at most ` +
+            `${LINEAR_REGEX_MAX_INPUT_LENGTH}. Split the input or match a shorter part of it.`
+        );
+      }
       if (linear.multilineDollar && EXTRA_LINE_TERMINATOR_IN_INPUT.test(value)) {
         refuse(regex, "a multiline $ over an input with \\r, \\u2028 or \\u2029 line endings");
       }

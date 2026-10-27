@@ -8,6 +8,7 @@ import { TaskInvalidInputError } from "@workglow/task-graph";
 import {
   createLinearRegexRunnerFactory,
   defaultRegexRunnerFactory,
+  LINEAR_REGEX_MAX_INPUT_LENGTH,
   registerRegexRunnerFactory,
   RegexTask,
   toLinearRegexSource,
@@ -123,6 +124,15 @@ describe("createLinearRegexRunnerFactory", () => {
         multilineDollar: false,
         usesLookbehind: false,
       });
+    });
+
+    it("refuses an input longer than the cap, for one match and a global scan", () => {
+      const atCap = "a".repeat(LINEAR_REGEX_MAX_INPUT_LENGTH);
+      expect(linear(/b/).exec(atCap)).toBeUndefined();
+      expect(linear(/b/g).execAll(atCap)).toEqual([]);
+      const over = atCap + "b";
+      expect(() => linear(/b/).exec(over)).toThrow(TaskInvalidInputError);
+      expect(() => linear(/b/g).execAll(over)).toThrow("at most 65536");
     });
 
     it("refuses a multiline $ only over an input with \\r line endings", () => {
