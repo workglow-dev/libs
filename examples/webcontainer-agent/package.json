@@ -29,7 +29,8 @@
     "@workglow/google-gemini": "workspace:*",
     "@workglow/openai": "workspace:*",
     "@workglow/task-graph": "workspace:*",
-    "@workglow/util": "workspace:*"
+    "@workglow/util": "workspace:*",
+    "@workglow/webcontainer": "workspace:*"
   },
   "devDependencies": {
     "vite": "^8.3.4"
@@ -37,11 +38,5 @@
   "publishConfig": {
     "access": "none"
   },
-  "exports": {
-    "./sandboxPort": "./src/core/sandboxPort.ts",
-    "./sandboxTools": "./src/core/sandboxTools.ts",
-    "./sandboxPrompt": "./src/core/sandboxPrompt.ts",
-    "./runSandboxAgent": "./src/core/runSandboxAgent.ts",
-    "./webContainerPort": "./src/core/webContainerPort.ts"
-  }
+  "exports": {}
 }

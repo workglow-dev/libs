@@ -6,9 +6,9 @@
 
 import type { ToolDefinition, ToolExecuteContext } from "@workglow/ai";
 import { describe, expect, it } from "vitest";
-import { resolveSandboxPath } from "../core/sandboxPort";
-import type { SandboxEntry, SandboxPort, SandboxProcess } from "../core/sandboxPort";
-import { createSandboxTools, listSandboxFiles } from "../core/sandboxTools";
+import { resolveSandboxPath } from "../sandboxPort";
+import type { SandboxEntry, SandboxPort, SandboxProcess } from "../sandboxPort";
+import { createSandboxTools, listSandboxFiles } from "../sandboxTools";
 
 interface FakeProgram {
   /** Chunks the program prints, then its exit code; `undefined` never exits. */

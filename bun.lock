@@ -187,6 +187,7 @@
         "@workglow/openai": "workspace:*",
         "@workglow/task-graph": "workspace:*",
         "@workglow/util": "workspace:*",
+        "@workglow/webcontainer": "workspace:*",
       },
       "devDependencies": {
         "vite": "^8.3.4",
@@ -506,6 +507,25 @@
         "@workglow/tasks": "workspace:*",
         "@workglow/util": "workspace:*",
       },
+    },
+    "packages/webcontainer": {
+      "name": "@workglow/webcontainer",
+      "version": "0.6.13",
+      "devDependencies": {
+        "@webcontainer/api": "^1.6.4",
+        "@workglow/ai": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+      },
+      "peerDependencies": {
+        "@webcontainer/api": "^1.6.4",
+        "@workglow/ai": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+      },
+      "optionalPeers": [
+        "@webcontainer/api",
+      ],
     },
     "packages/workglow": {
       "name": "workglow",
@@ -1889,6 +1909,8 @@
     "@workglow/web": ["@workglow/web@workspace:examples/web"],
 
     "@workglow/web-search": ["@workglow/web-search@workspace:packages/web-search"],
+
+    "@workglow/webcontainer": ["@workglow/webcontainer@workspace:packages/webcontainer"],
 
     "@workglow/webcontainer-agent": ["@workglow/webcontainer-agent@workspace:examples/webcontainer-agent"],
 

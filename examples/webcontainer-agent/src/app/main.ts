@@ -5,10 +5,13 @@
  */
 
 import type { ChatMessage } from "@workglow/ai";
-import { bootWebContainer } from "../core/webContainerPort";
-import { runSandboxAgent } from "../core/runSandboxAgent";
-import { createSandboxTools, listSandboxFiles } from "../core/sandboxTools";
-import type { SandboxPort } from "../core/sandboxPort";
+import { bootWebContainer } from "@workglow/webcontainer/container";
+import type { SandboxPort } from "@workglow/webcontainer/sandbox";
+import {
+  createSandboxTools,
+  listSandboxFiles,
+  runSandboxAgent,
+} from "@workglow/webcontainer/sandbox";
 import { buildModelConfig, PROVIDER_CHOICES } from "./models";
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
