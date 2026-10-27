@@ -19,6 +19,7 @@
     "packages/triggers": 14454,
     "packages/util": 42574,
     "packages/web-search": 38874,
+    "packages/webcontainer": 7940,
     "packages/workglow": 100,
     "providers/anthropic": 58417,
     "providers/aws": 3340,
