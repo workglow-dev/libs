@@ -5,7 +5,7 @@
  */
 
 import { asText } from "@workglow/util";
-import type { TextGenerationPipeline } from "@huggingface/transformers";
+import type { LogitsProcessorList, TextGenerationPipeline } from "@huggingface/transformers";
 import type { ResponseFormat } from "@huggingface/transformers-structured-output";
 import type {
   AiProviderRunFn,
@@ -511,7 +511,7 @@ export const HFT_ToolCalling: AiProviderRunFn<
       getModelTextCandidates(model!),
       promptParts.prompt
     );
-    let processor: unknown;
+    let processor: LogitsProcessorList | undefined;
     if (constrained) {
       try {
         const { StructuredOutputProcessor } =
