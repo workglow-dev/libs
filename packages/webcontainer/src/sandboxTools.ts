@@ -7,7 +7,7 @@
 import type { ToolDefinition } from "@workglow/ai";
 import { ToolCallError } from "@workglow/ai";
 import { stripAnsi } from "./ansi";
-import type { SandboxPort, SandboxProcess } from "./sandboxPort";
+import type { SandboxEntry, SandboxPort, SandboxProcess } from "./sandboxPort";
 import { resolveSandboxPath, SandboxPathError } from "./sandboxPort";
 
 /** Programs the model may start. No shell is among them, so `a && b` is not a thing it can say. */
@@ -64,6 +64,13 @@ const DEFAULTS = {
 const MAX_READ_CHARS = 40_000;
 const MAX_LISTED_ENTRIES = 400;
 const MAX_LISTED_DEPTH = 6;
+/**
+ * A directory with more children than this is not copied or sorted: the listing
+ * takes the first {@link MAX_LISTED_ENTRIES} as the port returned them and says
+ * it was cut short. Sorting is for a readable listing of a normal directory;
+ * doing it over a huge one spends time on entries that will never be shown.
+ */
+const MAX_SORTED_ENTRIES = 2_000;
 const SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set(["node_modules", ".git"]);
 
 export interface SandboxListing {
@@ -85,7 +92,14 @@ export async function listSandboxFiles(port: SandboxPort, root = "."): Promise<S
   const lines: string[] = [];
   let truncated = false;
   const walk = async (dir: string, depth: number): Promise<void> => {
-    const entries = [...(await port.readdir(dir))].sort((a, b) => a.name.localeCompare(b.name));
+    const children = await port.readdir(dir);
+    let entries: readonly SandboxEntry[];
+    if (children.length > MAX_SORTED_ENTRIES) {
+      truncated = true;
+      entries = children.slice(0, MAX_LISTED_ENTRIES);
+    } else {
+      entries = [...children].sort((a, b) => a.name.localeCompare(b.name));
+    }
     for (const entry of entries) {
       if (lines.length >= MAX_LISTED_ENTRIES) {
         truncated = true;

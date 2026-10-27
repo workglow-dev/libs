@@ -175,6 +175,24 @@ describe("listSandboxFiles", () => {
     expect(asked).toEqual(["src"]);
   });
 
+  it("sorts a normal directory, but takes a huge one's first entries unsorted and says so", async () => {
+    const names = (count: number): string[] =>
+      Array.from({ length: count }, (_, i) => `f${String(count - i).padStart(5, "0")}`);
+    const sorted = new FakeSandbox();
+    for (const name of names(1_500)) sorted.files.set(name, "");
+    const normal = await listSandboxFiles(sorted);
+    expect(normal.lines).toHaveLength(400);
+    expect(normal.lines[0]).toBe("f00001");
+
+    const huge = new FakeSandbox();
+    for (const name of names(2_500)) huge.files.set(name, "");
+    const cut = await listSandboxFiles(huge);
+    expect(cut.lines).toHaveLength(400);
+    expect(cut.truncated).toBe(true);
+    // First as the port returned them (descending here), not alphabetical.
+    expect(cut.lines[0]).toBe("f02500");
+  });
+
   it("skips node_modules", async () => {
     const sandbox = new FakeSandbox();
     sandbox.files.set("node_modules/x/index.js", "");
