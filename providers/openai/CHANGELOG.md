@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.14
+
+### Bug Fixes
+
+#### openai
+
+- stream reasoning summaries on the tool-calling reasoning port
+
+### Refactors
+
+#### ai
+
+- a shared model-profile resolver; Anthropic and OpenAI read every per-model decision from it
+- one model-profile table per provider for Anthropic and OpenAI
+
 ## 0.6.13
 
 ### Features

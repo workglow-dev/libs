@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.14
+
+### Refactors
+
+#### ollama,llamacpp-server,node-llama-cpp
+
+- one model profile per provider
+
 ## 0.6.13
 
 ### Features

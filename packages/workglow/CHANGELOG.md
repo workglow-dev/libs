@@ -1,5 +1,21 @@
 # workglow
 
+## 0.6.14
+
+### Features
+
+#### workglow
+
+- re-export @workglow/web-search from the meta package
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `tslog`: ^5.4.0
+
 ## 0.6.13
 
 _No changes in this package._

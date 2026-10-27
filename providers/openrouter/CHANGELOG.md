@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.14
+
+### Refactors
+
+#### openrouter,huggingface-inference
+
+- one model profile per provider
+
 ## 0.6.13
 
 ### Features
