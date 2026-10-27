@@ -12,7 +12,7 @@ import type {
 } from "@workglow/ai";
 import { filterLabeledModelsByQuery } from "@workglow/ai/provider-utils";
 import { stampEffortOptions } from "@workglow/ai/worker";
-import { deriveCapabilitiesFromMeta } from "./OpenRouter_Capabilities";
+import { openRouterModelCapabilities } from "./OpenRouter_Capabilities";
 import { OPENROUTER } from "./OpenRouter_Constants";
 import { openrouterEffortPolicy } from "./OpenRouter_EffortPolicy";
 
@@ -73,7 +73,7 @@ export async function fetchOpenRouterModels(
 
 export function mapOpenRouterModels(raw: readonly OpenRouterRawModel[]): ModelSearchResultItem[] {
   return raw.map((m) => {
-    const capabilities = deriveCapabilitiesFromMeta({
+    const capabilities = openRouterModelCapabilities(m.id, {
       architecture: m.architecture,
       supported_parameters: m.supported_parameters,
     });

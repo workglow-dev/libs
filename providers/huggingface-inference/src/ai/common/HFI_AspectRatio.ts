@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { HfiImageDims } from "./HFI_ModelProfiles";
+import { resolveHfiProfile } from "./HFI_ModelProfiles";
+
 export type AspectRatio = "1:1" | "16:9" | "9:16" | "4:3" | "3:4";
 
 export interface ImageDims {
@@ -27,20 +30,19 @@ const SDXL_DIMS: Record<AspectRatio, ImageDims> = {
   "3:4": { width: 768, height: 1024 },
 };
 
-const DEFAULT_DIMS: Record<AspectRatio, ImageDims> = SDXL_DIMS;
-
-const MODEL_DIM_TABLE: Array<{ pattern: RegExp; dims: Record<AspectRatio, ImageDims> }> = [
-  { pattern: /^black-forest-labs\/FLUX/i, dims: FLUX_DIMS },
-  { pattern: /^stabilityai\/.*-xl/i, dims: SDXL_DIMS },
-];
+const DIMS: Record<HfiImageDims, Record<AspectRatio, ImageDims>> = {
+  flux: FLUX_DIMS,
+  sdxl: SDXL_DIMS,
+};
 
 /** Resolves output dims for a model id and aspect ratio. Falls back to SDXL dims. */
 export function resolveHfImageDims(modelId: string, aspectRatio: AspectRatio): ImageDims {
-  const entry = MODEL_DIM_TABLE.find((e) => e.pattern.test(modelId));
-  return (entry?.dims ?? DEFAULT_DIMS)[aspectRatio];
+  const { profile } = resolveHfiProfile(modelId);
+  return DIMS[profile.kind === "image" ? profile.dims : "sdxl"][aspectRatio];
 }
 
-/** Returns true if the model id matches a known inpainting variant (mask supported). */
+/** Returns true if the model takes an inpainting mask. */
 export function isHfInpaintingModel(modelId: string): boolean {
-  return /inpaint|kontext/i.test(modelId);
+  const { profile } = resolveHfiProfile(modelId);
+  return profile.kind === "image" && profile.masks;
 }
