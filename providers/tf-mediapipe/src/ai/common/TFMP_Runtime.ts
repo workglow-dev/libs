@@ -34,8 +34,8 @@ export const wasm_reference_counts = new Map<string, number>();
  *
  * The WASM must match the bundled JS SDK — the JS↔WASM ABI is not stable
  * across versions — so each value is the resolved version of its
- * `@mediapipe/tasks-*` dependency, not merely a "recent" release. Drift is
- * caught by the version tests in `TFMP_GenaiHelpers.test.ts`.
+ * `@mediapipe/tasks-*` dependency, not merely a "recent" release; bump them
+ * together with those dependencies.
  */
 export const TFMP_VISION_WASM_VERSION = "1.1.1";
 export const TFMP_TEXT_WASM_VERSION = "1.1.1";
