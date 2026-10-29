@@ -74,6 +74,14 @@ describe("foldTextDelta on a text-retract", () => {
     expect(foldTextDelta(prev, { type: "text-retract", port: "text", length: 0 })).toBe(prev);
     expect(foldTextDelta(prev, { type: "text-retract", port: "reasoning", length: 3 })).toBe(prev);
   });
+
+  it("removes the whole number of characters retractText removes", () => {
+    const prev: StreamedText = { text: "Pabc", reasoning: "" };
+    expect(foldTextDelta(prev, { type: "text-retract", port: "text", length: 1.5 }).text).toBe(
+      "Pab"
+    );
+    expect(foldTextDelta(prev, { type: "text-retract", port: "text", length: 0.5 })).toBe(prev);
+  });
 });
 
 describe("visibleReasoning", () => {

@@ -47,12 +47,23 @@ export type StreamTextRetract = {
 };
 
 /**
- * Removes the last `length` characters of `text`, clamped at the start: the
- * fold every consumer of a {@link StreamTextRetract} applies.
+ * How many characters a {@link StreamTextRetract} of `length` takes back: a
+ * fraction rounds down, and anything not positive (`NaN` included) takes back
+ * nothing. A producer counting what it may retract counts through this, so its
+ * count moves by exactly what {@link retractText} removes.
+ */
+export function retractionLength(length: number): number {
+  return length > 0 ? Math.floor(length) : 0;
+}
+
+/**
+ * Removes the last {@link retractionLength} characters of `text`, clamped at
+ * the start: the fold every consumer of a {@link StreamTextRetract} applies.
  */
 export function retractText(text: string, length: number): string {
-  if (!(length > 0)) return text;
-  return text.slice(0, Math.max(0, text.length - length));
+  const n = retractionLength(length);
+  if (n === 0) return text;
+  return text.slice(0, Math.max(0, text.length - n));
 }
 
 /**

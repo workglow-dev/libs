@@ -63,7 +63,9 @@ export interface ClassifiedRetract {
  */
 export function classifyTextRetract(event: TextDeltaLike): ClassifiedRetract | undefined {
   if (event.type !== "text-retract") return undefined;
-  const length = event.length ?? 0;
+  // Rounded as `retractText` rounds it, so every fold downstream of this one,
+  // the web console's included, removes the same whole number of characters.
+  const length = Math.floor(event.length ?? 0);
   if (!(length > 0)) return undefined;
   return { port: event.port === "reasoning" ? "reasoning" : "text", length };
 }

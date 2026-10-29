@@ -16,6 +16,7 @@ import {
   Dataflow,
   isCacheRef,
   makeCacheRef,
+  retractionLength,
   retractText,
   Task,
   TaskError,
@@ -131,6 +132,14 @@ describe("retractText", () => {
     expect(retractText("Hi", 10)).toBe("");
     expect(retractText("Hi", 0)).toBe("Hi");
     expect(retractText("Hi", -3)).toBe("Hi");
+  });
+
+  it("removes a whole number of characters: a fraction rounds down and NaN removes nothing", () => {
+    expect(retractionLength(1.5)).toBe(1);
+    expect(retractText("Pabc", 1.5)).toBe("Pab");
+    expect(retractionLength(Number.NaN)).toBe(0);
+    expect(retractText("Hi", Number.NaN)).toBe("Hi");
+    expect(retractText("Hi", Number.POSITIVE_INFINITY)).toBe("");
   });
 });
 

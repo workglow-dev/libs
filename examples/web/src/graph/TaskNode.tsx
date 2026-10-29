@@ -6,7 +6,7 @@
 
 import { formatUsage } from "@workglow/ai";
 import type { ITask, StreamEvent, Usage } from "@workglow/task-graph";
-import { TaskStatus } from "@workglow/task-graph";
+import { retractText, TaskStatus } from "@workglow/task-graph";
 import { ArrayTask } from "@workglow/tasks";
 import type { Node, NodeProps } from "@xyflow/react";
 import { useEffect, useRef, useState } from "react";
@@ -121,8 +121,7 @@ export function TaskNode(props: NodeProps<Node<TaskNodeData, string>>) {
           }
         } else if (event.type === "text-retract") {
           // A failed attempt takes back what it streamed, from the same port.
-          const keep = (text: string): string =>
-            text.slice(0, Math.max(0, text.length - event.length));
+          const keep = (text: string): string => retractText(text, event.length);
           if (event.port === "reasoning") {
             reasoningTextRef.current = keep(reasoningTextRef.current);
             setReasoningText(reasoningTextRef.current);

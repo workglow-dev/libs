@@ -11,6 +11,7 @@ import type {
   StreamTextDelta,
   StreamTextRetract,
 } from "@workglow/task-graph";
+import { retractionLength } from "@workglow/task-graph";
 import { createEmitQueue } from "../capability/emitQueue";
 import type { AgentRoundRunner } from "./AgentRoundRunner";
 import { AGENT_ROUND_RUNNER } from "./AgentRoundRunner";
@@ -224,16 +225,17 @@ async function* attemptRound(
   try {
     for await (const event of queue.iterable) {
       if (event.type === "text-retract") {
-        // A non-positive or non-numeric length retracts nothing, as in
-        // `retractText`; letting it reach the counters would turn them to NaN
-        // and leave a failed attempt with nothing to take back.
-        if (!(event.length > 0)) continue;
+        // Counted as the fold removes it: a NaN would poison the counters and a
+        // fraction would drift them from the text, so a failed attempt's own
+        // retraction would take back too little, or an earlier round's text.
+        const requested = retractionLength(event.length);
+        if (requested === 0) continue;
         if (event.port === "text") {
-          const length = Math.min(event.length, textSent);
+          const length = Math.min(requested, textSent);
           textSent -= length;
           if (length > 0) yield { type: "text-retract", port: "text", length };
         } else {
-          let length = Math.min(event.length, reasoningSent);
+          let length = Math.min(requested, reasoningSent);
           reasoningSent -= length;
           // Everything this round reasoned was taken back, so the separator
           // ahead of it goes too.
