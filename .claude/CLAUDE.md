@@ -319,7 +319,7 @@ task: `normalizeHistoryForModel` / `trimHistoryForModel` (`ChatHistory.ts`), and
 unit-tested in `packages/ai/src/task/__tests__/`: `AgentTurnBudget` (tokens, cost, deadline —
 `exhausted()` answers the answer path, `mustStopLoop()` the loop, so changing what an answered
 turn reports cannot move where the loop stops), `AgentRoundAttempt` (one round's retries,
-timeout and held deltas), `AgentTurnPolicy` (submit tool, reminders, review, time-left notice)
+timeout, and the live deltas a failed attempt takes back), `AgentTurnPolicy` (submit tool, reminders, review, time-left notice)
 and `AgentToolRound` (dispatching a round's calls and building their results).
 
 `validateModelAuthoredSchema` (`ModelAuthoredSchema.ts`) bounds a JSON Schema a model wrote
