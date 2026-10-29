@@ -229,7 +229,7 @@ export async function generateGenaiResponse(
     });
   } finally {
     signal.removeEventListener("abort", onAbort);
-    // 0.10.29 ships without clearCancelSignals (declared in the d.ts but not
+    // 0.10.29 and 0.10.30 ship without clearCancelSignals (declared in the d.ts but not
     // exported from the bundle); the SDK also self-resets its cancel flag at
     // the start of each generation, so this is a best-effort call for newer SDKs.
     const clear = (llm as { clearCancelSignals?: () => void }).clearCancelSignals;
