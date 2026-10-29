@@ -147,8 +147,10 @@ describe("StreamProcessor — text-retract", () => {
     // The retraction reaches subscribers, and the enriched finish carries the
     // folded value rather than every delta ever sent.
     expect(chunks.filter((event) => event.type === "text-retract")).toEqual([retract(5)]);
-    const finish = chunks.find((event) => event.type === "finish") as { data: TextOut };
-    expect(finish.data.text).toBe("Hello world");
+    const finish = chunks.find(
+      (event): event is Extract<StreamEvent, { type: "finish" }> => event.type === "finish"
+    );
+    expect(finish?.data.text).toBe("Hello world");
     expect(fold(chunks, "text")).toBe("Hello world");
   });
 
