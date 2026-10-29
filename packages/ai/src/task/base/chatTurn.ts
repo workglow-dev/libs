@@ -11,7 +11,7 @@ import type {
   TaskOutput,
   Usage,
 } from "@workglow/task-graph";
-import { mergeUsage } from "@workglow/task-graph";
+import { mergeUsage, retractText } from "@workglow/task-graph";
 import type { AiEmit } from "../../capability/AiEmit";
 import type { IAiExecutionStrategy } from "../../execution/IAiExecutionStrategy";
 import type { AiJobInput } from "../../job/AiJob";
@@ -23,7 +23,7 @@ export interface ChatTurnArgs {
   readonly jobInput: AiJobInput<TaskInput>;
   readonly context: IExecuteContext;
   readonly runnerId: string | undefined;
-  /** Port stamped onto port-less `text-delta` events from the provider. */
+  /** Port stamped onto port-less `text-delta` / `text-retract` events from the provider. */
   readonly textPort: string;
 }
 
@@ -63,6 +63,12 @@ export function runChatTurn<Output extends TaskOutput>(args: ChatTurnArgs): Chat
       (event) => {
         if (event.type === "text-delta") {
           text += event.textDelta;
+          queue.push({
+            ...event,
+            port: event.port ?? args.textPort,
+          } as StreamEvent<Output>);
+        } else if (event.type === "text-retract") {
+          text = retractText(text, event.length);
           queue.push({
             ...event,
             port: event.port ?? args.textPort,

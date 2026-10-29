@@ -9,6 +9,7 @@ import {
   mergeUsage,
   REFUSAL_CATEGORY_OUTPUT_KEY,
   REFUSAL_OUTPUT_KEY,
+  retractText,
   USAGE_OUTPUT_KEY,
 } from "@workglow/task-graph";
 
@@ -20,6 +21,7 @@ const isNonEmptyObject = (v: unknown): v is Record<string, unknown> =>
  * of {@link StreamEvent}s.
  *
  * - `text-delta` per port → concatenated per port (`Map<port, string>`).
+ * - `text-retract` per port → the port's text loses its last `length` chars.
  * - `object-delta` non-array → replace semantics (each delta is a more
  *   complete partial snapshot — last wins per port).
  * - `object-delta` array → upsert by `id` per port.
@@ -81,6 +83,14 @@ export class StreamEventAccumulator<T extends TaskOutput = TaskOutput> {
         this.lastEventType = "text-delta";
         const e = event as Extract<StreamEvent<T>, { type: "text-delta" }>;
         this.textAccumulator.set(e.port, (this.textAccumulator.get(e.port) ?? "") + e.textDelta);
+        return;
+      }
+      case "text-retract": {
+        this.hasTextDeltas = true;
+        this.lastEventType = "text-retract";
+        const e = event as Extract<StreamEvent<T>, { type: "text-retract" }>;
+        const text = this.textAccumulator.get(e.port);
+        if (text !== undefined) this.textAccumulator.set(e.port, retractText(text, e.length));
         return;
       }
       case "object-delta": {

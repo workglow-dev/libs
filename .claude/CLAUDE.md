@@ -245,8 +245,9 @@ put to a person still runs one at a time, and results return in the order asked)
 `maxRoundRetries` (default 2, for a `RetryableJobError`, waiting as the provider's
 retry-after says within 1–60 s), `roundTimeoutMs` (a provider can accept a request and never answer;
 past it the round is abandoned as a retryable failure, so the retries cover it; a round's text and
-reasoning are forwarded only once the attempt settles, since a failed attempt's partial cannot be
-taken back from the accumulated port; reasoning goes out on the turn's own `reasoning` port, a
+reasoning are forwarded live, and an attempt that fails takes back exactly what it forwarded with a
+`text-retract` per port, so the folded ports read as if it never ran and earlier rounds are untouched;
+reasoning goes out on the turn's own `reasoning` port, a
 blank line between rounds, and is absent from the output when no round returned any), and
 budgets — `maxInputTokens`, `maxCostUsd` (refused without a price card,
 since a budget it cannot measure never stops anything), `maxDurationMs` — each ending the turn
@@ -306,7 +307,9 @@ switch. DeepSeek's `replay_reasoning` is a different mechanism: it controls repl
 (they draw on a screen, ask a person, read state only that process holds) but whose model is
 reachable only through a backend binds `AGENT_ROUND_RUNNER` on the run's registry: every round is
 then handed to it as a `ToolCallingTaskInput` and answered as a `ToolCallingTaskOutput`, while the
-loop and every tool stay in-process. A serialized graph cannot carry the closures, so without it a
+loop and every tool stay in-process. The runner streams back through its `AgentRoundContext`:
+text, reasoning, and `onTextRetract` for text its own call withdrew, which the turn caps at what
+that attempt forwarded. A serialized graph cannot carry the closures, so without it a
 host chooses between tools that work and a model it can reach. A registry binding, not an input,
 for the same reason as `AGENT_APPROVAL_OPT_OUT`: where a turn's model calls go is the host's call.
 
@@ -318,7 +321,7 @@ task: `normalizeHistoryForModel` / `trimHistoryForModel` (`ChatHistory.ts`), and
 unit-tested in `packages/ai/src/task/__tests__/`: `AgentTurnBudget` (tokens, cost, deadline —
 `exhausted()` answers the answer path, `mustStopLoop()` the loop, so changing what an answered
 turn reports cannot move where the loop stops), `AgentRoundAttempt` (one round's retries,
-timeout and held deltas), `AgentTurnPolicy` (submit tool, reminders, review, time-left notice)
+timeout, and the live deltas a failed attempt takes back), `AgentTurnPolicy` (submit tool, reminders, review, time-left notice)
 and `AgentToolRound` (dispatching a round's calls and building their results).
 
 `validateModelAuthoredSchema` (`ModelAuthoredSchema.ts`) bounds a JSON Schema a model wrote

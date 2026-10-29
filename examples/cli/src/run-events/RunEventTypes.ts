@@ -61,6 +61,16 @@ export type RunEvent =
   | { readonly k: "text"; readonly id: string; readonly delta: string }
   /** A model's thinking, streamed beside its answer; never folded into `text`. */
   | { readonly k: "reasoning"; readonly id: string; readonly delta: string }
+  /**
+   * Takes back the last `length` characters of a row's `text` or `reasoning`:
+   * a model call that streamed and then failed, retracted before its retry.
+   */
+  | {
+      readonly k: "retract";
+      readonly id: string;
+      readonly port: "text" | "reasoning";
+      readonly length: number;
+    }
   | { readonly k: "messages"; readonly id: string; readonly messages: unknown }
   | {
       readonly k: "human_request";

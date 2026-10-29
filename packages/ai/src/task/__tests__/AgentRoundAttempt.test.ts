@@ -5,7 +5,8 @@
  */
 
 import { PermanentJobError, RetryableJobError } from "@workglow/job-queue";
-import type { IExecuteContext, StreamTextDelta } from "@workglow/task-graph";
+import type { IExecuteContext, StreamTextDelta, StreamTextRetract } from "@workglow/task-graph";
+import { retractText } from "@workglow/task-graph";
 import { Container, ServiceRegistry } from "@workglow/util";
 import { describe, expect, it } from "vitest";
 import type { AgentRoundOptions, SettledRound } from "../AgentRoundAttempt";
@@ -68,11 +69,23 @@ function options(
   };
 }
 
+type RoundEvent = StreamTextDelta | StreamTextRetract;
+
+/** Folds one port of a round's events the way the stream does, retractions included. */
+function folded(events: readonly RoundEvent[], port: string): string {
+  let text = "";
+  for (const event of events) {
+    if (event.port !== port) continue;
+    text = event.type === "text-retract" ? retractText(text, event.length) : text + event.textDelta;
+  }
+  return text;
+}
+
 /** Drains a round, returning what it forwarded and how it settled. */
 async function drain(
-  run: AsyncGenerator<StreamTextDelta, SettledRound, undefined>
-): Promise<{ readonly events: StreamTextDelta[]; readonly settled: SettledRound }> {
-  const events: StreamTextDelta[] = [];
+  run: AsyncGenerator<RoundEvent, SettledRound, undefined>
+): Promise<{ readonly events: RoundEvent[]; readonly settled: SettledRound }> {
+  const events: RoundEvent[] = [];
   for (;;) {
     const next = await run.next();
     if (next.done) return { events, settled: next.value };
@@ -91,7 +104,10 @@ describe("settleRound", () => {
     ]);
     const { events, settled } = await drain(settleRound(options(context)));
     expect(called()).toBe(1);
-    expect(events.map((event) => event.textDelta)).toEqual(["do", "ne"]);
+    expect(events).toEqual([
+      { type: "text-delta", port: "text", textDelta: "do" },
+      { type: "text-delta", port: "text", textDelta: "ne" },
+    ]);
     expect(settled).toEqual({ status: "settled", output: ANSWER, attempts: 1 });
   });
 
@@ -110,7 +126,7 @@ describe("settleRound", () => {
     expect(sent?.messages).toHaveLength(1);
   });
 
-  it("retries a retryable failure and drops the failed attempt's partial text", async () => {
+  it("retries a retryable failure and takes back the failed attempt's partial text", async () => {
     const { context, called, progress } = contextFor([
       async (_input, round) => {
         round.onTextDelta("half an ans");
@@ -124,9 +140,39 @@ describe("settleRound", () => {
     ]);
     const { events, settled } = await drain(settleRound(options(context)));
     expect(called()).toBe(2);
-    expect(events.map((event) => event.textDelta)).toEqual(["done"]);
+    // The partial is forwarded as it streams, then retracted before the retry,
+    // so the folded port holds only the retry's text.
+    expect(events).toEqual([
+      { type: "text-delta", port: "text", textDelta: "half an ans" },
+      { type: "text-retract", port: "text", length: "half an ans".length },
+      { type: "text-delta", port: "text", textDelta: "done" },
+    ]);
+    expect(folded(events, "text")).toBe("done");
     expect(settled).toMatchObject({ status: "settled", attempts: 2 });
     expect(progress).toEqual(["Retrying in 1s", "Thinking (attempt 2)"]);
+  });
+
+  it("abandons the call in flight when the consumer stops reading", async () => {
+    let signal: AbortSignal | undefined;
+    const { context } = contextFor([
+      async (_input, round) => {
+        signal = round.signal;
+        round.onTextDelta("partial");
+        await new Promise<void>((resolve) =>
+          round.signal.addEventListener("abort", () => resolve())
+        );
+        throw new Error("aborted");
+      },
+    ]);
+    const run = settleRound(options(context));
+    expect((await run.next()).value).toEqual({
+      type: "text-delta",
+      port: "text",
+      textDelta: "partial",
+    });
+    expect(signal?.aborted).toBe(false);
+    await run.return({ status: "out-of-time" });
+    expect(signal?.aborted).toBe(true);
   });
 
   it("ends out of time rather than sleeping through a wait that passes the deadline", async () => {
@@ -177,6 +223,31 @@ describe("settleRound", () => {
     await expect(
       drain(settleRound(options(context, { timeoutMs: 10, maxRetries: 0 })))
     ).rejects.toThrow(/Round 1 had no answer within 10 ms/);
+  });
+
+  it("passes on a host runner's retraction, capped at what this attempt forwarded", async () => {
+    const { context } = contextFor([
+      async (_input, round) => {
+        round.onTextDelta("draft");
+        round.onTextRetract("text", 2);
+        round.onTextDelta("y");
+        // More than the attempt sent: only its own text can be taken back.
+        round.onTextRetract("text", 100);
+        round.onTextDelta("done");
+        round.onTextRetract("reasoning", 3);
+        return ANSWER;
+      },
+    ]);
+    const { events, settled } = await drain(settleRound(options(context)));
+    expect(events).toEqual([
+      { type: "text-delta", port: "text", textDelta: "draft" },
+      { type: "text-retract", port: "text", length: 2 },
+      { type: "text-delta", port: "text", textDelta: "y" },
+      { type: "text-retract", port: "text", length: 4 },
+      { type: "text-delta", port: "text", textDelta: "done" },
+    ]);
+    expect(folded(events, "text")).toBe("done");
+    expect(settled).toMatchObject({ status: "settled", attempts: 1 });
   });
 
   it("sets a round's reasoning apart from an earlier round's, once it has some", async () => {

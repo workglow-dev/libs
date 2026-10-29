@@ -5,7 +5,13 @@
  */
 
 import { RetryableJobError } from "@workglow/job-queue";
-import type { IExecuteContext, StreamEvent, StreamTextDelta } from "@workglow/task-graph";
+import type {
+  IExecuteContext,
+  StreamEvent,
+  StreamTextDelta,
+  StreamTextRetract,
+} from "@workglow/task-graph";
+import { retractionLength } from "@workglow/task-graph";
 import { createEmitQueue } from "../capability/emitQueue";
 import type { AgentRoundRunner } from "./AgentRoundRunner";
 import { AGENT_ROUND_RUNNER } from "./AgentRoundRunner";
@@ -15,6 +21,9 @@ import { normalizeHistoryForModel, trimHistoryForModel } from "./ChatHistory";
 import type { ChatMessage } from "./ChatMessage";
 import type { ToolCallingTaskInput, ToolCallingTaskOutput } from "./ToolCallingTask";
 import { ToolCallingTask } from "./ToolCallingTask";
+
+/** What a round puts on the turn's wire: its text and reasoning, and the retraction of a failed attempt's. */
+type RoundStreamEvent = StreamTextDelta | StreamTextRetract;
 
 /** Between two rounds' reasoning, which would otherwise run together into one thought. */
 export const REASONING_ROUND_SEPARATOR = "\n\n";
@@ -68,13 +77,13 @@ function roundRunnerOf(context: IExecuteContext): AgentRoundRunner | undefined {
  * failure (a rate limit, an overload, a call abandoned after `timeoutMs`) up to
  * `maxRetries` times, waiting as the provider asks.
  *
- * Yields the round's text and reasoning as this task's own, but only from the
- * attempt that settled: a failed attempt's partial cannot be taken back from
- * the accumulated port, so it is never forwarded.
+ * Yields the round's text and reasoning as this task's own, as they arrive. A
+ * failed attempt takes back exactly what it yielded with a `text-retract` per
+ * port before the retry starts, so the folded ports read as if it never ran.
  */
 export async function* settleRound(
   options: AgentRoundOptions
-): AsyncGenerator<StreamTextDelta, SettledRound, undefined> {
+): AsyncGenerator<RoundStreamEvent, SettledRound, undefined> {
   const { context } = options;
   const captured: { output: ToolCallingTaskOutput | undefined } = { output: undefined };
   let attempts = 0;
@@ -116,7 +125,7 @@ export async function* settleRound(
 async function* attemptRound(
   options: AgentRoundOptions,
   captured: { output: ToolCallingTaskOutput | undefined }
-): AsyncGenerator<StreamTextDelta, void, undefined> {
+): AsyncGenerator<RoundStreamEvent, void, undefined> {
   const { round, turn, context, timeoutMs } = options;
   const roundInput: ToolCallingTaskInput = {
     model: turn.model,
@@ -134,7 +143,7 @@ async function* attemptRound(
     maxTokens: turn.maxTokens,
   };
   const hostRunner = roundRunnerOf(context);
-  const queue = createEmitQueue<StreamTextDelta>();
+  const queue = createEmitQueue<RoundStreamEvent>();
   let off = (): void => {};
   let runRound: () => Promise<ToolCallingTaskOutput>;
   // A round that never answers holds the turn forever: a provider can accept
@@ -157,6 +166,7 @@ async function* attemptRound(
         onTextDelta: (delta) => queue.push({ type: "text-delta", port: "text", textDelta: delta }),
         onReasoningDelta: (delta) =>
           queue.push({ type: "text-delta", port: "reasoning", textDelta: delta }),
+        onTextRetract: (port, length) => queue.push({ type: "text-retract", port, length }),
         // Progress is advisory: a failed update must not surface as an
         // unhandled rejection, nor fail a round that is otherwise fine.
         onProgress: (progress, message) => {
@@ -168,10 +178,10 @@ async function* attemptRound(
     context.own(task);
     abandon = () => task.abort();
     off = task.subscribe("stream_chunk", (event: StreamEvent) => {
-      if (event.type !== "text-delta") return;
+      if (event.type !== "text-delta" && event.type !== "text-retract") return;
       const port = event.port ?? "text";
       if (port !== "text" && port !== "reasoning") return;
-      queue.push({ type: "text-delta", port, textDelta: event.textDelta });
+      queue.push({ ...event, port });
     });
     runRound = () => task.run(roundInput);
   }
@@ -182,6 +192,7 @@ async function* attemptRound(
           timedOut = true;
           abandon();
         }, timeoutMs);
+  let settled = false;
   const run = (async () => {
     try {
       captured.output = await runRound();
@@ -191,6 +202,7 @@ async function* attemptRound(
       }
       throw err;
     } finally {
+      settled = true;
       if (timer !== undefined) clearTimeout(timer);
       off();
       queue.close();
@@ -200,24 +212,67 @@ async function* attemptRound(
   // unhandled; it is re-thrown below, once the events already produced have
   // reached the caller.
   run.catch(() => {});
-  // Held until the attempt settles: the stream accumulates every delta it is
-  // handed into the task's text and reasoning ports and offers no way to take
-  // one back, so either forwarded from an attempt that then fails and is
-  // retried would be joined to the retry's. A failed attempt throws here and
-  // its text and reasoning are dropped together.
-  const held: StreamTextDelta[] = [];
-  for await (const event of queue.iterable) held.push(event);
-  await run;
-  let separated = !options.reasonedBefore;
-  for (const event of held) {
-    // Rounds are told apart on the wire exactly as in the settled output, and
-    // only once this round has something to say: a separator ahead of nothing
-    // would leave the streamed reasoning ending differently than the final one.
-    if (!separated && event.port === "reasoning") {
+  // Forwarded as they arrive, so a host sees the reply as it is written. What
+  // this attempt forwarded is counted per port, because the stream folds every
+  // delta into the task's text and reasoning ports: an attempt that fails takes
+  // exactly that much back with a `text-retract`, and a retry or the next round
+  // appends after the earlier rounds as if it never ran.
+  let textSent = 0;
+  let reasoningSent = 0;
+  // Rounds are told apart on the wire exactly as in the settled output, and
+  // only once this round has something to say: a separator ahead of nothing
+  // would leave the streamed reasoning ending differently than the final one.
+  let separatorSent = false;
+  try {
+    for await (const event of queue.iterable) {
+      if (event.type === "text-retract") {
+        // Counted as the fold removes it: a NaN would poison the counters and a
+        // fraction would drift them from the text, so a failed attempt's own
+        // retraction would take back too little, or an earlier round's text.
+        const requested = retractionLength(event.length);
+        if (requested === 0) continue;
+        if (event.port === "text") {
+          const length = Math.min(requested, textSent);
+          textSent -= length;
+          if (length > 0) yield { type: "text-retract", port: "text", length };
+        } else {
+          let length = Math.min(requested, reasoningSent);
+          reasoningSent -= length;
+          // Everything this round reasoned was taken back, so the separator
+          // ahead of it goes too.
+          if (reasoningSent === 0 && separatorSent) {
+            length += REASONING_ROUND_SEPARATOR.length;
+            separatorSent = false;
+          }
+          if (length > 0) yield { type: "text-retract", port: "reasoning", length };
+        }
+        continue;
+      }
       if (event.textDelta.length === 0) continue;
-      yield { type: "text-delta", port: "reasoning", textDelta: REASONING_ROUND_SEPARATOR };
-      separated = true;
+      if (event.port === "text") {
+        textSent += event.textDelta.length;
+      } else {
+        if (options.reasonedBefore && !separatorSent) {
+          yield { type: "text-delta", port: "reasoning", textDelta: REASONING_ROUND_SEPARATOR };
+          separatorSent = true;
+        }
+        reasoningSent += event.textDelta.length;
+      }
+      yield event;
     }
-    yield event;
+    await run;
+  } catch (err) {
+    if (textSent > 0) yield { type: "text-retract", port: "text", length: textSent };
+    const reasoningLength = reasoningSent + (separatorSent ? REASONING_ROUND_SEPARATOR.length : 0);
+    if (reasoningLength > 0) {
+      yield { type: "text-retract", port: "reasoning", length: reasoningLength };
+    }
+    throw err;
+  } finally {
+    // Deltas are yielded while the call is still running, so a consumer that
+    // stops reading leaves this generator at a `yield` with the call in flight.
+    // Abandoning it ends the request; the run's own `finally` then clears the
+    // timer and the listener.
+    if (!settled) abandon();
   }
 }

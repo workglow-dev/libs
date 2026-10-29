@@ -15,10 +15,20 @@ export interface AgentRoundContext {
   readonly onTextDelta: (delta: string) => void;
   /**
    * The round's reasoning as it streams, re-emitted as the turn's own on its
-   * `reasoning` port. Held with the round's text until the attempt settles, so
-   * a round that fails and is retried contributes neither.
+   * `reasoning` port. Forwarded live like the round's text, and both are taken
+   * back with a `text-retract` if the attempt fails, so a round that is retried
+   * contributes only its retry's.
    */
   readonly onReasoningDelta: (delta: string) => void;
+  /**
+   * Takes back the last `length` characters the round streamed on `port`,
+   * counted as `retractionLength` counts them: for a host whose own call
+   * retracts text it already forwarded, such as a `ToolCallingTask` whose
+   * provider withdrew part of a reply. The turn passes it on as its own
+   * `text-retract`, capped at what this attempt forwarded on that port, so a
+   * host can never take back an earlier round's text.
+   */
+  readonly onTextRetract: (port: "text" | "reasoning", length: number) => void;
   /**
    * Progress while the round has nothing to say yet — a model being downloaded
    * or loaded. `progress` is 0..100, or undefined when there is no denominator.

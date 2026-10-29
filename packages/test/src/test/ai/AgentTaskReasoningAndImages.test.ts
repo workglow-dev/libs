@@ -294,6 +294,34 @@ describe("AgentTask reasoning and tool images", () => {
       return events;
     }
 
+    type WireEvent = { port: string; delta: string } | { port: string; retract: number };
+
+    /** Every delta and retraction, in the order the turn sent them. */
+    function listenAll(task: AgentTask): WireEvent[] {
+      const events: WireEvent[] = [];
+      task.subscribe("stream_chunk", (event) => {
+        if (event.type === "text-delta") {
+          events.push({ port: event.port ?? "text", delta: event.textDelta });
+        } else if (event.type === "text-retract") {
+          events.push({ port: event.port ?? "text", retract: event.length });
+        }
+      });
+      return events;
+    }
+
+    /** What a host folding `port` reads, retractions applied. */
+    function fold(events: readonly WireEvent[], port: string): string {
+      let text = "";
+      for (const event of events) {
+        if (event.port !== port) continue;
+        text =
+          "delta" in event
+            ? text + event.delta
+            : text.slice(0, Math.max(0, text.length - event.retract));
+      }
+      return text;
+    }
+
     it("streams a round's reasoning on its own port, apart from the text", async () => {
       script([
         { reasoning: "Check the file first.", calls: [{ id: "c1", name: "look", input: {} }] },
@@ -348,7 +376,7 @@ describe("AgentTask reasoning and tool images", () => {
       expect(output.reasoning).toBe("Only now.");
     });
 
-    it("drops a failed attempt's reasoning and text, so the retry's are not joined to them", async () => {
+    it("takes back a failed attempt's reasoning and text, so the retry's are not joined to them", async () => {
       script([
         {
           failWith: {
@@ -360,7 +388,7 @@ describe("AgentTask reasoning and tool images", () => {
         { reasoning: "A whole thought.", text: "A whole answer." },
       ]);
       const task = new AgentTask();
-      const events = listen(task);
+      const events = listenAll(task);
 
       const output = await task.run(
         { model: MODEL, prompt: "?", tools: [], approval: "never" },
@@ -370,10 +398,53 @@ describe("AgentTask reasoning and tool images", () => {
       expect(output.steps[0]!.attempts).toBe(2);
       expect(output.reasoning).toBe("A whole thought.");
       expect(output.text).toBe("A whole answer.");
+      // Live, then retracted by exactly what the failed attempt sent on each port.
       expect(events).toEqual([
+        { port: "reasoning", delta: "Half a thought" },
+        { port: "text", delta: "Half an ans" },
+        { port: "text", retract: "Half an ans".length },
+        { port: "reasoning", retract: "Half a thought".length },
         { port: "reasoning", delta: "A whole thought." },
         { port: "text", delta: "A whole answer." },
       ]);
+      expect(fold(events, "reasoning")).toBe(output.reasoning);
+      expect(fold(events, "text")).toBe(output.text);
+    });
+
+    it("keeps earlier rounds' reasoning when a later round's attempt fails, separator included", async () => {
+      script([
+        {
+          reasoning: "Check the file first.",
+          text: "Looking. ",
+          calls: [{ id: "c1", name: "look", input: {} }],
+        },
+        {
+          failWith: {
+            error: new RetryableJobError("overloaded", new Date(Date.now())),
+            reasoning: "Half",
+            text: "Par",
+          },
+        },
+        { reasoning: "It looks fine.", text: "All good." },
+      ]);
+      const task = new AgentTask();
+      const events = listenAll(task);
+
+      const output = await task.run(
+        { model: MODEL, prompt: "Check it", tools: [LOOK], approval: "never" },
+        { registry }
+      );
+
+      expect(output.reasoning).toBe("Check the file first.\n\nIt looks fine.");
+      expect(output.text).toBe("Looking. All good.");
+      // The failed attempt sent its own separator ahead of its reasoning, so it
+      // takes that back too; the retry sends one again.
+      expect(events.filter((event) => "retract" in event)).toEqual([
+        { port: "text", retract: 3 },
+        { port: "reasoning", retract: "\n\nHalf".length },
+      ]);
+      expect(fold(events, "reasoning")).toBe(output.reasoning);
+      expect(fold(events, "text")).toBe(output.text);
     });
   });
 });

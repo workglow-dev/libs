@@ -340,7 +340,7 @@ The **SQL** backings share one implementation. `TabularBlobChunkStore` persists 
 
 ### Live cross-process stream transport (`onStream`)
 
-`JobHandle.outputStream` (above) streams the _final_ binary result out of the cache after completion. Live **stream events** (`text-delta` / `object-delta` / `binary-delta` / `snapshot` / `finish` / `phase`) are a separate channel with two serialization boundaries:
+`JobHandle.outputStream` (above) streams the _final_ binary result out of the cache after completion. Live **stream events** (`text-delta` / `text-retract` / `object-delta` / `binary-delta` / `snapshot` / `finish` / `phase`) are a separate channel with two serialization boundaries:
 
 - **Worker-thread boundary** (`@workglow/util`): provider run-fns execute inside a worker; `WorkerServerBase.postStreamChunk` posts each event to the main thread. It extracts transferables from the event (mirroring `postResult`), so binary payloads — `binary-delta` buffers and `snapshot` image bytes — transfer zero-copy instead of being structure-cloned; non-binary events yield an empty transfer list and clone byte-for-byte as before. (The same-process `job_stream` fan-out inside `@workglow/job-queue` has no structured-clone boundary — events pass by reference — so transferables are a no-op there.)
 

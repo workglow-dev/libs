@@ -31,6 +31,43 @@ export type StreamTextDelta = {
 };
 
 /**
+ * Append mode only: takes back the last `length` characters (UTF-16 code
+ * units) streamed on `port` in this run, clamped at the start. Later
+ * `text-delta`s on that port append after what remains. Consumers fold it with
+ * {@link retractText}, which removes {@link retractionLength} characters: a
+ * fraction rounds down and anything not positive removes nothing.
+ *
+ * For a producer that streams text it may yet abandon, such as a model call
+ * that fails partway and is retried: the folded port then reads as if the
+ * abandoned text had never been sent.
+ */
+export type StreamTextRetract = {
+  type: "text-retract";
+  port: string;
+  length: number;
+};
+
+/**
+ * How many characters a {@link StreamTextRetract} of `length` takes back: a
+ * fraction rounds down, and anything not positive (`NaN` included) takes back
+ * nothing. A producer counting what it may retract counts through this, so its
+ * count moves by exactly what {@link retractText} removes.
+ */
+export function retractionLength(length: number): number {
+  return length > 0 ? Math.floor(length) : 0;
+}
+
+/**
+ * Removes the last {@link retractionLength} characters of `text`, clamped at
+ * the start: the fold every consumer of a {@link StreamTextRetract} applies.
+ */
+export function retractText(text: string, length: number): string {
+  const n = retractionLength(length);
+  if (n === 0) return text;
+  return text.slice(0, Math.max(0, text.length - n));
+}
+
+/**
  * Object delta for structured/object streaming.
  * `port` identifies which output port this delta belongs to.
  *
@@ -442,6 +479,7 @@ export type StreamToolCall =
  */
 export type StreamEvent<Output = Record<string, any>> =
   | StreamTextDelta
+  | StreamTextRetract
   | StreamObjectDelta
   | StreamBinaryDelta
   | StreamSnapshot<Output>
@@ -726,8 +764,8 @@ export const DEFAULT_STREAM_GATE_WATCHDOG_MS = 60_000;
  * passes the backpressure gate uncounted and a slow consumer accumulates one
  * per call without the gate ever closing.
  *
- * The port filter cannot do this job: it only recognises the three delta types,
- * so anything without a `port` passes it by construction.
+ * The port filter cannot do this job: it only recognises the per-port delta
+ * types, so anything without a `port` passes it by construction.
  */
 export function isDataflowExcluded(event: StreamEvent): boolean {
   return event.type === "phase" || event.type === "tool-call";

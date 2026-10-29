@@ -165,7 +165,7 @@ export class StreamingAiTask<
           usage = mergeUsage(usage, event.usage);
         }
 
-        if (event.type === "text-delta") {
+        if (event.type === "text-delta" || event.type === "text-retract") {
           yield { ...event, port: event.port ?? defaultPort } as StreamEvent<Output>;
         } else if (event.type === "object-delta") {
           yield { ...event, port: event.port ?? defaultPort } as StreamEvent<Output>;

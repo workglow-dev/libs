@@ -45,6 +45,24 @@ describe("StreamEventAccumulator", () => {
     expect(acc.materialize()).toEqual({ text: "Hello" });
   });
 
+  it("takes back a port's tail on text-retract, so later deltas append after what remains", () => {
+    const acc = new StreamEventAccumulator<Out>();
+    acc.observe({ type: "text-delta", port: "text", textDelta: "First. Oops" } as StreamEvent<Out>);
+    acc.observe({ type: "text-delta", port: "notes", textDelta: "kept" } as StreamEvent<Out>);
+    acc.observe({ type: "text-retract", port: "text", length: 4 } as StreamEvent<Out>);
+    acc.observe({ type: "text-delta", port: "text", textDelta: "Second." } as StreamEvent<Out>);
+    acc.observeFinish({ type: "finish", data: {} });
+    expect(acc.materialize()).toEqual({ text: "First. Second.", notes: "kept" });
+  });
+
+  it("falls back to the finish payload for a port retracted to nothing", () => {
+    const acc = new StreamEventAccumulator<Out>();
+    acc.observe({ type: "text-delta", port: "text", textDelta: "partial" } as StreamEvent<Out>);
+    acc.observe({ type: "text-retract", port: "text", length: 99 } as StreamEvent<Out>);
+    acc.observeFinish({ type: "finish", data: { text: "stated" } });
+    expect(acc.materialize()).toEqual({ text: "stated" });
+  });
+
   it("replaces object-delta non-array payloads (latest wins)", () => {
     const acc = new StreamEventAccumulator<Out>();
     acc.observe({ type: "object-delta", port: "obj", objectDelta: { a: 1 } } as StreamEvent<Out>);

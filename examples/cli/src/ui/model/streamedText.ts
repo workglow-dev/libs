@@ -24,6 +24,8 @@ export interface TextDeltaLike {
   readonly type: string;
   readonly port?: string;
   readonly textDelta?: string;
+  /** On a `text-retract`: how many trailing characters to take back. */
+  readonly length?: number;
 }
 
 /** Lines of a streaming panel shown at once; the oldest scroll off the top. */
@@ -48,11 +50,46 @@ export function classifyTextDelta(event: TextDeltaLike): ClassifiedDelta | undef
   return { port: event.port === "reasoning" ? "reasoning" : "text", delta };
 }
 
+/** A text retraction on a port worth showing: which one, and how much it takes back. */
+export interface ClassifiedRetract {
+  readonly port: "text" | "reasoning";
+  readonly length: number;
+}
+
 /**
- * Folds one stream event into the accumulated text. Returns `prev` itself when
- * nothing changed so a state setter can bail out of a re-render.
+ * Reads a stream event as a `text-retract`, or `undefined` when it is not one
+ * that takes anything back. Ports are read as {@link classifyTextDelta} reads
+ * them, so a retraction lands on the text its deltas went to.
+ */
+export function classifyTextRetract(event: TextDeltaLike): ClassifiedRetract | undefined {
+  if (event.type !== "text-retract") return undefined;
+  // Rounded as `retractText` rounds it, so every fold downstream of this one,
+  // the web console's included, removes the same whole number of characters.
+  const length = Math.floor(event.length ?? 0);
+  if (!(length > 0)) return undefined;
+  return { port: event.port === "reasoning" ? "reasoning" : "text", length };
+}
+
+/** `text` without its last `length` characters, clamped at the start. */
+function dropTail(text: string, length: number): string {
+  return text.slice(0, Math.max(0, text.length - length));
+}
+
+/**
+ * Folds one stream event into the accumulated text: a `text-delta` appends and
+ * a `text-retract` takes its tail back. Returns `prev` itself when nothing
+ * changed so a state setter can bail out of a re-render.
  */
 export function foldTextDelta(prev: StreamedText, event: TextDeltaLike): StreamedText {
+  const retract = classifyTextRetract(event);
+  if (retract) {
+    if (retract.port === "text") {
+      if (prev.text.length === 0) return prev;
+      return { text: dropTail(prev.text, retract.length), reasoning: prev.reasoning };
+    }
+    if (prev.reasoning.length === 0) return prev;
+    return { text: prev.text, reasoning: dropTail(prev.reasoning, retract.length) };
+  }
   const classified = classifyTextDelta(event);
   if (!classified) return prev;
   return classified.port === "text"

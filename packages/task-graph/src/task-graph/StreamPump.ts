@@ -774,11 +774,16 @@ export class StreamPump {
 
   /**
    * Returns true if an event carries a port-specific delta (text-delta,
-   * object-delta, or binary-delta).
+   * text-retract, object-delta, or binary-delta). A retraction belongs to its
+   * port like the text it takes back: an edge carrying that port's deltas must
+   * carry it too, and an edge for another port must not.
    */
   private static isPortDelta(event: StreamEvent): event is StreamEvent & { port: string } {
     return (
-      event.type === "text-delta" || event.type === "object-delta" || event.type === "binary-delta"
+      event.type === "text-delta" ||
+      event.type === "text-retract" ||
+      event.type === "object-delta" ||
+      event.type === "binary-delta"
     );
   }
 
@@ -839,7 +844,7 @@ export class StreamPump {
             }
             // A task's own reporting is not content on a port, so it never
             // reaches an edge. The port filter above cannot decide this: it
-            // recognises only the three delta types, so an event carrying no
+            // recognises only the per-port delta types, so an event carrying no
             // `port` passes it by construction.
             if (isDataflowExcluded(event)) {
               return;
