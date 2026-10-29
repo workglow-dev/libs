@@ -33,8 +33,9 @@ export type StreamTextDelta = {
 /**
  * Append mode only: takes back the last `length` characters (UTF-16 code
  * units) streamed on `port` in this run, clamped at the start. Later
- * `text-delta`s on that port append after what remains. Consumers truncate:
- * `acc.slice(0, Math.max(0, acc.length - length))`.
+ * `text-delta`s on that port append after what remains. Consumers fold it with
+ * {@link retractText}, which removes {@link retractionLength} characters: a
+ * fraction rounds down and anything not positive removes nothing.
  *
  * For a producer that streams text it may yet abandon, such as a model call
  * that fails partway and is retried: the folded port then reads as if the

@@ -382,7 +382,8 @@ interface StreamTextRetract {
 
 Append mode only. Removes the last `length` characters streamed on `port` in this run, clamped at
 the start; later `text-delta`s append after what remains. Every consumer folding a port's text
-truncates (`retractText(acc, length)`, or `acc.slice(0, Math.max(0, acc.length - length))`). A
+truncates with `retractText(acc, length)`, which removes `retractionLength(length)` characters (a
+fraction rounds down, and anything not positive removes nothing). A
 producer that streams text it may yet abandon uses it: `AgentTask` forwards each round live and,
 when an attempt fails and is retried, takes back exactly what that attempt sent, so the folded port
 reads as if the attempt never ran. Dataflow edges carrying the port carry the retraction too.
