@@ -935,6 +935,25 @@ async function enforcePipelineCacheCap(exceptKey: string): Promise<void> {
 }
 
 /**
+ * Supplies `logits_to_keep` to decoders that declare it. Transformers.js fills
+ * only `num_logits_to_keep`, so LFM3's ONNX graphs, which name the input
+ * without the prefix, fail every step with "Missing the following inputs". One
+ * keeps only the last position's logits, the one generation samples from.
+ */
+function supplyLogitsToKeep(
+  sdk: { Tensor: new (...args: any[]) => unknown },
+  loaded: unknown
+): void {
+  const model = (loaded as { model?: any } | undefined)?.model;
+  const session = model?.sessions?.model ?? model?.sessions?.decoder_model_merged;
+  const inputNames: readonly string[] | undefined = session?.inputNames;
+  if (!inputNames?.includes("logits_to_keep") || inputNames.includes("num_logits_to_keep")) return;
+  const forward = model.forward.bind(model);
+  model.forward = (inputs: Record<string, unknown>) =>
+    forward({ logits_to_keep: new sdk.Tensor("int64", [1n], [1]), ...inputs });
+}
+
+/**
  * Generate a cache key for a pipeline that includes all configuration options
  * that affect pipeline creation (model_path, pipeline, dtype, device)
  */
@@ -1161,6 +1180,8 @@ const doGetPipeline = async (
       pipelineType === "image-text-to-text"
         ? await loadVisionLanguageModel(sdk, modelPath, pipelineOptions)
         : await sdk.pipeline(pipelineType, modelPath, pipelineOptions);
+
+    supplyLogitsToKeep(sdk, result);
 
     // Flush pending throttled progress and clean up timer
     if (throttleTimer) {

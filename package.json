@@ -68,8 +68,8 @@
     "caniuse-lite": "^1.0.30001819"
   },
   "catalog": {
-    "@huggingface/transformers": "^4.3.1",
-    "@huggingface/transformers-structured-output": "^4.3.1",
+    "@huggingface/transformers": "^4.3.2",
+    "@huggingface/transformers-structured-output": "^4.3.2",
     "@mediapipe/tasks-text": "^1.1.1",
     "@mediapipe/tasks-vision": "^1.1.1",
     "@mediapipe/tasks-audio": "^1.1.1",
@@ -82,7 +82,7 @@
     "needle-rs": "^0.3.1",
     "@huggingface/inference": "^4.13.32",
     "ollama": "^0.6.4",
-    "openai": "^7.45.0",
+    "openai": "^7.45.1",
     "tiktoken": "^1.0.22",
     "js-tiktoken": "^1.0.21",
     "@modelcontextprotocol/sdk": "^1.32.2",

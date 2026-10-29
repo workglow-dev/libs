@@ -26,22 +26,6 @@ export interface TFMPWasmFileset {
 export const wasm_tasks = new Map<string, TFMPWasmFileset>();
 export const wasm_reference_counts = new Map<string, number>();
 
-/**
- * Pinned WASM versions per engine. CSP `script-src` is origin-scoped and cannot
- * pin a version, so an `@latest` URL would execute whatever npm's dist-tag
- * currently points at — a compromised `@mediapipe/tasks-*` publish would run
- * in every host app's renderer on next MediaPipe use.
- *
- * The WASM must match the bundled JS SDK — the JS↔WASM ABI is not stable
- * across versions — so each value is the resolved version of its
- * `@mediapipe/tasks-*` dependency, not merely a "recent" release. Drift is
- * caught by the version tests in `TFMP_GenaiHelpers.test.ts`.
- */
-export const TFMP_VISION_WASM_VERSION = "1.1.1";
-export const TFMP_TEXT_WASM_VERSION = "1.1.1";
-export const TFMP_AUDIO_WASM_VERSION = "1.1.1";
-export const TFMP_GENAI_WASM_VERSION = "0.10.30";
-
 export interface ITFMPWasmBaseUrls {
   readonly vision: string;
   readonly text: string;
@@ -49,11 +33,30 @@ export interface ITFMPWasmBaseUrls {
   readonly genai: string;
 }
 
+/**
+ * The installed `@mediapipe/tasks-*` version per engine, defined by `build.ts`
+ * when the package is bundled. The WASM must match the bundled JS SDK — the
+ * JS↔WASM ABI is not stable across versions — and CSP `script-src` cannot pin
+ * a version, so an unversioned URL would run whatever npm's dist-tag points at.
+ *
+ * Undefined when the source runs unbundled (tests, `use-source`); the URLs
+ * then fall back to the unversioned path, i.e. the latest release.
+ */
+declare const __TFMP_WASM_VERSIONS__: ITFMPWasmBaseUrls | undefined;
+
+const WASM_VERSIONS =
+  typeof __TFMP_WASM_VERSIONS__ === "undefined" ? undefined : __TFMP_WASM_VERSIONS__;
+
+function jsDelivrWasmUrl(sdk: string, version: string | undefined): string {
+  const pinned = version === undefined ? sdk : `${sdk}@${version}`;
+  return `https://cdn.jsdelivr.net/npm/@mediapipe/${pinned}/wasm`;
+}
+
 const DEFAULT_WASM_BASE_URLS: ITFMPWasmBaseUrls = {
-  vision: `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TFMP_VISION_WASM_VERSION}/wasm`,
-  text: `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-text@${TFMP_TEXT_WASM_VERSION}/wasm`,
-  audio: `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@${TFMP_AUDIO_WASM_VERSION}/wasm`,
-  genai: `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai@${TFMP_GENAI_WASM_VERSION}/wasm`,
+  vision: jsDelivrWasmUrl("tasks-vision", WASM_VERSIONS?.vision),
+  text: jsDelivrWasmUrl("tasks-text", WASM_VERSIONS?.text),
+  audio: jsDelivrWasmUrl("tasks-audio", WASM_VERSIONS?.audio),
+  genai: jsDelivrWasmUrl("tasks-genai", WASM_VERSIONS?.genai),
 };
 
 let currentWasmBaseUrls: ITFMPWasmBaseUrls = DEFAULT_WASM_BASE_URLS;
