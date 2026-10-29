@@ -6,7 +6,7 @@
 
 import { withCli } from "@workglow/cli";
 import type { StreamEvent } from "@workglow/task-graph";
-import { Workflow } from "@workglow/task-graph";
+import { retractionLength, Workflow } from "@workglow/task-graph";
 import type { Command } from "commander";
 import { EvalSweepTask, type EvalSweepTaskOutput } from "../evals/EvalSweepTask";
 import type { ColumnOptions, DatasetContext } from "../evals/types";
@@ -167,10 +167,10 @@ async function runEval(kind: EvalKind, flags: RunFlags, stores: EvalStores): Pro
   const onStreamChunk: ((event: StreamEvent) => void) | undefined = flags.stream
     ? (event) => {
         if (event.type === "text-delta") process.stderr.write(event.textDelta);
-        else if (event.type === "text-retract" && event.length > 0) {
+        else if (event.type === "text-retract" && retractionLength(event.length) > 0) {
           // Already written, so it cannot be erased: say it no longer counts.
           process.stderr.write(
-            `\n[attempt failed; the last ${event.length} characters are withdrawn]\n`
+            `\n[attempt failed; the last ${retractionLength(event.length)} characters are withdrawn]\n`
           );
         }
       }

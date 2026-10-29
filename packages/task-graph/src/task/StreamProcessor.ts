@@ -24,6 +24,7 @@ import {
   mergeUsage,
   REFUSAL_CATEGORY_OUTPUT_KEY,
   REFUSAL_OUTPUT_KEY,
+  retractionLength,
   retractText,
   USAGE_OUTPUT_KEY,
 } from "./StreamTypes";
@@ -317,7 +318,10 @@ export class StreamProcessor<Input extends TaskInput, Output extends TaskOutput>
             // holds now; the finish handler refuses that unless the producer
             // states the port's value itself.
             const routed = routers.get(event.port);
-            if (routed && event.length > 0) {
+            // Decided on what the fold removes, not on the raw length: a
+            // retraction that removes nothing (0.5, NaN) leaves the teed bytes
+            // exactly what the port holds.
+            if (routed && retractionLength(event.length) > 0) {
               routed.router.fail(
                 new TaskError(
                   `Task ${this.task.type} retracted text already written to the cache for port "${event.port}"; discarding that write.`

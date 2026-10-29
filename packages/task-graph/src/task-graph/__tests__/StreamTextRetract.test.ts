@@ -208,6 +208,20 @@ describe("StreamProcessor — text-retract", () => {
     expect(isCacheRef(output.text)).toBe(true);
   });
 
+  it("keeps a written sink when the retraction removes nothing, even with no accumulator", async () => {
+    const task = new ScriptedTextTask();
+    task.script = [delta("Hello"), retract(0.5), FINISH];
+    const { sink, settled } = makeSink();
+
+    const output = await runProcessor(task, {
+      shouldAccumulate: false,
+      refSinks: new Map([["text", sink]]),
+    });
+
+    expect(await settled).toBe("written");
+    expect(isCacheRef(output.text)).toBe(true);
+  });
+
   it("refuses to settle a sunk port it kept no copy of, unless the finish states it", async () => {
     const lost = new ScriptedTextTask();
     lost.script = [delta("Hello there"), retract(5), delta("world"), FINISH];

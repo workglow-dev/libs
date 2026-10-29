@@ -7,6 +7,7 @@
 import type { AgentApprovalMode, AgentTaskOutput, ChatMessage, ToolDefinition } from "@workglow/ai";
 import { AGENT_APPROVAL_OPT_OUT, AgentTask } from "@workglow/ai";
 import type { StreamEvent } from "@workglow/task-graph";
+import { retractionLength } from "@workglow/task-graph";
 import {
   globalServiceRegistry,
   HUMAN_CONNECTOR,
@@ -205,7 +206,7 @@ async function runTurn(
     } else if (
       event.type === "text-retract" &&
       (event.port ?? "text") === "text" &&
-      event.length > 0
+      retractionLength(event.length) > 0
     ) {
       // An attempt that failed partway takes its text back. What it printed is
       // already in the scrollback and cannot be erased, so say it no longer
