@@ -11,10 +11,12 @@ import type {
   ModelSearchTaskOutput,
 } from "@workglow/ai";
 import { filterLabeledModelsByQuery } from "@workglow/ai/provider-utils";
+import type { Capability } from "@workglow/ai/worker";
 import { stampEffortOptions } from "@workglow/ai/worker";
 import { getClient } from "./Xai_Client";
 import { XAI } from "./Xai_Constants";
 import { xaiEffortPolicy } from "./Xai_EffortPolicy";
+import { resolveXaiProfile, xaiProfileCapabilities } from "./Xai_ModelProfiles";
 
 interface XaiModelListItem {
   readonly label: string;
@@ -36,9 +38,11 @@ const XAI_FALLBACK: Array<{ label: string; value: string }> = [
   { label: "grok-2-image-1212", value: "grok-2-image-1212" },
 ];
 
-const XAI_IMAGE_MODELS: Array<{ value: string; capabilities: string[] }> = [
-  { value: "grok-2-image-1212", capabilities: ["image.generation"] },
-];
+/** What the profile table says a listed model serves; nothing for an id it does not recognize. */
+function listedCapabilities(modelName: string): Capability[] {
+  const { profile, recognized } = resolveXaiProfile(modelName);
+  return recognized ? [...xaiProfileCapabilities(profile)] : [];
+}
 
 async function listXaiModels(credentialKey: string): Promise<XaiModelListItem[]> {
   const client = await getClient({
@@ -54,27 +58,24 @@ async function listXaiModels(credentialKey: string): Promise<XaiModelListItem[]>
 }
 
 function mapModelList(models: XaiModelListItem[]): ModelSearchResultItem[] {
-  return models.map((m) => {
-    const imageEntry = XAI_IMAGE_MODELS.find((i) => i.value === m.value);
-    return {
-      id: m.value,
-      label: m.label,
-      description: m.description ?? "",
-      record: stampEffortOptions(
-        {
-          model_id: m.value,
-          provider: XAI,
-          title: m.value,
-          description: "",
-          capabilities: imageEntry?.capabilities ?? [],
-          provider_config: { model_name: m.value },
-          metadata: {},
-        },
-        xaiEffortPolicy({ provider: XAI, provider_config: { model_name: m.value } })
-      ),
-      raw: m,
-    };
-  });
+  return models.map((m) => ({
+    id: m.value,
+    label: m.label,
+    description: m.description ?? "",
+    record: stampEffortOptions(
+      {
+        model_id: m.value,
+        provider: XAI,
+        title: m.value,
+        description: "",
+        capabilities: listedCapabilities(m.value),
+        provider_config: { model_name: m.value },
+        metadata: {},
+      },
+      xaiEffortPolicy({ provider: XAI, provider_config: { model_name: m.value } })
+    ),
+    raw: m,
+  }));
 }
 
 /**

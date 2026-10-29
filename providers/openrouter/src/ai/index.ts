@@ -16,6 +16,12 @@ export * from "./registerOpenRouter";
 
 import { OPENROUTER_RUN_FN_SPECS } from "./common/OpenRouter_Capabilities";
 import { OPENROUTER_RUN_FNS } from "./common/OpenRouter_JobRunFns";
+import {
+  normalizeOpenRouterModelId,
+  OPENROUTER_MODEL_FAMILIES,
+  openRouterProfileCapabilities,
+  resolveOpenRouterProfile,
+} from "./common/OpenRouter_ModelProfiles";
 import { mapOpenRouterModels } from "./common/OpenRouter_ModelSearch";
 import { buildChatParams, buildOpenRouterExtras } from "./common/OpenRouter_RequestParams";
 import { mapOpenRouterUsage } from "./common/OpenRouter_Usage";
@@ -33,4 +39,8 @@ export const _testOnly = {
   buildOpenRouterExtras,
   mapOpenRouterModels,
   mapOpenRouterUsage,
+  OPENROUTER_MODEL_FAMILIES,
+  normalizeOpenRouterModelId,
+  resolveOpenRouterProfile,
+  openRouterProfileCapabilities,
 } as const;

@@ -11,6 +11,7 @@ import type {
   Usage,
 } from "@workglow/ai";
 import { createEstimatedOutputUsageReporter } from "@workglow/ai/provider-utils";
+import { ollamaThinkParam } from "./Ollama_EffortPolicy";
 import type { OllamaModelConfig } from "./Ollama_ModelSchema";
 import { getOllamaModelName } from "./Ollama_ModelUtil";
 import { mapOllamaUsage } from "./Ollama_Usage";
@@ -35,6 +36,7 @@ export function createOllamaTextRewriterStream(
         { role: "system", content: input.prompt },
         { role: "user", content: input.text },
       ],
+      ...ollamaThinkParam(model),
       stream: true,
     });
 

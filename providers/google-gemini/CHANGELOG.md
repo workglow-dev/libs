@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.14
+
+### Bug Fixes
+
+#### providers
+
+- send the effort dial from the Gemini and Anthropic rewriter and summary run-fns
+
+### Refactors
+
+#### google-gemini,xai,deepseek,typesafeai
+
+- one model profile per provider
+
 ## 0.6.13
 
 ### Features

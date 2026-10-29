@@ -6,7 +6,7 @@
 
 import type { AiProviderRunFn, TextSummaryTaskInput, TextSummaryTaskOutput } from "@workglow/ai";
 import { createUsageSnapshotEmitter } from "@workglow/ai/provider-utils";
-import { createGeminiClient, getModelName } from "./Gemini_Client";
+import { createGeminiClient, getModelName, resolveThinkingConfig } from "./Gemini_Client";
 import type { GeminiModelConfig } from "./Gemini_ModelSchema";
 import { emitGeminiRefusal, geminiRefusalCategory } from "./Gemini_Refusal";
 import { mapGeminiUsage } from "./Gemini_Usage";
@@ -18,12 +18,17 @@ export const Gemini_TextSummary_Stream: AiProviderRunFn<
 > = async (input, model, signal, emit) => {
   const ai = await createGeminiClient(model);
 
+  // This task sets no output cap, so there is nothing to pad for the budget.
+  // `chunk.text` below skips thought parts, so thinking stays out of the text.
+  const { thinkingConfig } = resolveThinkingConfig(model, undefined);
+
   const result = await ai.models.generateContentStream({
     model: getModelName(model),
     contents: [{ role: "user", parts: [{ text: input.text }] }],
     config: {
       abortSignal: signal ?? undefined,
       systemInstruction: "Summarize the following text concisely.",
+      ...(thinkingConfig !== undefined && { thinkingConfig }),
     },
   });
 

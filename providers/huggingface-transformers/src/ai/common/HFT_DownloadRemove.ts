@@ -64,9 +64,14 @@ async function deleteModelCacheFromBrowser(model_path: string): Promise<void> {
 async function deleteModelCacheFromFilesystem(model: HfTransformersOnnxModelConfig): Promise<void> {
   const { ModelRegistry } = await loadTransformersSDK();
   const { pipeline: pipelineType, model_path, dtype } = model.provider_config;
-  await ModelRegistry.clear_pipeline_cache(pipelineType, model_path, {
-    ...(dtype ? { dtype } : {}),
-  });
+  const options = dtype ? { dtype } : {};
+  // An image-text-to-text model is no pipeline task transformers.js knows; its
+  // files are the model's plus its tokenizer and processor.
+  if (pipelineType === "image-text-to-text") {
+    await ModelRegistry.clear_cache(model_path, options);
+  } else {
+    await ModelRegistry.clear_pipeline_cache(pipelineType, model_path, options);
+  }
 }
 
 export const HFT_DownloadRemove: AiProviderRunFn<

@@ -31,14 +31,46 @@
  * commit, which is why a dirty tree is refused here rather than noted. What
  * `format` and `rebuild` do to the tree afterwards is `require-clean-tree`'s
  * question.
+ *
+ * It also refuses while the latest finished run of the nightly type-drift
+ * guard on main is red. That guard never runs on a commit, so the check above
+ * cannot see it; `Nightly Bun parity & coverage` is informational and is not
+ * waited for.
  */
 import { spawnSync } from "node:child_process";
-import { evaluateCiRuns, type WorkflowRun } from "./lib/ciGate";
+import type { WorkflowRun } from "./lib/ciGate";
+import { evaluateCiRuns, evaluateNightlyGuard } from "./lib/ciGate";
 import { readTreeState, summarizePaths } from "./lib/cleanTree";
 
 /** Escape hatch, for a machine with no `gh` or an offline publish. */
 const OVERRIDE = "WORKGLOW_SKIP_CI_GATE";
 const WORKFLOW = "test.yml";
+/** The scheduled guard on main a release also waits for; see `evaluateNightlyGuard`. */
+const NIGHTLY_GUARD = "nightly-typecheck.yml";
+/** How many guard runs to read back through for one that finished. */
+const NIGHTLY_GUARD_RUNS = 30;
+
+/** `gh run list` with `filters`, newest first. */
+function listRuns(filters: readonly string[], sha: string): WorkflowRun[] {
+  const listed = spawnSync(
+    "gh",
+    ["run", "list", ...filters, "--json", "databaseId,status,conclusion,url"],
+    { encoding: "utf8" }
+  );
+
+  // A missing `gh` refuses rather than warns. Warning would make "no gh
+  // installed" a silent way past the gate, which is the failure this replaces.
+  if (listed.error !== undefined && (listed.error as NodeJS.ErrnoException).code === "ENOENT") {
+    fail(`\`gh\` is not installed, so the CI status for ${sha} cannot be read.`);
+  }
+  if (listed.status !== 0) fail(`\`gh run list\` failed: ${listed.stderr.trim()}`);
+
+  try {
+    return JSON.parse(listed.stdout) as WorkflowRun[];
+  } catch {
+    fail(`\`gh run list\` returned output that is not JSON: ${listed.stdout.slice(0, 200)}`);
+  }
+}
 
 function fail(message: string): never {
   console.error(`\n✖ ${message}\n`);
@@ -75,41 +107,31 @@ function main(): void {
     );
   }
 
-  const listed = spawnSync(
-    "gh",
-    [
-      "run",
-      "list",
-      "--commit",
-      sha,
-      "--workflow",
-      WORKFLOW,
-      "--json",
-      "databaseId,status,conclusion,url",
-    ],
-    { encoding: "utf8" }
-  );
-
-  // A missing `gh` refuses rather than warns. Warning would make "no gh
-  // installed" a silent way past the gate, which is the failure this replaces.
-  if (listed.error !== undefined && (listed.error as NodeJS.ErrnoException).code === "ENOENT") {
-    fail(`\`gh\` is not installed, so the CI status for ${sha} cannot be read.`);
-  }
-  if (listed.status !== 0) fail(`\`gh run list\` failed: ${listed.stderr.trim()}`);
-
-  let runs: WorkflowRun[];
-  try {
-    runs = JSON.parse(listed.stdout) as WorkflowRun[];
-  } catch {
-    fail(`\`gh run list\` returned output that is not JSON: ${listed.stdout.slice(0, 200)}`);
-  }
-
+  const runs = listRuns(["--commit", sha, "--workflow", WORKFLOW], sha);
   const verdict = evaluateCiRuns(runs, sha);
   if (!verdict.ok) fail(verdict.reason);
 
   // Says what was actually checked, so a green line in the publish log is
   // evidence rather than reassurance.
   console.log(`✔ Build & Test is green for ${sha}: ${verdict.run.url}`);
+
+  // The type-drift guard runs on a schedule against main, never on the commit,
+  // so a red one is invisible above. It once stayed red for a month; a release
+  // cut in that window ships the drift it exists to catch.
+  const nightly = evaluateNightlyGuard(
+    listRuns(
+      ["--workflow", NIGHTLY_GUARD, "--branch", "main", "--limit", String(NIGHTLY_GUARD_RUNS)],
+      sha
+    ),
+    NIGHTLY_GUARD,
+    NIGHTLY_GUARD_RUNS
+  );
+  if (!nightly.ok) fail(nightly.reason);
+  console.log(
+    nightly.run === undefined
+      ? `✔ ${NIGHTLY_GUARD} has no finished run on main to refuse on.`
+      : `✔ ${NIGHTLY_GUARD} is green on main: ${nightly.run.url}`
+  );
 }
 
 main();

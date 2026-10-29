@@ -1,5 +1,20 @@
 # @workglow/web
 
+## 0.6.14
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `@codemirror/view`: 6.43.15
+- `@lezer/common`: 1.5.4
+- `react-dom`: ^19.3.1
+- `react-resizable-panels`: ^4.15.0
+- `jsdom`: ^30.1.3
+- `vite`: ^8.3.5
+
 ## 0.6.13
 
 ### Features

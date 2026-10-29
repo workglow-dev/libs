@@ -8,6 +8,7 @@ import type { ModelConfig } from "@workglow/ai";
 import { AiImageOutputTask, ProviderUnsupportedFeatureError } from "@workglow/ai";
 
 import { OPENAI } from "./OpenAI_Constants";
+import { resolveOpenAiProfile } from "./OpenAI_ModelProfiles";
 
 /**
  * Registers the OpenAI per-provider image validator. Called at provider registration time
@@ -25,7 +26,9 @@ export function registerOpenAiImageValidator(): void {
       const modelName =
         (model.provider_config as { model_name?: string } | undefined)?.model_name ?? "";
       const additional = input["additionalImages"] as unknown[] | undefined;
-      if (modelName.startsWith("dall-e-2") && Array.isArray(additional) && additional.length > 0) {
+      const { profile } = resolveOpenAiProfile(modelName);
+      const singleImage = profile.kind === "image" && profile.editing === "single";
+      if (singleImage && Array.isArray(additional) && additional.length > 0) {
         throw new ProviderUnsupportedFeatureError(
           "additionalImages",
           model.model_id ?? modelName,

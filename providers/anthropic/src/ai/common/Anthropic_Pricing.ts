@@ -6,6 +6,7 @@
 
 import type { ModelPricing } from "@workglow/ai";
 import { resolveModelPricingFromTable } from "@workglow/ai";
+import { normalizeAnthropicModelId } from "./Anthropic_ModelId";
 
 /**
  * Public list pricing for Anthropic Claude models (USD per 1M tokens).
@@ -316,8 +317,19 @@ export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
 };
 
 /**
- * Resolve list pricing for an Anthropic Claude model id.
+ * Resolve list pricing for an Anthropic Claude model id. A card keyed by the id
+ * exactly as given (a dated snapshot) wins; otherwise the id's canonical
+ * spelling is priced, the one the profile table reads. Matching the raw id by
+ * substring instead would borrow a sibling's card for a spelling the walk
+ * cannot see past: `claude-opus-5-5[1m]` contains `claude-opus-5` on a dash
+ * boundary, and OpenRouter's `claude-3.5-sonnet` contains no key at all.
  */
 export function getAnthropicModelPricing(modelId: string | undefined): ModelPricing | undefined {
-  return resolveModelPricingFromTable(ANTHROPIC_PRICING, modelId, ["anthropic/"]);
+  if (modelId === undefined) return undefined;
+  const exact = modelId
+    .trim()
+    .toLowerCase()
+    .replace(/^anthropic\//, "");
+  if (Object.hasOwn(ANTHROPIC_PRICING, exact)) return ANTHROPIC_PRICING[exact];
+  return resolveModelPricingFromTable(ANTHROPIC_PRICING, normalizeAnthropicModelId(modelId));
 }

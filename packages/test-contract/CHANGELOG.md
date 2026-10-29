@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.14
+
+### Features
+
+#### huggingface-transformers
+
+- send images to vision-language models
+
+### Bug Fixes
+
+#### deepseek
+
+- name a tool's image in its result instead of sending it
+
+#### openai
+
+- stream reasoning summaries on the tool-calling reasoning port
+
+### Tests
+
+#### test-contract
+
+- skip Gemini's depleted-credit 402 on CI
+- wire six more providers into the tool-turn round trip
+- pin the tool-turn round trip as a shared provider contract
+
 ## 0.6.13
 
 _No changes in this package._

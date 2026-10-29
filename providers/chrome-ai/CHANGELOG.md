@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.14
+
+### Bug Fixes
+
+- hide an ambiguous URL authority; count Chrome's tool schemas
+
+#### ai
+
+- fail maxInputTokens closed on uncounted rounds; estimate usage for Cactus and Chrome AI
+
+### Refactors
+
+#### huggingface-transformers,tf-mediapipe,chrome-ai
+
+- one model profile per provider
+
 ## 0.6.13
 
 ### Features

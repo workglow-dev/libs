@@ -126,10 +126,11 @@ export const DeepSeek_ToolCalling_Stream: AiProviderRunFn<
 
   const tools = buildOpenAITools(input.tools);
   // DeepSeek's thinking models read their reasoning back on each turn of a
-  // tool-calling loop, and an image a tool returned has to ride a user message.
+  // tool-calling loop. They read text only, so an image a tool returned is
+  // named in its result rather than sent as an image part they would refuse.
   const messages = toOpenAIMessages(input, {
     replayReasoning: model?.provider_config?.replay_reasoning !== false,
-    toolImagesInUserMessage: true,
+    textOnlyToolResults: true,
   });
   const toolChoice = mapDeepSeekToolChoice(input.toolChoice);
 

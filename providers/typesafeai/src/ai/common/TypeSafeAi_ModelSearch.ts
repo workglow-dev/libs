@@ -11,8 +11,13 @@ import type {
   ModelSearchTaskOutput,
 } from "@workglow/ai";
 import { filterLabeledModelsByQuery } from "@workglow/ai/provider-utils";
+import type { Capability } from "@workglow/ai/worker";
 import { getClient } from "./TypeSafeAi_Client";
 import { TYPESAFEAI } from "./TypeSafeAi_Constants";
+import {
+  resolveTypeSafeAiProfile,
+  typeSafeAiProfileCapabilities,
+} from "./TypeSafeAi_ModelProfiles";
 
 interface TypeSafeModelListItem {
   readonly label: string;
@@ -38,7 +43,8 @@ const TYPESAFEAI_FALLBACK: Array<{ label: string; value: string; description: st
   {
     label: "jev-preview",
     value: "jev-preview",
-    description: "A preview version of `jev-latest`: should be better in most ways",
+    description:
+      "Preview the next version of Jev before it gets promoted to jev-latest. Most of the time this is the same as jev-latest",
   },
 ];
 
@@ -60,12 +66,19 @@ async function listTypeSafeModels(
   return models;
 }
 
+/** What the profile table says a listed model serves; nothing for an id it does not recognize. */
+function listedCapabilities(modelName: string): Capability[] {
+  const { profile, recognized } = resolveTypeSafeAiProfile(modelName);
+  return recognized ? [...typeSafeAiProfileCapabilities(profile)] : [];
+}
+
 /**
  * Build the record a search result seeds a catalog entry with.
  *
- * `capabilities` is left empty so the provider's own `inferCapabilities` fills
- * it, the same way it does for a record typed in by hand — stamping a list here
- * would make the two paths disagree about the same model.
+ * `capabilities` comes from the profile table, the same answer the provider's
+ * own `inferCapabilities` gives a record typed in by hand, so the two paths
+ * cannot disagree about the same model; an id the table does not recognize is
+ * left empty for inference to fill.
  */
 export function mapTypeSafeAiModels(models: TypeSafeModelListItem[]): ModelSearchResultItem[] {
   return models.map((m) => ({
@@ -77,7 +90,7 @@ export function mapTypeSafeAiModels(models: TypeSafeModelListItem[]): ModelSearc
       provider: TYPESAFEAI,
       title: m.value,
       description: m.description ?? "",
-      capabilities: [],
+      capabilities: listedCapabilities(m.value),
       provider_config: { model_name: m.value },
       metadata: {},
     },

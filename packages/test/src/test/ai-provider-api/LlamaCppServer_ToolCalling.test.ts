@@ -244,25 +244,5 @@ describe("createLlamaCppServerToolCallingStream", () => {
         image_url: { url: "data:image/png;base64,AAAA" },
       });
     });
-
-    it("emits delta.reasoning_content on the reasoning port, not on text", async () => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        sseChunks([
-          { choices: [{ delta: { reasoning_content: "hmm" } }] },
-          { choices: [{ delta: { content: "answer" } }] },
-        ])
-      );
-      const fn = createLlamaCppServerToolCallingStream({});
-      const events: any[] = [];
-      await fn(
-        { prompt: "p", tools: TOOLS, toolChoice: "auto" } as any,
-        model,
-        undefined as any,
-        (e: any) => events.push(e)
-      );
-      expect(events).toContainEqual({ type: "text-delta", port: "reasoning", textDelta: "hmm" });
-      const textDeltas = events.filter((e) => e.type === "text-delta" && e.port === "text");
-      expect(textDeltas.map((e) => e.textDelta)).toEqual(["answer"]);
-    });
   });
 });

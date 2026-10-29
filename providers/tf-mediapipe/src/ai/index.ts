@@ -10,26 +10,27 @@ export * from "./common/TFMP_Constants";
 export * from "./common/TFMP_ModelSchema";
 export * from "./common/TFMP_ModelSearch";
 export * from "./registerTensorFlowMediaPipe";
-export type { ITFMPWasmBaseUrls } from "./common/TFMP_Runtime";
-// Version constants only. The base-URL accessors deliberately are NOT re-exported
-// here: `./ai` and `./ai-runtime` are separate bundler entry points with no shared
+// Type only. The base-URL accessors deliberately are NOT re-exported here:
+// `./ai` and `./ai-runtime` are separate bundler entry points with no shared
 // chunk, so each carries its own copy of TFMP_Runtime's module state, and only the
 // `./ai-runtime` copy ever resolves a fileset. Exporting the setter here would hand
 // callers a knob that silently does nothing — import it from
 // `@workglow/tf-mediapipe/ai-runtime` instead.
-export {
-  TFMP_AUDIO_WASM_VERSION,
-  TFMP_GENAI_WASM_VERSION,
-  TFMP_TEXT_WASM_VERSION,
-  TFMP_VISION_WASM_VERSION,
-} from "./common/TFMP_Runtime";
+export type { ITFMPWasmBaseUrls } from "./common/TFMP_Runtime";
 
-import { TFMP_RUN_FN_SPECS } from "./common/TFMP_Capabilities";
+import { inferTfmpCapabilities, TFMP_RUN_FN_SPECS } from "./common/TFMP_Capabilities";
 import { toTexImageSource } from "./common/TFMP_Image";
 import { buildGenaiPrompt, resolveTfmpChatTemplate } from "./common/TFMP_ChatTemplate";
 import { resolveTfmpDelegate } from "./common/TFMP_Delegate";
 import { isGenaiBusy, withGenaiLock } from "./common/TFMP_GenaiRuntime";
 import { TFMP_PREVIEW_TASKS, TFMP_RUN_FNS } from "./common/TFMP_JobRunFns";
+import {
+  normalizeTfmpModelId,
+  resolveTfmpProfile,
+  resolveTfmpRecordProfile,
+  TFMP_MODEL_FAMILIES,
+  tfmpProfileCapabilities,
+} from "./common/TFMP_ModelProfiles";
 import { optionsMatch } from "./common/TFMP_Runtime";
 import { extractJsonFromText } from "./common/TFMP_StructuredGeneration";
 import { TensorFlowMediaPipeQueuedProvider } from "./TensorFlowMediaPipeQueuedProvider";
@@ -42,6 +43,12 @@ export const _testOnly = {
   TFMP_RUN_FN_SPECS,
   TFMP_RUN_FNS,
   TFMP_PREVIEW_TASKS,
+  TFMP_MODEL_FAMILIES,
+  normalizeTfmpModelId,
+  resolveTfmpProfile,
+  resolveTfmpRecordProfile,
+  tfmpProfileCapabilities,
+  inferTfmpCapabilities,
   toTexImageSource,
   buildGenaiPrompt,
   resolveTfmpChatTemplate,

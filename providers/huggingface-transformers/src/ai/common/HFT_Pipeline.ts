@@ -4,7 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { DynamicCache, PretrainedModelOptions, ProgressInfo } from "@huggingface/transformers";
+import type {
+  DynamicCache,
+  PreTrainedModel,
+  PreTrainedTokenizer,
+  PretrainedModelOptions,
+  Processor,
+  ProgressInfo,
+} from "@huggingface/transformers";
 import { isBrowserLike } from "@workglow/ai/provider-utils";
 import type { StreamPhase } from "@workglow/task-graph";
 import { getLogger } from "@workglow/util/worker";
@@ -521,8 +528,27 @@ export function abortableFetch(url: string, options?: RequestInit): Promise<Resp
   );
 }
 
+/**
+ * A vision-language model, loaded as its processor and model. transformers.js
+ * has no `pipeline()` for image-text-to-text, so {@link getPipeline} assembles
+ * one: the processor turns the rendered prompt and its images into model
+ * inputs, and `model.generate()` decodes. `tokenizer` is the processor's own,
+ * for the streamer and for a turn that carries no image.
+ */
+export interface HftVisionLanguageModel {
+  readonly task: "image-text-to-text";
+  readonly processor: Processor;
+  readonly tokenizer: PreTrainedTokenizer;
+  readonly model: PreTrainedModel;
+}
+
+/** What {@link getPipeline} caches: a transformers.js pipeline, or a vision-language model. */
+export type HftLoadedPipeline =
+  | Awaited<ReturnType<TransformersSDKModule["pipeline"]>>
+  | HftVisionLanguageModel;
+
 /** @internal Cached pipelines keyed by {@link getPipelineCacheKey}. Exported for unit tests. */
-export const pipelines = new Map<string, Awaited<ReturnType<TransformersSDKModule["pipeline"]>>>();
+export const pipelines = new Map<string, HftLoadedPipeline>();
 
 /**
  * Upper bound on cached pipelines. Each pipeline pins an ONNX session (WASM
@@ -785,8 +811,6 @@ const IMAGE_PIPELINE_TYPES = new Set([
   "image-to-text",
   "image-feature-extraction",
   "zero-shot-image-classification",
-  "depth-estimation",
-  "mask-generation",
 ]);
 
 /**
@@ -908,6 +932,25 @@ async function enforcePipelineCacheCap(exceptKey: string): Promise<void> {
     }
     getLogger().debug("HFT pipeline cache evicted LRU entry", { evicted });
   }
+}
+
+/**
+ * Supplies `logits_to_keep` to decoders that declare it. Transformers.js fills
+ * only `num_logits_to_keep`, so LFM3's ONNX graphs, which name the input
+ * without the prefix, fail every step with "Missing the following inputs". One
+ * keeps only the last position's logits, the one generation samples from.
+ */
+function supplyLogitsToKeep(
+  sdk: { Tensor: new (...args: any[]) => unknown },
+  loaded: unknown
+): void {
+  const model = (loaded as { model?: any } | undefined)?.model;
+  const session = model?.sessions?.model ?? model?.sessions?.decoder_model_merged;
+  const inputNames: readonly string[] | undefined = session?.inputNames;
+  if (!inputNames?.includes("logits_to_keep") || inputNames.includes("num_logits_to_keep")) return;
+  const forward = model.forward.bind(model);
+  model.forward = (inputs: Record<string, unknown>) =>
+    forward({ logits_to_keep: new sdk.Tensor("int64", [1n], [1]), ...inputs });
 }
 
 /**
@@ -1126,14 +1169,19 @@ const doGetPipeline = async (
 
   const pipelineType = model.provider_config.pipeline;
 
-  const { pipeline } = await loadTransformersSDK();
+  const sdk = await loadTransformersSDK();
 
   const logger = getLogger();
   const pipelineTimerLabel = `hft:pipeline:${cacheKey}`;
   logger.time(pipelineTimerLabel, { pipelineType, modelPath });
 
   try {
-    const result = await pipeline(pipelineType, model.provider_config.model_path, pipelineOptions);
+    const result: HftLoadedPipeline =
+      pipelineType === "image-text-to-text"
+        ? await loadVisionLanguageModel(sdk, modelPath, pipelineOptions)
+        : await sdk.pipeline(pipelineType, modelPath, pipelineOptions);
+
+    supplyLogitsToKeep(sdk, result);
 
     // Flush pending throttled progress and clean up timer
     if (throttleTimer) {
@@ -1160,7 +1208,10 @@ const doGetPipeline = async (
     // means the model cache is incomplete (e.g. preprocessor_config.json was not
     // downloaded, likely because a previous download was aborted). Throw a specific
     // error so the job queue can retry and re-fetch the missing files.
-    if (IMAGE_PIPELINE_TYPES.has(pipelineType) && (result as any).processor == null) {
+    if (
+      IMAGE_PIPELINE_TYPES.has(pipelineType) &&
+      (result as { processor?: unknown }).processor == null
+    ) {
       throw new Error(
         `${HFT_NULL_PROCESSOR_PREFIX} Image processor not initialized for ` +
           `${pipelineType}/${modelPath}. Model cache may be incomplete.`
@@ -1188,3 +1239,59 @@ const doGetPipeline = async (
     random.seed(model.provider_config.seed ?? undefined);
   }
 };
+
+/**
+ * Load a vision-language model as processor + `AutoModelForImageTextToText`.
+ *
+ * Two refusals come first, each from a file of a few kilobytes, so a model that
+ * cannot hold a conversation is turned away before its weights download:
+ *
+ * - `config.json`'s `model_type` must be one `AutoModelForImageTextToText`
+ *   loads. An any-to-any model such as Janus (`multi_modality`) is not, and
+ *   would otherwise fail deep in the weight load with "Unsupported model type".
+ * - The processor must carry a tokenizer and a chat template, its own or its
+ *   tokenizer's. Florence-2, Moondream and PaliGemma load as image-text-to-text
+ *   but ship no template: they are driven by task prompts (`<CAPTION>`, `caption en`), not by a
+ *   conversation, and every turn would fail rendering one.
+ *
+ * A processor without an image processor means the cache is incomplete
+ * (`preprocessor_config.json` never arrived), which is reported as
+ * {@link HFT_NULL_PROCESSOR_PREFIX} so the job retries and re-fetches it. The model loads last and alone, so nothing is
+ * left holding ONNX sessions when an earlier step fails; it is what reports the
+ * aggregate `progress_total` a download is measured by.
+ */
+async function loadVisionLanguageModel(
+  sdk: TransformersSDKModule,
+  modelPath: string,
+  options: PretrainedModelOptions
+): Promise<HftVisionLanguageModel> {
+  const small = { revision: options.revision, progress_callback: options.progress_callback };
+  const config = await sdk.AutoConfig.from_pretrained(modelPath, small);
+  const modelType = config.model_type ?? "unknown";
+  if (!sdk.AutoModelForImageTextToText.MODEL_CLASS_MAPPINGS.some((m) => m.has(modelType))) {
+    throw new Error(
+      `"${modelPath}" is a ${modelType} model, which transformers.js does not load as ` +
+        `image-text-to-text, so it cannot be used with pipeline "image-text-to-text".`
+    );
+  }
+  const processor = await sdk.AutoProcessor.from_pretrained(modelPath, small);
+  if (processor.image_processor == null) {
+    throw new Error(
+      `${HFT_NULL_PROCESSOR_PREFIX} Image processor not initialized for ` +
+        `image-text-to-text/${modelPath}. Model cache may be incomplete.`
+    );
+  }
+  // A processor with no tokenizer is not a cache gap: a chat model's processor
+  // class always bundles one, and the generic processor a prompt-driven model
+  // gets (Moondream) carries only what its config lists.
+  const tokenizer = processor.tokenizer;
+  if (tokenizer == null || (!processor.chat_template && !tokenizer.chat_template)) {
+    throw new Error(
+      `"${modelPath}" (${modelType}) ships no chat template, so it cannot hold the ` +
+        `conversation chat, text generation and tool calling send it: models like it are ` +
+        `driven by task prompts rather than by chat.`
+    );
+  }
+  const model = await sdk.AutoModelForImageTextToText.from_pretrained(modelPath, options);
+  return { task: "image-text-to-text", processor, tokenizer, model };
+}

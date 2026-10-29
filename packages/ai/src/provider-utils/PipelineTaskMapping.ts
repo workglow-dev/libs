@@ -24,10 +24,8 @@ const TASK_TO_PIPELINES: Record<string, string[]> = {
   ImageClassificationTask: ["image-classification", "zero-shot-image-classification"],
   ImageEmbeddingTask: ["image-feature-extraction"],
   ImageSegmentationTask: ["image-segmentation"],
-  ImageToImageTask: ["image-to-image"],
   ImageToTextTask: ["image-to-text"],
   ObjectDetectionTask: ["object-detection", "zero-shot-object-detection"],
-  DepthEstimationTask: ["depth-estimation"],
   AudioClassificationTask: ["audio-classification"],
   SpeechRecognitionTask: ["automatic-speech-recognition"],
 };

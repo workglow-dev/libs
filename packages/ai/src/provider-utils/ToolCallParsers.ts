@@ -1167,6 +1167,9 @@ const MODEL_PARSERS: Record<string, ReadonlyArray<ParserFn>> = {
   granite: [parseGranite, parseHermes],
   solar: [parseHermes],
   jamba: [parseJamba, parseHermes],
+  // LFM3 renders tool calls as Qwen-style XML, and must precede `liquid` and
+  // `lfm`, which also match a `LiquidAI/LFM3-…` path.
+  lfm3: [parseQwen35Xml, parseLiquid, parseHermes],
   liquid: [parseLiquid, parseHermes],
   lfm: [parseLiquid, parseHermes],
   yi: [parseHermes, parseLlama],

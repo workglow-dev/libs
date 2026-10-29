@@ -16,8 +16,17 @@ export { llamaCppEffortPolicy } from "./common/LlamaCpp_EffortPolicy";
 // from `@workglow/node-llama-cpp/ai-runtime` instead.
 export * from "./registerLlamaCpp";
 
-import { LLAMACPP_RUN_FN_SPECS } from "./common/LlamaCpp_Capabilities";
+import { inferLlamaCppCapabilities, LLAMACPP_RUN_FN_SPECS } from "./common/LlamaCpp_Capabilities";
 import { LLAMACPP_RUN_FNS } from "./common/LlamaCpp_JobRunFns";
+import {
+  LLAMACPP_MODEL_FAMILIES,
+  llamaCppModelNames,
+  llamaCppProfileCapabilities,
+  llamaCppQwenVariation,
+  normalizeLlamaCppModelId,
+  resolveLlamaCppModelProfile,
+  resolveLlamaCppProfile,
+} from "./common/LlamaCpp_ModelProfiles";
 import { LlamaCppQueuedProvider } from "./LlamaCppQueuedProvider";
 
 /**
@@ -27,4 +36,12 @@ export const _testOnly = {
   LlamaCppQueuedProvider,
   LLAMACPP_RUN_FN_SPECS,
   LLAMACPP_RUN_FNS,
+  LLAMACPP_MODEL_FAMILIES,
+  normalizeLlamaCppModelId,
+  resolveLlamaCppProfile,
+  resolveLlamaCppModelProfile,
+  llamaCppModelNames,
+  llamaCppProfileCapabilities,
+  llamaCppQwenVariation,
+  inferLlamaCppCapabilities,
 } as const;

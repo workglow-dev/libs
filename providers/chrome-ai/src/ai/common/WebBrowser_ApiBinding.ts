@@ -6,6 +6,7 @@
 
 import { PermanentJobError } from "@workglow/job-queue";
 import type { WebBrowserModelConfig } from "./WebBrowser_ModelSchema";
+import { resolveWebBrowserProfile, webBrowserModelName } from "./WebBrowser_ModelProfiles";
 
 function getApi<T>(name: string, global: T | undefined): T {
   if (!global) {
@@ -69,57 +70,49 @@ function languageModelFactory(): typeof LanguageModel | undefined {
   return ai?.languageModel;
 }
 
-function modelIdHint(model: WebBrowserModelConfig | undefined): string {
-  const pc = model?.provider_config as { model_name?: string } | undefined;
-  return String(model?.model_id ?? pc?.model_name ?? "").toLowerCase();
-}
-
 /**
  * Maps a {@link WebBrowserModelConfig} to the Chrome Built-in AI factory that owns
- * its on-device weights (Prompt / Summarizer / Translator / Rewriter / Language Detector).
+ * its on-device weights (Prompt / Summarizer / Translator / Rewriter / Language Detector),
+ * as the model's profile names it. An id no family names binds the Prompt API.
  */
 export function resolveWebBrowserApi(
   model: WebBrowserModelConfig | undefined
 ): WebBrowserApiBinding {
-  const id = modelIdHint(model);
-
-  if (/summariz/.test(id)) {
-    return {
-      apiName: "Summarizer",
-      factory: getApi("Summarizer", typeof Summarizer !== "undefined" ? Summarizer : undefined),
-    };
+  const { api } = resolveWebBrowserProfile(webBrowserModelName(model)).profile;
+  switch (api) {
+    case "Summarizer":
+      return {
+        apiName: "Summarizer",
+        factory: getApi("Summarizer", typeof Summarizer !== "undefined" ? Summarizer : undefined),
+      };
+    case "Rewriter":
+      return {
+        apiName: "Rewriter",
+        factory: getApi("Rewriter", typeof Rewriter !== "undefined" ? Rewriter : undefined),
+      };
+    case "Translator":
+      return {
+        apiName: "Translator",
+        factory: getApi("Translator", typeof Translator !== "undefined" ? Translator : undefined),
+        availabilityOptions: { ...DEFAULT_TRANSLATOR_LANGS },
+        createOptions: { ...DEFAULT_TRANSLATOR_LANGS },
+      };
+    case "LanguageDetector":
+      return {
+        apiName: "LanguageDetector",
+        factory: getApi(
+          "LanguageDetector",
+          typeof LanguageDetector !== "undefined" ? LanguageDetector : undefined
+        ),
+      };
+    case "LanguageModel":
+      return {
+        apiName: "LanguageModel",
+        factory: getApi("LanguageModel", languageModelFactory()),
+        availabilityOptions: { ...LANGUAGE_MODEL_AVAILABILITY_OPTIONS },
+        createOptions: {},
+      };
   }
-  if (/rewrit/.test(id)) {
-    return {
-      apiName: "Rewriter",
-      factory: getApi("Rewriter", typeof Rewriter !== "undefined" ? Rewriter : undefined),
-    };
-  }
-  if (/translat/.test(id)) {
-    return {
-      apiName: "Translator",
-      factory: getApi("Translator", typeof Translator !== "undefined" ? Translator : undefined),
-      availabilityOptions: { ...DEFAULT_TRANSLATOR_LANGS },
-      createOptions: { ...DEFAULT_TRANSLATOR_LANGS },
-    };
-  }
-  if (/language[-_]?detect/.test(id)) {
-    return {
-      apiName: "LanguageDetector",
-      factory: getApi(
-        "LanguageDetector",
-        typeof LanguageDetector !== "undefined" ? LanguageDetector : undefined
-      ),
-    };
-  }
-
-  const factory = languageModelFactory();
-  return {
-    apiName: "LanguageModel",
-    factory: getApi("LanguageModel", factory),
-    availabilityOptions: { ...LANGUAGE_MODEL_AVAILABILITY_OPTIONS },
-    createOptions: {},
-  };
 }
 
 export function isWebBrowserModelCached(availability: Availability): boolean {

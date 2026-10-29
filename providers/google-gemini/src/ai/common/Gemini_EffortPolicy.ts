@@ -6,37 +6,21 @@
 
 import {
   EFFORT_POLICY_NONE,
-  makeEffortPolicy,
+  makeProfileEffortPolicy,
   MODEL_EFFORTS,
   type ModelEffortPolicy,
   type ModelEffortPolicyFn,
 } from "@workglow/ai/worker";
+import { resolveGeminiProfile } from "./Gemini_ModelProfiles";
 
 const TEXT = { supported: MODEL_EFFORTS, default: "none" } as const satisfies ModelEffortPolicy;
 
 /**
- * Ids Gemini serves as image generation rather than text.
- *
- * Exported because pricing needs the same answer and must not keep a second
- * copy of it: these bill per image, so a per-1M-token card borrowed from a
- * text sibling is a fabricated unit. The table names several of them
- * explicitly, and an explicit entry still wins — this only stops the substring
- * walk reaching for a neighbour's card.
+ * Read off the profile's `thinks`. Gemini rejects `thinkingConfig` on the models
+ * that do not think — embedding and image ids, and chat models before 2.5 — so
+ * only a thinking chat model takes the dial.
  */
-export const GEMINI_IMAGE_MODELS: readonly RegExp[] = [/^imagen-/i, /^gemini-.*-image(?:-|$)/i];
-
-/**
- * Gemini rejects `thinkingConfig` on the models that do not think, so an id
- * outside the `gemini-` text families keeps the plain path — including the
- * embedding and image ids denied above, which share that prefix.
- */
-export const geminiEffortPolicy: ModelEffortPolicyFn = makeEffortPolicy({
-  rules: [
-    {
-      when: [/^gemini-embedding/i, /^text-embedding/i, /^embedding-/i, ...GEMINI_IMAGE_MODELS],
-      policy: EFFORT_POLICY_NONE,
-    },
-    { when: /^gemini-/i, policy: TEXT },
-  ],
-  fallback: EFFORT_POLICY_NONE,
-});
+export const geminiEffortPolicy: ModelEffortPolicyFn = makeProfileEffortPolicy(
+  resolveGeminiProfile,
+  (profile) => (profile.kind === "chat" && profile.thinks ? TEXT : EFFORT_POLICY_NONE)
+);

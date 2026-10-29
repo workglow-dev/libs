@@ -156,6 +156,19 @@ export async function registerHuggingfaceLocalModels(): Promise<void> {
       metadata: {},
     },
     {
+      model_id: "onnx:LiquidAI/LFM3-1.7B-ONNX:q4f16",
+      title: "Liquid LFM3 1.7B",
+      description: "LiquidAI/LFM3-1.7B-ONNX quantized to q4f16",
+      capabilities: ["text.generation", "tool-use"],
+      provider: HF_TRANSFORMERS_ONNX,
+      provider_config: {
+        pipeline: "text-generation",
+        model_path: "LiquidAI/LFM3-1.7B-ONNX",
+        dtype: "q4f16",
+      },
+      metadata: {},
+    },
+    {
       model_id: "onnx:Xenova/distilgpt2:q8",
       title: "distilgpt2",
       description: "Xenova/distilgpt2 quantized to 8bit",

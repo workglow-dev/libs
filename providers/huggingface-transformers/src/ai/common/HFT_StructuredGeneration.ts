@@ -21,6 +21,7 @@ import {
   withHftPipelineInUse,
 } from "./HFT_Pipeline";
 import { createStreamingTextStreamer } from "./HFT_Streaming";
+import { refuseHftVisionModel } from "./HFT_VisionLanguage";
 
 /**
  * Decode is greedy unless the caller asks for sampling: `temperature` only
@@ -32,6 +33,7 @@ export const HFT_StructuredGeneration: AiProviderRunFn<
   StructuredGenerationTaskOutput,
   HfTransformersOnnxModelConfig
 > = async (input, model, signal, emit) => {
+  refuseHftVisionModel(model!, "HFT_StructuredGeneration");
   await withHftPipelineInUse(getPipelineCacheKey(model!), async () => {
     const generateText = (await getPipeline(model!, emit, {}, signal)) as TextGenerationPipeline;
     const { TextStreamer, InterruptableStoppingCriteria } = await loadTransformersSDK();
@@ -116,9 +118,11 @@ export const HFT_StructuredGeneration: AiProviderRunFn<
       logits_processor: processor,
     });
 
-    emit({
-      type: "finish",
-      data: { object: json.finishObject() } as StructuredGenerationTaskOutput,
-    });
+    // The parser's last delta can lag the chunk that closed the object (a final
+    // `"}` arrives as one piece), and the task's accumulated deltas win over the
+    // finish payload, so the authoritative object goes out as a delta first.
+    const object = json.finishObject();
+    emit({ type: "object-delta", port: "object", objectDelta: object });
+    emit({ type: "finish", data: { object } as StructuredGenerationTaskOutput });
   });
 };

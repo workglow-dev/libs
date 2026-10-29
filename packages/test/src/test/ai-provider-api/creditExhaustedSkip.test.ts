@@ -102,6 +102,36 @@ describe("isCreditExhaustedError", () => {
     expect(isCreditExhaustedError(new Error("HF_INFERENCE lookup failed (HTTP 402)"))).toBe(true);
   });
 
+  // Gemini returns its billing failure as a JSON body: the 402 survives only as
+  // `"code":402`, and the wording is "prepayment credits are depleted".
+  it.each([
+    'Provider GOOGLE_GEMINI failed for TextEmbeddingTask: {"error":{"code":402,"message":"Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing. Learn more at https://ai.google.dev/gemini-api/docs/billing#prepay. ","status":"RESOURCE_EXHAUSTED"}}',
+    'gemini-2.5-flash-image: {"error":{"code":402,"message":"Your prepayment credits are depleted.","status":"RESOURCE_EXHAUSTED"}}',
+  ])("recognizes Gemini's depleted prepayment credits: %s", (message) => {
+    expect(isCreditExhaustedError(new Error(message))).toBe(true);
+  });
+
+  it('recognizes a JSON body\'s "code": 402 whatever its message says', () => {
+    expect(isCreditExhaustedError(new Error('{"error": {"code": 402, "message": "denied"}}'))).toBe(
+      true
+    );
+  });
+
+  it("recognizes HuggingFace's 'no remaining credits' wording", () => {
+    expect(
+      isCreditExhaustedError(
+        new Error("You have no remaining credits. Purchase credits to continue using this model.")
+      )
+    ).toBe(true);
+  });
+
+  it("does not read another JSON error code as a 402", () => {
+    expect(
+      isCreditExhaustedError(new Error('{"error":{"code":400,"message":"bad request"}}'))
+    ).toBe(false);
+    expect(isCreditExhaustedError(new Error('{"error":{"code":4021,"message":"x"}}'))).toBe(false);
+  });
+
   it("walks error.cause so an SDK wrapper still matches", () => {
     const cause = Object.assign(new Error("not enough credits"), { status: 402 });
     expect(isCreditExhaustedError(new Error("HF inference failed", { cause }))).toBe(true);

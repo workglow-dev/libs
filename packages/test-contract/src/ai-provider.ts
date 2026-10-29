@@ -11,13 +11,19 @@
 
 export * from "./ai-provider/fixtures";
 export * from "./ai-provider/runAiProviderConformance";
+export * from "./ai-provider/runToolTurnConformance";
+export * from "./ai-provider/toolTurnFixture";
+export * from "./ai-provider/toolTurnTypes";
 export * from "./ai-provider/types";
 export * from "./ai-provider/assertions/capabilityHonesty";
 export * from "./ai-provider/assertions/dispose";
 export * from "./ai-provider/assertions/inferAdvertisesRegistered";
 export * from "./ai-provider/assertions/inferServesInferred";
+export * from "./ai-provider/assertions/nativeTurn";
 export * from "./ai-provider/assertions/noFinishAccumulation";
 export * from "./ai-provider/assertions/pricingMatchesModality";
+export * from "./ai-provider/assertions/reasoningPort";
+export * from "./ai-provider/assertions/reasoningRoundTrip";
 export * from "./ai-provider/assertions/registryCoverage";
 export * from "./ai-provider/assertions/sessionReuse";
 export * from "./ai-provider/assertions/signalHonoring";
@@ -25,4 +31,5 @@ export * from "./ai-provider/assertions/structuredGeneration";
 export * from "./ai-provider/assertions/textGenerationSmoke";
 export * from "./ai-provider/assertions/toolCallAccumulator";
 export * from "./ai-provider/assertions/toolCallMultiTurn";
+export * from "./ai-provider/assertions/toolResultShape";
 export * from "./ai-provider/assertions/usageNormalization";

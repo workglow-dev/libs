@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.14
+
+### Bug Fixes
+
+#### tf-mediapipe,xai
+
+- read a MediaPipe URL's task directory; retired Grok betas do not reason
+
+#### anthropic,tf-mediapipe,xai
+
+- review findings on the model profiles
+
+### Refactors
+
+#### google-gemini,xai,deepseek,typesafeai
+
+- one model profile per provider
+
 ## 0.6.13
 
 ### Features

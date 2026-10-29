@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.14
+
+### Bug Fixes
+
+#### deepseek
+
+- name a tool's image in its result instead of sending it
+
+### Refactors
+
+#### google-gemini,xai,deepseek,typesafeai
+
+- one model profile per provider
+
 ## 0.6.13
 
 ### Features

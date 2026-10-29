@@ -1,5 +1,16 @@
 # @workglow/tasks
 
+## 0.6.14
+
+### Bug Fixes
+
+- hide an ambiguous URL authority; count Chrome's tool schemas
+- address code-review findings on the branch
+
+#### tasks
+
+- redact credentials from URLs that do not parse, and from the fragment
+
 ## 0.6.13
 
 ### Bug Fixes

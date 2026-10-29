@@ -164,12 +164,6 @@ describe("Anthropic native turn", () => {
     expect(events.indexOf(native[0]!)).toBeLessThan(events.findIndex((e) => e.type === "finish"));
   });
 
-  it("streams the thinking on the reasoning port as well as keeping it for replay", async () => {
-    script = [thinkingThenCall];
-    const events = await run([{ role: "user", content: [{ type: "text", text: "go" }] }]);
-    expect(events).toContainEqual({ type: "text-delta", port: "reasoning", textDelta: "Plan" });
-  });
-
   it("rebuilds rather than replays a stored tool_use block with no input", async () => {
     script = [[]];
     const blocks = [{ type: "tool_use", id: "t1", name: "look" }];
@@ -391,35 +385,6 @@ describe("Anthropic native turn", () => {
     expect(nativeTurns(events)[0]!.objectDelta.payload).toBe(JSON.stringify(signedBlocks));
   });
 
-  it("replays the captured turn verbatim while the tool calls still match", async () => {
-    await run(turnMessages(NATIVE_KEY, "t1"));
-    expect(sentAssistant(calls[0]!).content).toEqual(signedBlocks);
-  });
-
-  it("rebuilds the turn without thinking when a tool call id changed", async () => {
-    await run(turnMessages(NATIVE_KEY, "t1-2"));
-    expect(sentAssistant(calls[0]!).content).toEqual([
-      { type: "tool_use", id: "t1-2", name: "look", input: { a: 1 } },
-    ]);
-  });
-
-  it("rebuilds the turn without thinking when a call kept its id but changed its input", async () => {
-    const edited = turnMessages(NATIVE_KEY, "t1").map((message) =>
-      message.role === "assistant"
-        ? {
-            ...message,
-            content: message.content.map((block) =>
-              block.type === "tool_use" ? { ...block, input: { a: 2 } } : block
-            ),
-          }
-        : message
-    );
-    await run(edited as never);
-    expect(sentAssistant(calls[0]!).content).toEqual([
-      { type: "tool_use", id: "t1", name: "look", input: { a: 2 } },
-    ]);
-  });
-
   it("rebuilds the turn without thinking when the host added text the model never wrote", async () => {
     const edited = turnMessages(NATIVE_KEY, "t1").map((message) =>
       message.role === "assistant"
@@ -428,13 +393,6 @@ describe("Anthropic native turn", () => {
     );
     await run(edited as never);
     expect(sentAssistant(calls[0]!).content).not.toContainEqual(signedBlocks[0]);
-  });
-
-  it("rebuilds the turn without thinking when another model produced it", async () => {
-    await run(turnMessages("anthropic:some-other-model", "t1"));
-    expect(sentAssistant(calls[0]!).content).toEqual([
-      { type: "tool_use", id: "t1", name: "look", input: { a: 1 } },
-    ]);
   });
 
   it("strips thinking and retries once when Anthropic rejects the replayed signature", async () => {

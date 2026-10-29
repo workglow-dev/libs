@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.14
+
+### Build
+
+- type-check the tests and agent-eval with bun check instead of tsc
+
 ## 0.6.13
 
 _No changes in this package._

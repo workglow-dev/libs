@@ -1,5 +1,21 @@
 # @workglow/cli
 
+## 0.6.14
+
+### Features
+
+#### cli
+
+- register WebSearchTask with no search provider
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `preact`: ^11.0.2
+
 ## 0.6.13
 
 ### Features

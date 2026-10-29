@@ -22,6 +22,7 @@ import {
   withHftPipelineInUse,
 } from "./HFT_Pipeline";
 import { buildHFTMessages, mapHFTTools } from "./HFT_ToolCalling";
+import { isHftVisionModel } from "./HFT_VisionLanguage";
 
 /**
  * The `startsWith` anchor for prefix-rewind KV reuse: the exact text the
@@ -129,6 +130,13 @@ export const HFT_CacheCheckpoint: AiProviderRunFn<
   const prefix = sessionContext?.prefix ?? {};
   if (!checkpointId) {
     throw new Error("HFT_CacheCheckpoint: sessionContext.sessionId (checkpoint id) is required.");
+  }
+  if (isHftVisionModel(model!)) {
+    // A vision-language model keeps no KV session (see generateHftVision), so
+    // there is nothing to warm. The handle still stands for its prefix — the
+    // registry entry carries it, and every consumer renders it in full.
+    emit({ type: "finish", data: { checkpoint: checkpointId } });
+    return;
   }
   await withHftPipelineInUse(getPipelineCacheKey(model!), async () => {
     const generateText = (await getPipeline(model!, emit, {}, signal)) as TextGenerationPipeline;

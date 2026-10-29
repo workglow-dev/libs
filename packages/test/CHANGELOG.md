@@ -1,5 +1,125 @@
 # @workglow/test
 
+## 0.6.14
+
+### Features
+
+#### workglow
+
+- re-export @workglow/web-search from the meta package
+
+#### huggingface-transformers
+
+- send images to vision-language models
+- constrain forced tool calls with a grammar
+
+### Bug Fixes
+
+- hide an ambiguous URL authority; count Chrome's tool schemas
+- read main's model profiles where the branch read raw ids
+- refuse a truncated guard history; admit only the forced tool's call
+- address code-review findings on the branch
+
+#### ai
+
+- send no submit reminder a turn cannot answer
+- report an answered agent turn as answered under an unmeasured budget
+- fail maxInputTokens closed on uncounted rounds; estimate usage for Cactus and Chrome AI
+
+#### huggingface-transformers
+
+- offer only pipelines a run-fn serves, and infer the ones it does
+- refuse vision models that cannot chat before their weights load
+- write history tool calls in the chat-template function form
+- name a tool's image in the result a text-only model reads
+- carry usage across the grammar fallback
+- validate tool calls against the checkpoint prefix's tools
+- harden constrained tool-call decoding
+
+#### tasks
+
+- redact credentials from URLs that do not parse, and from the fragment
+
+#### openai
+
+- stream a compatible server's raw reasoning on the reasoning port
+- stream reasoning summaries on the tool-calling reasoning port
+
+#### deepseek
+
+- name a tool's image in its result instead of sending it
+
+#### cactus
+
+- carry each call and its labelled result into Needle's query
+
+#### providers
+
+- send the effort dial from the Gemini and Anthropic rewriter and summary run-fns
+- send the effort dial from every text run-fn on Ollama, HF Inference and node-llama-cpp
+
+#### tf-mediapipe,xai
+
+- read a MediaPipe URL's task directory; retired Grok betas do not reason
+
+#### anthropic,tf-mediapipe,xai
+
+- review findings on the model profiles
+
+#### anthropic
+
+- read adaptive-thinking support through the id normaliser; make the table-agreement test non-tautological
+
+### Refactors
+
+#### anthropic
+
+- strip absent thinking only when known to be off
+- one rule for when signed thinking is replayed
+
+#### ollama,llamacpp-server,node-llama-cpp
+
+- one model profile per provider
+
+#### google-gemini,xai,deepseek,typesafeai
+
+- one model profile per provider
+
+#### huggingface-transformers,tf-mediapipe,chrome-ai
+
+- one model profile per provider
+
+#### openrouter,huggingface-inference
+
+- one model profile per provider
+
+#### ai
+
+- a shared model-profile resolver; Anthropic and OpenAI read every per-model decision from it
+- one model-profile table per provider for Anthropic and OpenAI
+
+### Tests
+
+#### test-contract
+
+- skip Gemini's depleted-credit 402 on CI
+- wire six more providers into the tool-turn round trip
+- pin the tool-turn round trip as a shared provider contract
+
+#### ai-provider-api
+
+- pin HF Inference conformance to Llama 3.1 8B on deepinfra
+- pin HF Inference conformance to Llama 3.1 8B on deepinfra
+- skip HF Inference conformance while tool calling is unroutable
+
+#### huggingface-inference
+
+- pin the live conformance model to Llama 3.1 8B on deepinfra
+
+#### huggingface-transformers
+
+- type the second tool in the constrained-call tests
+
 ## 0.6.13
 
 ### Features

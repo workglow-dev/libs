@@ -5,18 +5,23 @@
  */
 
 import type { ModelEffort, ModelEffortPolicyFn } from "@workglow/ai/worker";
-import { EFFORT_POLICY_ALL, makeEffortPolicy, resolveEnabledEffort } from "@workglow/ai/worker";
+import {
+  EFFORT_POLICY_ALL,
+  makeProfileEffortPolicy,
+  resolveEnabledEffort,
+} from "@workglow/ai/worker";
+import { resolveLlamaCppProfile } from "./LlamaCpp_ModelProfiles";
 
 /**
- * A local GGUF's ability to think is not knowable from its path, so every
- * level is offered. A thought budget on a model that does not think is ignored
- * by the chat wrapper, which makes offering the dial harmless where it does
- * not apply.
+ * Every level on every profile. A local GGUF's ability to think is not
+ * knowable from its name, and a thought budget on a model that does not think
+ * is ignored by the chat wrapper, which makes offering the dial harmless where
+ * it does not apply.
  */
-export const llamaCppEffortPolicy: ModelEffortPolicyFn = makeEffortPolicy({
-  rules: [],
-  fallback: EFFORT_POLICY_ALL,
-});
+export const llamaCppEffortPolicy: ModelEffortPolicyFn = makeProfileEffortPolicy(
+  resolveLlamaCppProfile,
+  () => EFFORT_POLICY_ALL
+);
 
 const THOUGHT_TOKENS: Readonly<Record<ModelEffort, number>> = {
   none: 0,

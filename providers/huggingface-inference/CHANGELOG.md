@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.14
+
+### Bug Fixes
+
+#### providers
+
+- send the effort dial from every text run-fn on Ollama, HF Inference and node-llama-cpp
+
+### Refactors
+
+#### openrouter,huggingface-inference
+
+- one model profile per provider
+
 ## 0.6.13
 
 ### Features

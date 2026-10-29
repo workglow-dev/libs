@@ -1107,6 +1107,39 @@ describe("WebBrowser_ToolCalling session lifecycle", () => {
     }
   });
 
+  it("counts the tool schemas in an input it has to estimate", async () => {
+    const big: ToolDefinition = {
+      ...toolA,
+      inputSchema: {
+        type: "object",
+        properties: Object.fromEntries(
+          Array.from({ length: 40 }, (_, i) => [`field_${i}`, { type: "string" }])
+        ),
+      },
+    };
+    const inputOf = async (tools: ToolDefinition[]): Promise<number> => {
+      const { factory } = makeFakeToolCallingModel();
+      const restore = installLanguageModelGlobal(factory);
+      try {
+        const events: Array<{ type?: string; usage?: { input?: number } }> = [];
+        await WebBrowser_ToolCalling(
+          asTCI({ prompt: "", tools, messages: [] }),
+          undefined,
+          new AbortController().signal,
+          (event: unknown) => {
+            events.push(event as { type?: string; usage?: { input?: number } });
+          },
+          undefined,
+          undefined
+        );
+        return events.find((e) => e.type === "finish")?.usage?.input ?? 0;
+      } finally {
+        restore();
+      }
+    };
+    expect(await inputOf([big])).toBeGreaterThan((await inputOf([toolA])) + 100);
+  });
+
   it("finishes with the full empty scaffold, leaving accumulation to the deltas", async () => {
     const { factory } = makeFakeToolCallingModel();
     const restore = installLanguageModelGlobal(factory);
@@ -1367,7 +1400,7 @@ describe("WebBrowser_ToolCalling sanitizes captured args", () => {
 // --------------------------------------------------------------------------
 
 /** Collect events emitted by an emit-callback helper into an array. */
-async function collect<T>(run: (emit: (event: T) => void) => Promise<void>): Promise<T[]> {
+async function collect<T>(run: (emit: (event: T) => void) => Promise<unknown>): Promise<T[]> {
   const out: T[] = [];
   await run((event) => {
     out.push(event);
@@ -1416,6 +1449,15 @@ describe("snapshotStreamToTextDeltas", () => {
     for (const d of deltas) {
       expect(d).not.toContain("hello worldhello sailor");
     }
+  });
+
+  it("resolves to the text the stream ended with, after a reset too", async () => {
+    const final = await chromeHelpers.snapshotStreamToTextDeltas(
+      streamOf(["hello world", "hello sailor", "hello sailors"]),
+      "text",
+      () => {}
+    );
+    expect(final).toBe("hello sailors");
   });
 
   it("does not emit an empty delta on identical snapshots", async () => {
@@ -1637,5 +1679,152 @@ describe("WebBrowser_ToolCalling multi-round context", () => {
     ]);
 
     expect(text).toContain("Tool error from tool_a: no such city");
+  });
+});
+
+// --------------------------------------------------------------------------
+// Usage: Chrome reports no token counts, so every call's finish carries an
+// estimate an agent turn's input budget can count.
+// --------------------------------------------------------------------------
+
+/**
+ * A session streaming `reply`, optionally carrying Chrome's context measures:
+ * `held` tokens already in the session and `perPrompt` for any prompt.
+ */
+function makeMeasuringModel(
+  reply: string,
+  measures: { held: number; perPrompt: number | (() => Promise<number>) } | undefined
+): any {
+  const factory = {
+    availability: vi.fn().mockResolvedValue("available"),
+    create: vi.fn(async () => {
+      let held = measures?.held ?? 0;
+      const session: Record<string, unknown> = {
+        promptStreaming: () => {
+          // The session's count grows once the prompt runs, so a measure read
+          // after this would overstate the prompt.
+          held += 1_000;
+          return new ReadableStream<string>({
+            start(controller) {
+              controller.enqueue(reply);
+              controller.close();
+            },
+          });
+        },
+        destroy: vi.fn(),
+      };
+      if (measures) {
+        Object.defineProperty(session, "contextUsage", { get: () => held });
+        session.measureContextUsage = vi.fn(async () =>
+          typeof measures.perPrompt === "number" ? measures.perPrompt : measures.perPrompt()
+        );
+      }
+      return session;
+    }),
+  };
+  return { factory };
+}
+
+function finishOf(events: ReadonlyArray<{ type?: string }>): {
+  data?: unknown;
+  usage?: Record<string, unknown>;
+} {
+  return events.find((e) => e.type === "finish") as { usage?: Record<string, unknown> };
+}
+
+describe("WebBrowser usage", () => {
+  const tool: ToolDefinition = {
+    name: "tool_a",
+    description: "tool a",
+    inputSchema: { type: "object", properties: {}, additionalProperties: true },
+  };
+
+  async function runToolCalling(
+    factory: unknown,
+    input: unknown
+  ): Promise<Array<{ type?: string }>> {
+    const restore = installLanguageModelGlobal(factory);
+    try {
+      const events: Array<{ type?: string }> = [];
+      await WebBrowser_ToolCalling(
+        asTCI(input),
+        undefined,
+        new AbortController().signal,
+        (e: unknown) => {
+          events.push(e as { type?: string });
+        },
+        undefined,
+        undefined
+      );
+      return events;
+    } finally {
+      restore();
+    }
+  }
+
+  it("measures the tool-calling prompt with the session's own tokenizer, before prompting", async () => {
+    const { factory } = makeMeasuringModel("Paris it is.", { held: 40, perPrompt: 12 });
+    const events = await runToolCalling(factory, { prompt: "do it", tools: [tool] });
+    const finish = finishOf(events);
+    expect(finish.data).toEqual({ text: "", toolCalls: [] });
+    expect(finish.usage).toMatchObject({
+      input: 52,
+      output: Math.ceil("Paris it is.".length / 4),
+      estimated: true,
+    });
+  });
+
+  // What the session holds besides the prompt: the tool's own schema text.
+  const toolText = JSON.stringify({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+  });
+
+  it("estimates the tool-calling prompt from its text where Chrome cannot measure it", async () => {
+    const { factory } = makeMeasuringModel("ok", undefined);
+    const events = await runToolCalling(factory, {
+      prompt: "",
+      tools: [tool],
+      systemPrompt: "Be brief.",
+      messages: [{ role: "user", content: [{ type: "text", text: "what now" }] }],
+    });
+    expect(finishOf(events).usage).toMatchObject({
+      input: Math.ceil(`${toolText}\nBe brief.\nwhat now`.length / 4),
+      output: 1,
+      estimated: true,
+    });
+  });
+
+  it("falls back to an estimate when measuring fails", async () => {
+    const { factory } = makeMeasuringModel("ok", {
+      held: 40,
+      perPrompt: () => Promise.reject(new Error("not supported")),
+    });
+    const events = await runToolCalling(factory, { prompt: "abcdefgh", tools: [tool] });
+    expect(finishOf(events).usage).toMatchObject({
+      input: Math.ceil(`${toolText}\nabcdefgh`.length / 4),
+      output: 1,
+      estimated: true,
+    });
+  });
+
+  it("reports a usage on single-shot text generation", async () => {
+    const { factory } = makeMeasuringModel("hello there", { held: 3, perPrompt: 5 });
+    const restore = installLanguageModelGlobal(factory);
+    try {
+      const events: Array<{ type?: string }> = [];
+      await WebBrowser_TextGeneration_Unified(
+        { prompt: "hi" },
+        undefined,
+        new AbortController().signal,
+        (e: unknown) => {
+          events.push(e as { type?: string });
+        }
+      );
+      expect(finishOf(events).usage).toMatchObject({ input: 8, output: 3, estimated: true });
+    } finally {
+      restore();
+    }
   });
 });
