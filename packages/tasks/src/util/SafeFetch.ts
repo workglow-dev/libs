@@ -11,6 +11,16 @@
  * classifies every resolved address, and pins the connection to a specific
  * IP via an undici Agent — this closes the DNS-rebinding gap.
  *
+ * A Worker or Durable Object keeps the browser default. Deployed, it loses
+ * nothing by it: the platform's outbound network refuses a private, loopback or
+ * link-local peer at `connect()`, after DNS, so a hostname resolving to one is
+ * refused there with no window for a rebind. What it does lose is the message:
+ * the refusal is an opaque internal error, which reaches the task as a network
+ * failure rather than as this module's explanation. That guarantee belongs to the
+ * network config, not to workerd: Miniflare (`wrangler dev`,
+ * `vitest-pool-workers`) allows private addresses, so a local run has only the
+ * static classification and a rebinding hostname reaches the developer's network.
+ *
  * Callers pass `allowPrivate` to opt into private/loopback targets. The task
  * layer sets this flag based on whether the task has been granted the
  * `network:private` entitlement (via its dynamic `entitlements()`).
