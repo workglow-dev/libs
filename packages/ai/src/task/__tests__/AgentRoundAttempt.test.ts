@@ -225,6 +225,31 @@ describe("settleRound", () => {
     ).rejects.toThrow(/Round 1 had no answer within 10 ms/);
   });
 
+  it("passes on a host runner's retraction, capped at what this attempt forwarded", async () => {
+    const { context } = contextFor([
+      async (_input, round) => {
+        round.onTextDelta("draft");
+        round.onTextRetract("text", 2);
+        round.onTextDelta("y");
+        // More than the attempt sent: only its own text can be taken back.
+        round.onTextRetract("text", 100);
+        round.onTextDelta("done");
+        round.onTextRetract("reasoning", 3);
+        return ANSWER;
+      },
+    ]);
+    const { events, settled } = await drain(settleRound(options(context)));
+    expect(events).toEqual([
+      { type: "text-delta", port: "text", textDelta: "draft" },
+      { type: "text-retract", port: "text", length: 2 },
+      { type: "text-delta", port: "text", textDelta: "y" },
+      { type: "text-retract", port: "text", length: 4 },
+      { type: "text-delta", port: "text", textDelta: "done" },
+    ]);
+    expect(folded(events, "text")).toBe("done");
+    expect(settled).toMatchObject({ status: "settled", attempts: 1 });
+  });
+
   it("sets a round's reasoning apart from an earlier round's, once it has some", async () => {
     const { context } = contextFor([
       async (_input, round) => {

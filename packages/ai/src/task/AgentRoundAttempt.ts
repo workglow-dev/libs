@@ -166,6 +166,7 @@ async function* attemptRound(
         onTextDelta: (delta) => queue.push({ type: "text-delta", port: "text", textDelta: delta }),
         onReasoningDelta: (delta) =>
           queue.push({ type: "text-delta", port: "reasoning", textDelta: delta }),
+        onTextRetract: (port, length) => queue.push({ type: "text-retract", port, length }),
         // Progress is advisory: a failed update must not surface as an
         // unhandled rejection, nor fail a round that is otherwise fine.
         onProgress: (progress, message) => {
