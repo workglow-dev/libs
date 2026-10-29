@@ -206,11 +206,13 @@ async function runTurn(
     } else if (
       event.type === "text-retract" &&
       (event.port ?? "text") === "text" &&
-      retractionLength(event.length) > 0
+      retractionLength(event.length) > 0 &&
+      !controller.signal.aborted
     ) {
       // An attempt that failed partway takes its text back. What it printed is
       // already in the scrollback and cannot be erased, so say it no longer
-      // counts; the retry's reply follows on a line of its own.
+      // counts; the retry's reply follows on a line of its own. An interrupted
+      // turn retracts too, but it did not fail: the "interrupted" note says so.
       transcript.note("  · that attempt failed; the partial reply above is discarded");
     }
   });
