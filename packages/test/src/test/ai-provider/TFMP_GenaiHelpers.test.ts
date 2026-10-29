@@ -4,13 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {
-  _testOnly,
-  TFMP_AUDIO_WASM_VERSION,
-  TFMP_GENAI_WASM_VERSION,
-  TFMP_TEXT_WASM_VERSION,
-  TFMP_VISION_WASM_VERSION,
-} from "@workglow/tf-mediapipe/ai";
+import { _testOnly } from "@workglow/tf-mediapipe/ai";
 // The base-URL accessors must come from `./ai-runtime`: it is bundled separately
 // from `./ai`, so each entry point holds its own copy of the module state, and
 // `./ai-runtime` is the copy `getWasmTask` actually reads.
@@ -19,17 +13,7 @@ import {
   resetTfmpWasmBaseUrls,
   setTfmpWasmBaseUrls,
 } from "@workglow/tf-mediapipe/ai-runtime";
-import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-
-// Anchored to this file, not `process.cwd()`: the package's own test script
-// runs vitest from `packages/test`, where a cwd-relative path resolves to a
-// directory that does not exist.
-const requireFromTfmp = createRequire(
-  new URL("../../../../../providers/tf-mediapipe/package.json", import.meta.url)
-);
 
 const {
   buildGenaiPrompt,
@@ -171,29 +155,6 @@ describe("resolveTfmpChatTemplate", () => {
   });
 });
 
-describe("pinned WASM versions", () => {
-  // The CDN fileset must match the bundled JS SDK — the JS↔WASM ABI is not
-  // stable across versions, so a stale pin breaks the engine at load time.
-  const installedVersion = (sdk: string): string => {
-    // The SDKs' "exports" maps do not expose ./package.json, so resolve the
-    // entry point and read the manifest sitting next to it.
-    const entry = requireFromTfmp.resolve(sdk);
-    const pkg = JSON.parse(readFileSync(join(dirname(entry), "package.json"), "utf8")) as {
-      version: string;
-    };
-    return pkg.version;
-  };
-
-  it.each([
-    ["@mediapipe/tasks-genai", TFMP_GENAI_WASM_VERSION],
-    ["@mediapipe/tasks-vision", TFMP_VISION_WASM_VERSION],
-    ["@mediapipe/tasks-text", TFMP_TEXT_WASM_VERSION],
-    ["@mediapipe/tasks-audio", TFMP_AUDIO_WASM_VERSION],
-  ])("%s pin matches the installed version", (sdk, pinned) => {
-    expect(pinned).toBe(installedVersion(sdk));
-  });
-});
-
 describe("withGenaiLock", () => {
   it("serializes calls FIFO per model path", async () => {
     const order: number[] = [];
@@ -284,20 +245,15 @@ describe("TFMP wasm base URLs", () => {
     resetTfmpWasmBaseUrls();
   });
 
-  it("defaults every engine to the pinned jsDelivr fileset", () => {
+  it("defaults every engine to its jsDelivr fileset", () => {
+    // Unbundled, no version is defined and the URL names none; a bundle built by
+    // the package's build.ts inserts the installed SDK version after the name.
     const bases = getTfmpWasmBaseUrls();
-    expect(bases.vision).toBe(
-      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TFMP_VISION_WASM_VERSION}/wasm`
-    );
-    expect(bases.text).toBe(
-      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-text@${TFMP_TEXT_WASM_VERSION}/wasm`
-    );
-    expect(bases.audio).toBe(
-      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@${TFMP_AUDIO_WASM_VERSION}/wasm`
-    );
-    expect(bases.genai).toBe(
-      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai@${TFMP_GENAI_WASM_VERSION}/wasm`
-    );
+    for (const engine of ["vision", "text", "audio", "genai"] as const) {
+      expect(bases[engine]).toMatch(
+        new RegExp(`^https://cdn\\.jsdelivr\\.net/npm/@mediapipe/tasks-${engine}(@[^/]+)?/wasm$`)
+      );
+    }
   });
 
   it("overrides only the engines it is given", () => {

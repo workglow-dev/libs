@@ -43,7 +43,8 @@ const TYPESAFEAI_FALLBACK: Array<{ label: string; value: string; description: st
   {
     label: "jev-preview",
     value: "jev-preview",
-    description: "A preview version of `jev-latest`: should be better in most ways",
+    description:
+      "Preview the next version of Jev before it gets promoted to jev-latest. Most of the time this is the same as jev-latest",
   },
 ];
 

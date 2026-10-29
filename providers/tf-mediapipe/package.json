@@ -16,12 +16,12 @@
   "homepage": "https://workglow.dev",
   "scripts": {
     "watch": "concurrently -c 'auto' 'bun:watch-*'",
-    "watch-code": "bun build --watch --no-clear-screen --target=browser --sourcemap=external --packages=external --root ./src --outdir ./dist ./src/ai.ts ./src/ai-runtime.ts",
+    "watch-code": "bun run build.ts --watch --no-clear-screen",
     "watch-types": "tsc --watch --preserveWatchOutput",
     "build-package": "concurrently -c 'auto' -n 'code,types' 'bun run build-code' 'bun run build-types'",
     "build-js": "bun run build-code",
     "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
-    "build-code": "bun build --target=browser --sourcemap=external --packages=external --root ./src --outdir ./dist ./src/ai.ts ./src/ai-runtime.ts",
+    "build-code": "bun run build.ts",
     "build-types": "rm -f tsconfig.tsbuildinfo && tsc"
   },
   "exports": {
