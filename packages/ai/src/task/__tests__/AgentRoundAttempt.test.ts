@@ -152,6 +152,29 @@ describe("settleRound", () => {
     expect(progress).toEqual(["Retrying in 1s", "Thinking (attempt 2)"]);
   });
 
+  it("abandons the call in flight when the consumer stops reading", async () => {
+    let signal: AbortSignal | undefined;
+    const { context } = contextFor([
+      async (_input, round) => {
+        signal = round.signal;
+        round.onTextDelta("partial");
+        await new Promise<void>((resolve) =>
+          round.signal.addEventListener("abort", () => resolve())
+        );
+        throw new Error("aborted");
+      },
+    ]);
+    const run = settleRound(options(context));
+    expect((await run.next()).value).toEqual({
+      type: "text-delta",
+      port: "text",
+      textDelta: "partial",
+    });
+    expect(signal?.aborted).toBe(false);
+    await run.return({ status: "out-of-time" });
+    expect(signal?.aborted).toBe(true);
+  });
+
   it("ends out of time rather than sleeping through a wait that passes the deadline", async () => {
     const { context, called, progress } = contextFor([
       async () => {

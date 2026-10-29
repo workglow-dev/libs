@@ -190,6 +190,7 @@ async function* attemptRound(
           timedOut = true;
           abandon();
         }, timeoutMs);
+  let settled = false;
   const run = (async () => {
     try {
       captured.output = await runRound();
@@ -199,6 +200,7 @@ async function* attemptRound(
       }
       throw err;
     } finally {
+      settled = true;
       if (timer !== undefined) clearTimeout(timer);
       off();
       queue.close();
@@ -263,5 +265,11 @@ async function* attemptRound(
       yield { type: "text-retract", port: "reasoning", length: reasoningLength };
     }
     throw err;
+  } finally {
+    // Deltas are yielded while the call is still running, so a consumer that
+    // stops reading leaves this generator at a `yield` with the call in flight.
+    // Abandoning it ends the request; the run's own `finally` then clears the
+    // timer and the listener.
+    if (!settled) abandon();
   }
 }
