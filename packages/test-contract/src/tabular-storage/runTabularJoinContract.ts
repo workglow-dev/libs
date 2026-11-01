@@ -156,6 +156,32 @@ export function runTabularJoinContract(
     );
 
     it(
+      "a like pattern filters either side",
+      async () => {
+        // The SQL pushdown binds it inside the join's own placeholder run; the
+        // hash join hands it to each side's query.
+        const left = await posts.join(
+          { type: "inner", on, where: { left: { title: { value: "t%", operator: "like" } } } },
+          authors
+        );
+        expect(pairs(left).sort()).toEqual(["p2:a1", "p3:a2"]);
+        const right = await posts.join(
+          {
+            type: "inner",
+            on,
+            where: {
+              left: { views: { value: 5, operator: ">=" } },
+              right: { name: { value: "%n%", operator: "like" } },
+            },
+          },
+          authors
+        );
+        expect(pairs(right).sort()).toEqual(["p1:a1", "p2:a1", "p6:a1"]);
+      },
+      opts.timeout
+    );
+
+    it(
       "joins on a compound key",
       async () => {
         const rows = await posts.join(

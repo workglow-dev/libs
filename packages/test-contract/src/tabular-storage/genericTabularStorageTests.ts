@@ -1698,6 +1698,32 @@ export function runGenericTabularStorageTests(
         ).rejects.toThrow(/CoveringIndexMissingError|No covering index/);
       });
 
+      it("filters by a like pattern on an indexed column", async () => {
+        // A pattern cannot narrow an index range, so the IndexedDB key-cursor
+        // path has to stop its equality prefix at it and test it per key —
+        // both when it leads the index and when it trails an equality.
+        const now = new Date().toISOString();
+        const rows = [
+          { id: "1", category: "apple", subcategory: "x1" },
+          { id: "2", category: "apple", subcategory: "y1" },
+          { id: "3", category: "avocado", subcategory: "x2" },
+          { id: "4", category: "banana", subcategory: "x3" },
+        ];
+        for (const row of rows) {
+          await repository.put({ ...row, value: 1, createdAt: now, updatedAt: now });
+        }
+        const leading = await repository.queryIndex(
+          { category: { value: "a%", operator: "like" } } as never,
+          { select: ["id", "category"] }
+        );
+        expect(leading.map((r) => r.id).sort()).toEqual(["1", "2", "3"]);
+        const trailing = await repository.queryIndex(
+          { category: "apple", subcategory: { value: "x%", operator: "like" } } as never,
+          { select: ["id", "category", "subcategory"] }
+        );
+        expect(trailing.map((r) => r.id)).toEqual(["1"]);
+      });
+
       it("returns empty array (not undefined) for no matches", async () => {
         const rows = await repository.queryIndex({ category: "missing" }, { select: ["id"] });
         expect(rows).toEqual([]);

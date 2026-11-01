@@ -124,6 +124,18 @@ export function validateCriteriaColumns<Entity>(
     if (!(column in schemaProperties)) {
       throw new StorageInvalidColumnError(String(column));
     }
+  }
+  validateCriteriaShapes(criteria);
+}
+
+/**
+ * Validates the operator and value shape of every criterion, without a schema
+ * — the half of {@link validateCriteriaColumns} that needs none, so
+ * {@link shouldRunDeleteSearch} can apply it on every backend's delete path,
+ * wrappers included.
+ */
+export function validateCriteriaShapes<Entity>(criteria: DeleteSearchCriteria<Entity>): void {
+  for (const column of Object.keys(criteria) as Array<keyof Entity>) {
     const criterion = criteria[column];
     if (isSearchCondition(criterion)) {
       // Read from the shared allow-list rather than a local copy: a literal
@@ -331,11 +343,18 @@ export function deleteSearchIdentity<Entity>(
  *   missing, and exclusion lists are usually caller-supplied. A mix is fine:
  *   `{ tenant: "acme", excluded: { operator: "not-in", value: [] } }` still
  *   names acme's rows, so it runs.
+ * - **A malformed criterion → throw** {@link StorageValidationError}, exactly
+ *   as `query` would (see {@link validateCriteriaShapes}).
  * - **Anything else → `true`.**
  */
 export function shouldRunDeleteSearch<Entity>(criteria: DeleteSearchCriteria<Entity>): boolean {
   const columns = Object.keys(criteria) as Array<keyof Entity>;
   if (columns.length === 0) return false;
+  // Deletes never pass through `validateQueryParams`, so the criterion shapes
+  // are checked here, where every backend's `deleteSearch` already starts. A
+  // malformed `like` must not reach a translator that would read it as some
+  // other pattern and delete rows nobody named.
+  validateCriteriaShapes(criteria);
 
   const excludesNothing = (column: keyof Entity): boolean => {
     const normalized = normalizeCriterion<Entity[keyof Entity]>(criteria[column]);

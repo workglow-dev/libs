@@ -6,7 +6,10 @@
 
 import { describe, expect, it } from "vitest";
 import { matchesLikeCriterion } from "../ITabularStorage";
+import { StorageValidationError } from "../StorageError";
 import {
+  assertValidLikePattern,
+  compileLikePattern,
   escapeLikePattern,
   likePatternError,
   likePatternToGlob,
@@ -81,8 +84,9 @@ describe("matchesLikePattern", () => {
     });
   }
 
-  it("matches nothing for a pattern ending in a lone escape", () => {
-    expect(matchesLikePattern("a\\", "a\\")).toBe(false);
+  it("throws for a pattern ending in a lone escape", () => {
+    expect(() => matchesLikePattern("a\\", "a\\")).toThrow(StorageValidationError);
+    expect(() => compileLikePattern("a\\")).toThrow(StorageValidationError);
   });
 
   it("stays fast on a pattern built to make a backtracking matcher explode", () => {
@@ -99,6 +103,10 @@ describe("matchesLikePattern", () => {
 });
 
 describe("matchesLikeCriterion", () => {
+  it("throws for a malformed pattern even when the column is null", () => {
+    expect(() => matchesLikeCriterion(null, "a\\")).toThrow(StorageValidationError);
+  });
+
   it("never matches a null, absent or non-string column", () => {
     expect(matchesLikeCriterion(null, "%")).toBe(false);
     expect(matchesLikeCriterion(undefined, "%")).toBe(false);
@@ -146,6 +154,16 @@ describe("likePatternToGlob", () => {
     expect(likePatternToGlob("a_c")).toBe("a?c");
     expect(likePatternToGlob("a*b?c[d]")).toBe("a[*]b[?]c[[]d]");
     expect(likePatternToGlob("100\\%\\_\\\\")).toBe("100%_\\");
+  });
+});
+
+describe("translators refuse a malformed pattern", () => {
+  it("throws rather than dropping the dangling escape", () => {
+    // Dropped, `a\` would translate to `a` and name a different row.
+    expect(() => likePatternToGlob("a\\")).toThrow(StorageValidationError);
+    expect(() => likePatternToPosixRegex("a*\\")).toThrow(StorageValidationError);
+    expect(() => assertValidLikePattern("a\\")).toThrow(StorageValidationError);
+    expect(() => assertValidLikePattern("a\\\\")).not.toThrow();
   });
 });
 

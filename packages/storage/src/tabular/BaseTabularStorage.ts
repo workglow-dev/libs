@@ -71,6 +71,7 @@ import {
   criteriaMatchNoRow,
   deleteSearchIdentity,
   shouldRunDeleteSearch,
+  validateCriteriaColumns,
   validateGetAllOptions,
   validateJoinSpec,
   validateOrderBy,
@@ -687,6 +688,18 @@ export abstract class BaseTabularStorage<
         );
       }
     }
+  }
+
+  /**
+   * Guards {@link ITabularStorage.updateWhere}'s `match`: the columns and
+   * criterion shapes `query` would check. `updateWhere` never goes through
+   * {@link validateQueryParams} (an empty `match` is allowed there), so without
+   * this a malformed criterion — a `like` with a non-string value, or a
+   * pattern ending in a lone escape — reached the backend's own translation
+   * and updated whichever row it happened to read it as naming.
+   */
+  protected assertValidUpdateMatch(match: SearchCriteria<Entity>): void {
+    validateCriteriaColumns(this.schema.properties, match);
   }
 
   protected valueColumns(): Array<keyof Value> {

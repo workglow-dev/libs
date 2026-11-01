@@ -24,6 +24,7 @@ import type {
 } from "@workglow/storage";
 import {
   assertCursorMatches,
+  assertValidLikePattern,
   BaseSqlTabularStorage,
   decodeCursor,
   likePatternToPosixRegex,
@@ -809,6 +810,8 @@ export class SupabaseTabularStorage<
     if (pattern.includes("*")) {
       return q.filter(column, "match", likePatternToPosixRegex(pattern)) as Q;
     }
+    // Sent verbatim, so checked here: the regex route above throws on its own.
+    assertValidLikePattern(pattern);
     return q.like(column, pattern) as Q;
   }
 
@@ -955,6 +958,7 @@ export class SupabaseTabularStorage<
   ): Promise<Entity | undefined> {
     if (Object.keys(patch).length === 0) return undefined;
     this.assertPatchKeepsPrimaryKey(patch);
+    this.assertValidUpdateMatch(match);
     if (this.matchesNoRow(match)) return undefined;
 
     const pkColumns = this.primaryKeyColumns() as unknown as Array<keyof Entity>;

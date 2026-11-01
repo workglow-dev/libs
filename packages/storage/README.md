@@ -983,13 +983,18 @@ await repo.query({ label: { value: "%50\\%%", operator: "like" } }); // contains
 
 A **null or absent column never matches**, not even `%`. The value must be a
 string, and a pattern ending in a lone `\` is refused (PostgreSQL rejects it);
-both raise `StorageValidationError`. Use it on text columns: a SQL backend
-reports a type error on any other, and the in-memory backends match only string
-values.
+both raise `StorageValidationError` — on `query`, `count`, `deleteSearch` and
+`updateWhere` alike. **It needs a text column.** A string-typed schema column is
+not always stored as text: on Postgres a `format: "date-time"` column is a
+timestamp and a `format: "uuid"` one a `uuid`, and `LIKE` on either is a
+database error. SQL backends report that error; the in-memory backends match
+only string values.
 
 **Backend spellings.** Postgres and DuckDB render `col LIKE $n ESCAPE '\'`
 with nothing wrapped around the column, so a `pg_trgm` GIN index can serve
-`%x%` and a `text_pattern_ops` btree a prefix. SQLite's own `LIKE` ignores ASCII
+`%x%` (and a prefix) whatever the plan. A `text_pattern_ops` btree helps a
+prefix pattern only under a custom plan: the pattern is a bound parameter, so a
+generic prepared plan cannot know it is a prefix. SQLite's own `LIKE` ignores ASCII
 case (and `PRAGMA case_sensitive_like` is connection-wide), so it renders a
 translated, always case-sensitive `GLOB`. Supabase sends PostgREST `like`,
 except for a pattern holding a literal `*` — PostgREST rewrites every `*` in a

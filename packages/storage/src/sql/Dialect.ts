@@ -5,7 +5,7 @@
  */
 
 import type { ValueOptionType } from "../tabular/ITabularStorage";
-import { likePatternToGlob } from "../tabular/likePattern";
+import { assertValidLikePattern, likePatternToGlob } from "../tabular/likePattern";
 
 /**
  * A rendered predicate plus the parameters it binds, so the caller can keep
@@ -69,7 +69,8 @@ export interface ISqlDialect {
   ): BuiltPredicate;
   /**
    * Render a case-sensitive `LIKE` predicate for an already-quoted column,
-   * with `\` as the escape character. Binds exactly one parameter. The column
+   * with `\` as the escape character. Binds exactly one parameter, and throws
+   * `StorageValidationError` on a pattern ending in a lone escape. The column
    * is left bare — no cast or function around it — so an index on it stays
    * usable. A NULL column never matches.
    */
@@ -85,6 +86,9 @@ function standardLikePredicate(
   pattern: string,
   startIndex: number
 ): BuiltPredicate {
+  // Bound verbatim, so this is the last place a dangling escape can be caught
+  // before the database reports it as a driver error.
+  assertValidLikePattern(pattern);
   return { sql: `${quotedColumn} LIKE $${startIndex} ESCAPE '\\'`, params: [pattern] };
 }
 

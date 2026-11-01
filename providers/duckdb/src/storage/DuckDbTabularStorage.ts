@@ -1223,6 +1223,7 @@ export class DuckDbTabularStorage<
     // rewrites the row's identity in place instead of raising
     // StorageValidationError.
     this.assertPatchKeepsPrimaryKey(patch);
+    this.assertValidUpdateMatch(match);
     return this.guardedWrite(() => this._updateWhereInternal(match, patch));
   }
 

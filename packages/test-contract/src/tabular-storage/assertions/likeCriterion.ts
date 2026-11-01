@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ITabularStorage } from "@workglow/storage";
+import type { ITabularStorage, PageCursor } from "@workglow/storage";
 import { escapeLikePattern, StorageValidationError } from "@workglow/storage";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CompoundPrimaryKeyNames, CompoundSchema } from "../fixtures";
@@ -36,6 +36,7 @@ export function likeCriterionBlock(opts: TabularStorageContractOpts): void {
       { name: "f", type: "t", option: "ITEM 5.02", success: false },
       { name: "g", type: "u", option: "off-now", success: true },
       { name: "h", type: "t", option: "star*and[bracket]?", success: true },
+      { name: "i", type: "u", option: "x😀y", success: true },
     ];
 
     beforeEach(async () => {
@@ -91,6 +92,17 @@ export function likeCriterionBlock(opts: TabularStorageContractOpts): void {
         expect(await like("%\\%%")).toEqual(["c"]);
         expect(await like("%off\\_now")).toEqual(["c"]);
         expect(await like(`%${escapeLikePattern("50% off_")}%`)).toEqual(["c"]);
+      },
+      opts.timeout
+    );
+
+    itImpl(
+      "reads _ as one character even outside the Basic Multilingual Plane",
+      async () => {
+        // One code point, which is two UTF-16 units in JavaScript and four
+        // bytes in UTF-8 — a matcher counting either would need `__` or `____`.
+        expect(await like("x_y")).toEqual(["i"]);
+        expect(await like("x__y")).toEqual([]);
       },
       opts.timeout
     );
@@ -180,10 +192,71 @@ export function likeCriterionBlock(opts: TabularStorageContractOpts): void {
       "deleteSearch removes exactly the matching rows",
       async () => {
         await storage.deleteSearch({ option: { value: "%5.02%", operator: "like" } });
-        expect(names(await storage.getAll())).toEqual(["b", "c", "e", "g", "h"]);
+        expect(names(await storage.getAll())).toEqual(["b", "c", "e", "g", "h", "i"]);
       },
       opts.timeout
     );
+
+    itImpl(
+      "queryPage carries the pattern across a cursor",
+      async () => {
+        // The SQL backends bind the keyset after the criteria, so a `like`
+        // that miscounted its placeholders would shift every page after the
+        // first.
+        const criteria = { option: { value: "%5.02%", operator: "like" as const } };
+        const seen: string[] = [];
+        let cursor: PageCursor | undefined;
+        for (let guard = 0; guard < 10; guard++) {
+          const page = await storage.queryPage(criteria, {
+            limit: 1,
+            orderBy: [{ column: "name", direction: "ASC" }],
+            cursor,
+          });
+          seen.push(...page.items.map((r) => r.name));
+          if (page.items.length === 0 || page.nextCursor === undefined) break;
+          cursor = page.nextCursor;
+        }
+        expect(seen).toEqual(["a", "d", "f"]);
+      },
+      opts.timeout
+    );
+
+    // Neither write path goes through `query`'s validation, and each backend
+    // translates the pattern its own way: a dangling escape dropped by a
+    // translator deletes the row `"a"` for a pattern meant to name `"a\"`.
+    const malformed: ReadonlyArray<readonly [label: string, criterion: unknown]> = [
+      ["a pattern ending in a lone escape", { value: "a\\", operator: "like" }],
+      ["a non-string value", { value: 5, operator: "like" }],
+    ];
+    for (const [label, criterion] of malformed) {
+      itImpl(
+        `deleteSearch refuses ${label} and deletes nothing`,
+        async () => {
+          await expect(
+            storage.deleteSearch({ name: criterion } as unknown as Parameters<
+              typeof storage.deleteSearch
+            >[0])
+          ).rejects.toBeInstanceOf(StorageValidationError);
+          expect((await storage.getAll())?.length).toBe(rows.length);
+        },
+        opts.timeout
+      );
+
+      itImpl(
+        `updateWhere refuses ${label} and updates nothing`,
+        async () => {
+          await expect(
+            storage.updateWhere(
+              { name: criterion } as unknown as Parameters<typeof storage.updateWhere>[0],
+              { option: "changed" }
+            )
+          ).rejects.toBeInstanceOf(StorageValidationError);
+          const all = (await storage.getAll()) ?? [];
+          expect(all.filter((r) => r.option === "changed")).toEqual([]);
+        },
+        opts.timeout
+      );
+    }
 
     itImpl(
       "updateWhere matches by pattern",

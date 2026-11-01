@@ -217,6 +217,7 @@ export class HttpTabularProxyStorage<
     patch: Partial<Entity>
   ): Promise<Entity | undefined> {
     this.assertPatchKeepsPrimaryKey(patch);
+    this.assertValidUpdateMatch(match);
     if (this.criteriaMatchNoRow(match)) return undefined;
     const { entity } = await this.call<{ entity: Entity | null }>("updateWhere", {
       match,

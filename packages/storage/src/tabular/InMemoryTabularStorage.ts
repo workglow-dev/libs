@@ -482,6 +482,7 @@ export class InMemoryTabularStorage<
     patch: Partial<Entity>
   ): Promise<Entity | undefined> {
     this.assertPatchKeepsPrimaryKey(patch);
+    this.assertValidUpdateMatch(match);
     const criteriaKeys = Object.keys(match) as Array<keyof Entity>;
     for (const [id, entity] of Array.from(this.values.entries())) {
       if (!matchesCriteria(entity, match, criteriaKeys)) continue;

@@ -1900,6 +1900,7 @@ export class PostgresTabularStorage<
     // rewrites the row's identity in place — or aborts the transaction on a
     // UNIQUE violation — instead of raising StorageValidationError.
     this.assertPatchKeepsPrimaryKey(patch);
+    this.assertValidUpdateMatch(match);
     return this.guardedWrite(() => this._updateWhereInternal(match, patch));
   }
 

@@ -16,6 +16,7 @@ import {
   PostgresDialect,
   SEARCH_OPERATOR_SET,
   SqliteDialect,
+  StorageValidationError,
 } from "@workglow/storage";
 import type {
   SearchCondition,
@@ -555,13 +556,29 @@ describe("qualifier", () => {
     it("binds the pattern as given, not through convertValue", () => {
       const result = buildSearchWhere<Row>(
         PostgresDialect,
-        { createdAt: { value: "2026-%", operator: "like" } },
+        { id: { value: "2026-%", operator: "like" } },
         schemaProps,
         () => {
           throw new Error("convertValue must not see a like pattern");
         }
       );
       expect(result.params).toEqual(["2026-%"]);
+    });
+
+    it("refuses a pattern ending in a lone escape in every dialect", () => {
+      // Validation refuses it first; this is the backstop for a caller that
+      // reaches the builder directly. SQLite's GLOB translation would
+      // otherwise drop the dangling escape and match a different string.
+      for (const dialect of [PostgresDialect, DuckDbDialect, SqliteDialect]) {
+        expect(() =>
+          buildSearchWhere<Row>(
+            dialect,
+            { id: { value: "a\\", operator: "like" } },
+            schemaProps,
+            passthroughConvert
+          )
+        ).toThrow(StorageValidationError);
+      }
     });
 
     it("normalizes to its own kind and is not a comparison operator", () => {

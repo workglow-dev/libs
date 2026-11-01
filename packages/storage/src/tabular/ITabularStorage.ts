@@ -11,7 +11,7 @@ import type {
   TypedArraySchemaOptions,
 } from "@workglow/util/schema";
 import type { PageCursor } from "./Cursor";
-import { matchesLikePattern } from "./likePattern";
+import { likeMatcher } from "./likePattern";
 
 export type { PageCursor } from "./Cursor";
 
@@ -193,12 +193,14 @@ export interface SearchNotInCondition<T> {
  * Its own shape rather than a member of {@link SearchOperator}, because only a
  * string pattern is meaningful and validation refuses any other value (and a
  * pattern ending in a lone `\`). A null or absent column never matches. The
- * column should hold text: a SQL backend reports a type error otherwise, and
- * the in-memory backends match only string values.
+ * column must be stored as text: on PostgreSQL a `date-time` or `uuid`
+ * formatted string column is not, and `LIKE` on it is a database error. The
+ * in-memory backends match only string values.
  *
  * On PostgreSQL this renders as a bare `col LIKE $n ESCAPE '\'` — nothing
- * wrapped around the column — so a `pg_trgm` GIN index can serve a
- * `%x%` pattern and a `text_pattern_ops` btree a prefix pattern.
+ * wrapped around the column — so a `pg_trgm` GIN index can serve a `%x%`
+ * pattern under any plan. A `text_pattern_ops` btree serves a prefix pattern
+ * only under a custom plan, since a generic plan sees just a parameter.
  */
 export interface SearchLikeCondition {
   readonly value: string;
@@ -364,10 +366,14 @@ export function matchesNotInCriterion(columnValue: unknown, values: readonly unk
 
 /**
  * Whether a stored column value satisfies a `like` criterion. A null, absent
- * or non-string column never matches; see {@link SearchLikeCondition}.
+ * or non-string column never matches; see {@link SearchLikeCondition}. Throws
+ * `StorageValidationError` on a malformed pattern.
  */
 export function matchesLikeCriterion(columnValue: unknown, pattern: string): boolean {
-  return typeof columnValue === "string" && matchesLikePattern(columnValue, pattern);
+  // Resolved before the column is looked at, so a malformed pattern throws on
+  // every row rather than only on the rows that hold a string.
+  const matcher = likeMatcher(pattern);
+  return typeof columnValue === "string" && matcher(columnValue);
 }
 
 /**
