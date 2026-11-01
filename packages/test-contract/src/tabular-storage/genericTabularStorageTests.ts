@@ -470,6 +470,69 @@ export function runGenericTabularStorageTests(
         }
       });
 
+      it("never matches a NULL column with a `like` pattern, not even `%`", async () => {
+        // `NULL LIKE '%'` is UNKNOWN in SQL, so the row is dropped; the JS-side
+        // backends must not read an absent column as an empty string. Runs on
+        // `kind` (unindexed) and `tag` (indexed, so the index planner sees it),
+        // and through `count`, `deleteSearch` and the HTTP proxy's JSON hop
+        // with the rest of this suite.
+        const now = new Date().toISOString();
+        await searchableRepo.put({
+          id: "null-both",
+          category: "electronics",
+          subcategory: "phones",
+          value: 100,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await searchableRepo.put({
+          id: "set-both",
+          category: "electronics",
+          subcategory: "phones",
+          kind: "premium",
+          tag: "a-tag",
+          value: 200,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await searchableRepo.put({
+          id: "empty-both",
+          category: "electronics",
+          subcategory: "tablets",
+          kind: "",
+          tag: "",
+          value: 300,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        const ids = async (criteria: unknown): Promise<string[]> =>
+          ((await searchableRepo.query(criteria as never)) ?? []).map((r) => r.id).sort();
+
+        for (const column of ["kind", "tag"] as const) {
+          // An empty string is a value, and `%` matches it; NULL is not.
+          expect(await ids({ [column]: { value: "%", operator: "like" } })).toEqual([
+            "empty-both",
+            "set-both",
+          ]);
+          expect(await ids({ [column]: { value: "%-%", operator: "like" } })).toEqual(
+            column === "tag" ? ["set-both"] : []
+          );
+          expect(await ids({ [column]: { value: "%rem%", operator: "like" } })).toEqual(
+            column === "kind" ? ["set-both"] : []
+          );
+          expect(
+            await searchableRepo.count({ [column]: { value: "%", operator: "like" } } as never)
+          ).toBe(2);
+        }
+
+        await searchableRepo.deleteSearch({
+          category: "electronics",
+          kind: { value: "%", operator: "like" },
+        } as never);
+        expect(await ids({ category: "electronics" })).toEqual(["null-both"]);
+      });
+
       it("matches NULL on an indexed column with a null criterion", async () => {
         // The same rule as above, but on a column the backend has an index for.
         // That is the path the previous test never reached: it used `kind`,

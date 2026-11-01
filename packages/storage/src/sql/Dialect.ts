@@ -5,6 +5,7 @@
  */
 
 import type { ValueOptionType } from "../tabular/ITabularStorage";
+import { likePatternToGlob } from "../tabular/likePattern";
 
 /**
  * A rendered predicate plus the parameters it binds, so the caller can keep
@@ -66,6 +67,25 @@ export interface ISqlDialect {
     values: ValueOptionType[],
     startIndex: number
   ): BuiltPredicate;
+  /**
+   * Render a case-sensitive `LIKE` predicate for an already-quoted column,
+   * with `\` as the escape character. Binds exactly one parameter. The column
+   * is left bare — no cast or function around it — so an index on it stays
+   * usable. A NULL column never matches.
+   */
+  likePredicate(quotedColumn: string, pattern: string, startIndex: number): BuiltPredicate;
+}
+
+/**
+ * `col LIKE $n ESCAPE '\'` — the escape stated rather than left to a server
+ * default. PostgreSQL and DuckDB both compare case-sensitively.
+ */
+function standardLikePredicate(
+  quotedColumn: string,
+  pattern: string,
+  startIndex: number
+): BuiltPredicate {
+  return { sql: `${quotedColumn} LIKE $${startIndex} ESCAPE '\\'`, params: [pattern] };
 }
 
 /** Shared always-false predicate for an empty IN list. */
@@ -143,6 +163,13 @@ export const SqliteDialect: ISqlDialect = {
   ): BuiltPredicate {
     return expandedListPredicate(quotedColumn, values, true, () => "?", 0);
   },
+  likePredicate(quotedColumn: string, pattern: string, _startIndex: number): BuiltPredicate {
+    // SQLite's LIKE folds ASCII case, and `PRAGMA case_sensitive_like` is
+    // connection-wide state a shared handle cannot scope to one statement.
+    // GLOB is always case-sensitive, so the pattern is translated to GLOB
+    // syntax instead; a prefix GLOB can still use an index on the column.
+    return { sql: `${quotedColumn} GLOB ?`, params: [likePatternToGlob(pattern)] };
+  },
 };
 
 export const PostgresDialect: ISqlDialect = {
@@ -166,6 +193,7 @@ export const PostgresDialect: ISqlDialect = {
   ): BuiltPredicate {
     return arrayListPredicate(quotedColumn, values, true, startIndex);
   },
+  likePredicate: standardLikePredicate,
 };
 
 /**
@@ -205,4 +233,5 @@ export const DuckDbDialect: ISqlDialect = {
       startIndex
     );
   },
+  likePredicate: standardLikePredicate,
 };

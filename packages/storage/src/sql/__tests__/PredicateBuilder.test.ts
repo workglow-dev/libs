@@ -10,6 +10,7 @@ import {
   DuckDbDialect,
   isSearchCondition,
   isSearchInCondition,
+  isSearchLikeCondition,
   isSearchNotInCondition,
   normalizeCriterion,
   PostgresDialect,
@@ -512,5 +513,65 @@ describe("qualifier", () => {
       );
       expect(explicit).toEqual(plain);
     }
+  });
+
+  describe("like criteria", () => {
+    it("renders a bare `col LIKE $n ESCAPE '\\'` on Postgres, nothing around the column", () => {
+      // A bare column is what lets a pg_trgm GIN or text_pattern_ops index
+      // serve the predicate; a cast or function around it would not.
+      const result = buildSearchWhere<Row>(
+        PostgresDialect,
+        { value: 1, id: { value: "%5.02%", operator: "like" } },
+        schemaProps,
+        passthroughConvert
+      );
+      expect(result.whereClause).toBe(`"value" = $1 AND "id" LIKE $2 ESCAPE '\\'`);
+      expect(result.params).toEqual([1, "%5.02%"]);
+    });
+
+    it("renders the same on DuckDB, starting from the caller's index", () => {
+      const result = buildSearchWhere<Row>(
+        DuckDbDialect,
+        { id: { value: "a\\_b%", operator: "like" } },
+        schemaProps,
+        passthroughConvert,
+        4
+      );
+      expect(result.whereClause).toBe(`"id" LIKE $4 ESCAPE '\\'`);
+      expect(result.params).toEqual(["a\\_b%"]);
+    });
+
+    it("translates to a case-sensitive GLOB on SQLite", () => {
+      const result = buildSearchWhere<Row>(
+        SqliteDialect,
+        { id: { value: "a%b_c*d?e[f\\%g\\_", operator: "like" } },
+        schemaProps,
+        passthroughConvert
+      );
+      expect(result.whereClause).toBe("`id` GLOB ?");
+      expect(result.params).toEqual(["a*b?c[*]d[?]e[[]f%g_"]);
+    });
+
+    it("binds the pattern as given, not through convertValue", () => {
+      const result = buildSearchWhere<Row>(
+        PostgresDialect,
+        { createdAt: { value: "2026-%", operator: "like" } },
+        schemaProps,
+        () => {
+          throw new Error("convertValue must not see a like pattern");
+        }
+      );
+      expect(result.params).toEqual(["2026-%"]);
+    });
+
+    it("normalizes to its own kind and is not a comparison operator", () => {
+      expect(normalizeCriterion({ value: "x%", operator: "like" })).toEqual({
+        kind: "like",
+        pattern: "x%",
+      });
+      expect(isSearchCondition({ value: "x%", operator: "like" })).toBe(false);
+      expect(isSearchLikeCondition({ value: "x%", operator: "like" })).toBe(true);
+      expect(isSearchLikeCondition({ value: 5, operator: "like" })).toBe(false);
+    });
   });
 });

@@ -32,6 +32,7 @@ export type TabularStorageContractAssertion =
   | "countMatchesQuery"
   | "inListCriterion"
   | "notInListCriterion"
+  | "likeCriterion"
   | "joinPushdown"
   | "guardParity";
 

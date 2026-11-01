@@ -280,6 +280,37 @@ function mockPushNotFilter(
 }
 
 /**
+ * Accumulates a `.like(column, pattern)` call the way PostgREST reads it:
+ * every `*` in the value becomes `%` before PostgreSQL sees it, and no ESCAPE
+ * clause is added, so the backslash is the escape character by default.
+ */
+function mockPushLikeFilter(
+  filters: Array<{ column: string; operator: string; value: any }>,
+  column: string,
+  pattern: string
+): void {
+  filters.push({ column, operator: "LIKE", value: pattern.replace(/\*/g, "%") });
+}
+
+/**
+ * Accumulates a generic `.filter(column, operator, value)` call. Only `match`
+ * (PostgreSQL's `~`) is used by the storage; anything else throws rather than
+ * being dropped, for the reason given on {@link mockPushNotFilter}.
+ */
+function mockPushGenericFilter(
+  filters: Array<{ column: string; operator: string; value: any }>,
+  column: string,
+  operator: string,
+  value: any
+): void {
+  if (operator === "match") {
+    filters.push({ column, operator: "~", value: String(value) });
+    return;
+  }
+  throw new Error(`Unsupported PostgREST filter operator ${operator} in mock`);
+}
+
+/**
  * The WHERE body for the accumulated filters, or `undefined` when there are
  * none. Shared by select, update and delete so an `.or()` group cannot be
  * honoured on one path and dropped on another — it used to be folded in only
@@ -626,6 +657,14 @@ export function createSupabaseMockClient(): IClosableSupabaseClient {
               queryBuilder._filters.push({ column, operator: "IN", value: values });
               return updateBuilder;
             },
+            like: (column: string, pattern: string) => {
+              mockPushLikeFilter(queryBuilder._filters, column, pattern);
+              return updateBuilder;
+            },
+            filter: (column: string, operator: string, value: any) => {
+              mockPushGenericFilter(queryBuilder._filters, column, operator, value);
+              return updateBuilder;
+            },
             lt: (column: string, value: any) => {
               queryBuilder._filters.push({ column, operator: "<", value });
               return updateBuilder;
@@ -688,6 +727,14 @@ export function createSupabaseMockClient(): IClosableSupabaseClient {
               queryBuilder._filters.push({ column, operator: "IN", value: values });
               return deleteBuilder;
             },
+            like: (column: string, pattern: string) => {
+              mockPushLikeFilter(queryBuilder._filters, column, pattern);
+              return deleteBuilder;
+            },
+            filter: (column: string, operator: string, value: any) => {
+              mockPushGenericFilter(queryBuilder._filters, column, operator, value);
+              return deleteBuilder;
+            },
             neq: (column: string, value: any) => {
               // `neq.null` means IS DISTINCT FROM NULL in PostgREST (used by
               // `deleteAll`'s always-true `.neq(pk, null)`); match the select
@@ -748,6 +795,14 @@ export function createSupabaseMockClient(): IClosableSupabaseClient {
         },
         in: (column: string, values: any[]) => {
           queryBuilder._filters.push({ column, operator: "IN", value: values });
+          return queryBuilder;
+        },
+        like: (column: string, pattern: string) => {
+          mockPushLikeFilter(queryBuilder._filters, column, pattern);
+          return queryBuilder;
+        },
+        filter: (column: string, operator: string, value: any) => {
+          mockPushGenericFilter(queryBuilder._filters, column, operator, value);
           return queryBuilder;
         },
 
@@ -852,6 +907,14 @@ export function createSupabaseMockClient(): IClosableSupabaseClient {
         },
         in: (column: string, values: any[]) => {
           queryBuilder._filters.push({ column, operator: "IN", value: values });
+          return deleteBuilder;
+        },
+        like: (column: string, pattern: string) => {
+          mockPushLikeFilter(queryBuilder._filters, column, pattern);
+          return deleteBuilder;
+        },
+        filter: (column: string, operator: string, value: any) => {
+          mockPushGenericFilter(queryBuilder._filters, column, operator, value);
           return deleteBuilder;
         },
         neq: (column: string, value: any) => {

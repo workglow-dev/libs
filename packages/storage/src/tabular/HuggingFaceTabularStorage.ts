@@ -461,10 +461,10 @@ export class HuggingFaceTabularStorage<
       if (v === null) continue;
       const normalized = normalizeCriterion<unknown>(v);
       // The /filter endpoint takes `col=value` terms only — it has no IN form,
-      // nor its negation. Refusing is the honest answer; falling through would
+      // nor its negation, nor a pattern match. Refusing is the honest answer; falling through would
       // stringify the condition object into the `where` string and quietly
       // match nothing.
-      if (normalized.kind === "in" || normalized.kind === "not-in") {
+      if (normalized.kind === "in" || normalized.kind === "not-in" || normalized.kind === "like") {
         throw new StorageUnsupportedError(
           `Operator "${normalized.kind}" in query`,
           "HuggingFaceTabularStorage"

@@ -182,6 +182,12 @@ Schemas are JSON Schema. `format` annotations drive runtime type resolution
 PostgreSQL, DuckDB, Supabase, IndexedDB, FsFolder. Storages emit `put`/`get`/`delete`/`deleteAll`.
 `x-auto-generated: true` gives integers auto-increment and strings a UUID.
 
+Tabular criteria are a bare value (equality), `{ value, operator }` with `= != < <= > >=`, the
+list shapes `in` / `not-in`, and `like` (case-sensitive SQL LIKE, `\` escape; build "contains"
+with `escapeLikePattern`). Every backend routes a criterion through `normalizeCriterion` and
+switches on its `kind`, so a new shape surfaces as a type error rather than as a literal value;
+SQLite renders `like` as a translated `GLOB`, because its own `LIKE` folds ASCII case.
+
 ### `@workglow/knowledge-base`
 
 `KnowledgeBase` owns document storage (tabular) and chunk storage (vector).

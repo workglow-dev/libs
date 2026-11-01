@@ -26,6 +26,7 @@ import {
   assertCursorMatches,
   BaseSqlTabularStorage,
   decodeCursor,
+  likePatternToPosixRegex,
   mapPostgresType,
   normalizeCriterion,
   pickCoveringIndex,
@@ -792,6 +793,26 @@ export class SupabaseTabularStorage<
   }
 
   /**
+   * Applies a `like` criterion to a filter builder.
+   *
+   * PostgREST's `like` operator rewrites every `*` in the value to `%` (so a
+   * URL can avoid percent-encoding), and an escaped `\*` becomes `\%` — a
+   * literal percent sign. A pattern holding a literal `*` therefore cannot be
+   * sent as `like` at all; it goes as `match` (PostgreSQL's `~`) with the same
+   * meaning spelled as an anchored regular expression. Everything else goes as
+   * `like`, which PostgreSQL evaluates with its default escape character, the
+   * backslash — the escape this criterion is defined with — and which a
+   * `pg_trgm` index can serve.
+   */
+  private static applyLikeFilter<Q>(query: Q, column: string, pattern: string): Q {
+    const q = query as any;
+    if (pattern.includes("*")) {
+      return q.filter(column, "match", likePatternToPosixRegex(pattern)) as Q;
+    }
+    return q.like(column, pattern) as Q;
+  }
+
+  /**
    * Applies criteria to a Supabase filter builder. Typed as `any` because the
    * `PostgrestFilterBuilder` generics are deep enough to trip TS2589.
    */
@@ -816,6 +837,11 @@ export class SupabaseTabularStorage<
 
       if (normalized.kind === "not-in") {
         q = this.applyNotInFilter(q, String(column), normalized.values);
+        continue;
+      }
+
+      if (normalized.kind === "like") {
+        q = SupabaseTabularStorage.applyLikeFilter(q, String(column), normalized.pattern);
         continue;
       }
 

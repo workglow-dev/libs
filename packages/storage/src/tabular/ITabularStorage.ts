@@ -11,6 +11,7 @@ import type {
   TypedArraySchemaOptions,
 } from "@workglow/util/schema";
 import type { PageCursor } from "./Cursor";
+import { matchesLikePattern } from "./likePattern";
 
 export type { PageCursor } from "./Cursor";
 
@@ -182,6 +183,29 @@ export interface SearchNotInCondition<T> {
 }
 
 /**
+ * Pattern-match criterion — `column LIKE pattern`, with SQL LIKE semantics on
+ * every backend: case-sensitive, anchored at both ends, `%` for any run of
+ * characters (newlines included), `_` for exactly one character, and `\` as
+ * the escape character, so `\%`, `\_` and `\\` match themselves. Build a
+ * "contains X" filter with `escapeLikePattern`:
+ * `` { value: `%${escapeLikePattern(x)}%`, operator: "like" } ``.
+ *
+ * Its own shape rather than a member of {@link SearchOperator}, because only a
+ * string pattern is meaningful and validation refuses any other value (and a
+ * pattern ending in a lone `\`). A null or absent column never matches. The
+ * column should hold text: a SQL backend reports a type error otherwise, and
+ * the in-memory backends match only string values.
+ *
+ * On PostgreSQL this renders as a bare `col LIKE $n ESCAPE '\'` — nothing
+ * wrapped around the column — so a `pg_trgm` GIN index can serve a
+ * `%x%` pattern and a `text_pattern_ops` btree a prefix pattern.
+ */
+export interface SearchLikeCondition {
+  readonly value: string;
+  readonly operator: "like";
+}
+
+/**
  * Criteria for query/deleteSearch operations supporting multiple columns.
  * Each column can have a direct value (equality), a {@link SearchCondition}
  * with a comparison operator, or a {@link SearchInCondition} /
@@ -200,6 +224,9 @@ export interface SearchNotInCondition<T> {
  * // Set exclusion — everything but these ids
  * { observation_id: { value: [1, 2, 3], operator: "not-in" } }
  *
+ * // Pattern match — rows whose text contains "5.02"
+ * { items: { value: `%${escapeLikePattern("5.02")}%`, operator: "like" } }
+ *
  * // Multiple columns
  * { category: "electronics", createdAt: { value: date, operator: "<" } }
  */
@@ -208,7 +235,8 @@ export type DeleteSearchCriteria<Entity> = {
     | Entity[K]
     | SearchCondition<Entity[K]>
     | SearchInCondition<Entity[K]>
-    | SearchNotInCondition<Entity[K]>;
+    | SearchNotInCondition<Entity[K]>
+    | ([Extract<Entity[K], string>] extends [never] ? never : SearchLikeCondition);
 };
 
 export type SearchCriteria<Entity> = DeleteSearchCriteria<Entity>;
@@ -221,7 +249,8 @@ export type SearchCriteria<Entity> = DeleteSearchCriteria<Entity>;
 export type NormalizedCriterion<T> =
   | { readonly kind: "compare"; readonly operator: SearchOperator; readonly value: T }
   | { readonly kind: "in"; readonly values: readonly T[] }
-  | { readonly kind: "not-in"; readonly values: readonly T[] };
+  | { readonly kind: "not-in"; readonly values: readonly T[] }
+  | { readonly kind: "like"; readonly pattern: string };
 
 /**
  * Whether a stored column value equals a criterion value, for the `=` operator.
@@ -334,9 +363,17 @@ export function matchesNotInCriterion(columnValue: unknown, values: readonly unk
 }
 
 /**
+ * Whether a stored column value satisfies a `like` criterion. A null, absent
+ * or non-string column never matches; see {@link SearchLikeCondition}.
+ */
+export function matchesLikeCriterion(columnValue: unknown, pattern: string): boolean {
+  return typeof columnValue === "string" && matchesLikePattern(columnValue, pattern);
+}
+
+/**
  * Resolves a raw criterion — bare value, {@link SearchCondition},
- * {@link SearchInCondition}, or {@link SearchNotInCondition} — into a
- * {@link NormalizedCriterion}.
+ * {@link SearchInCondition}, {@link SearchNotInCondition} or
+ * {@link SearchLikeCondition} — into a {@link NormalizedCriterion}.
  *
  * Every backend should route through this rather than testing the guards
  * itself: a backend that only checks `isSearchCondition` treats a list
@@ -349,6 +386,9 @@ export function normalizeCriterion<T>(criterion: unknown): NormalizedCriterion<T
   }
   if (isSearchNotInCondition<T>(criterion)) {
     return { kind: "not-in", values: criterion.value };
+  }
+  if (isSearchLikeCondition(criterion)) {
+    return { kind: "like", pattern: criterion.value };
   }
   if (isSearchCondition<T>(criterion)) {
     return { kind: "compare", operator: criterion.operator, value: criterion.value };
@@ -549,6 +589,21 @@ export function isSearchNotInCondition<T>(value: unknown): value is SearchNotInC
   if (!("value" in value) || !("operator" in value)) return false;
   if ((value as SearchNotInCondition<T>).operator !== "not-in") return false;
   return Array.isArray((value as SearchNotInCondition<T>).value);
+}
+
+/**
+ * Type guard for {@link SearchLikeCondition}.
+ *
+ * Kept apart from {@link isSearchCondition} like the list guards are, so
+ * `"like"` never joins the operator allow-list that is interpolated raw into
+ * SQL. A `like` whose value is not a string fails this guard and is refused by
+ * {@link validateQueryParams} rather than read as a literal value.
+ */
+export function isSearchLikeCondition(value: unknown): value is SearchLikeCondition {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("value" in value) || !("operator" in value)) return false;
+  if ((value as SearchLikeCondition).operator !== "like") return false;
+  return typeof (value as SearchLikeCondition).value === "string";
 }
 
 /**

@@ -34,6 +34,7 @@ import {
   matchesEqualityCriterion,
   matchesInCriterion,
   matchesInequalityCriterion,
+  matchesLikeCriterion,
   matchesNotInCriterion,
   normalizeCriterion,
 } from "./ITabularStorage";
@@ -72,6 +73,11 @@ function matchesCriteria<Entity>(
       // exclude rows the complement would keep. The shared helper is what
       // keeps this backend agreeing with the SQL ones.
       if (!matchesNotInCriterion(columnValue, normalized.values)) return false;
+      continue;
+    }
+
+    if (normalized.kind === "like") {
+      if (!matchesLikeCriterion(columnValue, normalized.pattern)) return false;
       continue;
     }
 

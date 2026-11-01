@@ -842,12 +842,19 @@ interface SearchNotInCondition<T> {
   readonly operator: "not-in";
 }
 
+// A pattern match takes a string pattern, whatever the column's type.
+interface SearchLikeCondition {
+  readonly value: string;
+  readonly operator: "like";
+}
+
 type DeleteSearchCriteria<Entity> = {
   readonly [K in keyof Entity]?:
     | Entity[K]
     | SearchCondition<Entity[K]>
     | SearchInCondition<Entity[K]>
-    | SearchNotInCondition<Entity[K]>;
+    | SearchNotInCondition<Entity[K]>
+    | SearchLikeCondition; // string columns only
 };
 
 // Usage examples
@@ -953,6 +960,42 @@ placeholders on SQLite and DuckDB, `not.in.(…)` on Supabase — where neither
 degenerate case is left to PostgREST to decide: an empty list goes out as an
 always-true `.or()` group instead of an exclusion filter, and a list holding
 `null` is answered as "no rows" with no request at all.
+`HuggingFaceTabularStorage` throws `StorageUnsupportedError`.
+
+##### Pattern match (`like`)
+
+SQL `LIKE`, with the same meaning on every backend: **case-sensitive**,
+anchored at both ends, `%` for any run of characters (newlines included), `_`
+for exactly one character, and `\` as the escape character. Accepted everywhere
+`in` is. Build "contains X" with `escapeLikePattern`, which backslash-escapes
+`\`, `%` and `_` so the text matches literally:
+
+```typescript
+import { escapeLikePattern } from "@workglow/storage";
+
+// Rows whose `items` text contains "5.02"
+await repo.query({ items: { value: `%${escapeLikePattern("5.02")}%`, operator: "like" } });
+
+// Prefix, and a literal percent sign
+await repo.query({ code: { value: "ABC%", operator: "like" } });
+await repo.query({ label: { value: "%50\\%%", operator: "like" } }); // contains "50%"
+```
+
+A **null or absent column never matches**, not even `%`. The value must be a
+string, and a pattern ending in a lone `\` is refused (PostgreSQL rejects it);
+both raise `StorageValidationError`. Use it on text columns: a SQL backend
+reports a type error on any other, and the in-memory backends match only string
+values.
+
+**Backend spellings.** Postgres and DuckDB render `col LIKE $n ESCAPE '\'`
+with nothing wrapped around the column, so a `pg_trgm` GIN index can serve
+`%x%` and a `text_pattern_ops` btree a prefix. SQLite's own `LIKE` ignores ASCII
+case (and `PRAGMA case_sensitive_like` is connection-wide), so it renders a
+translated, always case-sensitive `GLOB`. Supabase sends PostgREST `like`,
+except for a pattern holding a literal `*` — PostgREST rewrites every `*` in a
+`like` value to `%` — which goes as an equivalent anchored regex through
+`match`. In-memory and IndexedDB use a two-pointer wildcard matcher, never
+a `RegExp`, so a hostile pattern costs at most O(text × pattern).
 `HuggingFaceTabularStorage` throws `StorageUnsupportedError`.
 
 ## Examples

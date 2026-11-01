@@ -17,6 +17,7 @@ import {
   ALLOWED_SEARCH_OPERATORS,
   isSearchCondition,
   isSearchInCondition,
+  isSearchLikeCondition,
   isSearchNotInCondition,
   JOIN_SIDE_SET,
   JOIN_TYPE_SET,
@@ -25,6 +26,7 @@ import {
   normalizeCriterion,
   SEARCH_OPERATOR_SET,
 } from "./ITabularStorage";
+import { likePatternError } from "./likePattern";
 import {
   StorageEmptyCriteriaError,
   StorageInvalidColumnError,
@@ -71,6 +73,12 @@ function isMalformedListCriterion(criterion: unknown): boolean {
   const operator = (criterion as { operator?: unknown }).operator;
   if (operator !== "in" && operator !== "not-in") return false;
   return !isSearchInCondition(criterion) && !isSearchNotInCondition(criterion);
+}
+
+/** Whether a criterion claims the `like` operator, whatever its value. */
+function isLikeShaped(criterion: unknown): boolean {
+  if (typeof criterion !== "object" || criterion === null) return false;
+  return (criterion as { operator?: unknown }).operator === "like";
 }
 
 /**
@@ -125,6 +133,24 @@ export function validateCriteriaColumns<Entity>(
         throw new StorageValidationError(
           `Invalid operator "${criterion.operator}". Must be one of: ` +
             ALLOWED_SEARCH_OPERATORS.join(", ")
+        );
+      }
+    } else if (isLikeShaped(criterion)) {
+      // A `like` with a non-string value would otherwise fall through to
+      // `normalizeCriterion` as a literal and match nothing; refuse it, and
+      // refuse a pattern PostgreSQL itself would reject, so every backend
+      // turns the same pattern away before reaching a database.
+      if (!isSearchLikeCondition(criterion)) {
+        throw new StorageValidationError(
+          `Criterion for column "${String(column)}" uses operator "like" ` +
+            `but its value is not a string`
+        );
+      }
+      const problem = likePatternError(criterion.value);
+      if (problem !== undefined) {
+        throw new StorageValidationError(
+          `Criterion for column "${String(column)}": ${problem} (escape a literal ` +
+            `backslash as \\\\)`
         );
       }
     } else if (isMalformedListCriterion(criterion)) {
@@ -247,6 +273,7 @@ export function criteriaMatchNoRow<Entity>(
       if (normalized.value === undefined) return true;
       continue;
     }
+    if (normalized.kind === "like") continue;
     const nullish = (value: unknown): boolean => value === null || value === undefined;
     if (normalized.kind === "in" && normalized.values.every(nullish)) return true;
     if (normalized.kind === "not-in" && normalized.values.some(nullish)) return true;
@@ -273,11 +300,13 @@ export function deleteSearchIdentity<Entity>(
     // A list criterion identifies no single value, so it is dropped for the
     // same reason a comparison condition is — otherwise the raw condition
     // object would be emitted as if it were the column's value. Both list
-    // guards are required: `not-in` passes neither of the other two.
+    // guards are required: `not-in` passes neither of the other two. A `like`
+    // pattern names a set of values, not one, so it is dropped too.
     if (
       !isSearchCondition(criterion) &&
       !isSearchInCondition(criterion) &&
-      !isSearchNotInCondition(criterion)
+      !isSearchNotInCondition(criterion) &&
+      !isSearchLikeCondition(criterion)
     ) {
       identity[column] = criterion;
     }

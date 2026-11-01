@@ -32,8 +32,8 @@ export interface BuiltWhereClause {
  * Used by every SQL tabular backend so the operator handling stays consistent.
  *
  * @param dialect       Identifier-quoting, placeholder, and IN-list rules for the target DB.
- * @param criteria      Per-column equality value, comparison condition, or
- *                      `in` / `not-in` list.
+ * @param criteria      Per-column equality value, comparison condition,
+ *                      `in` / `not-in` list, or `like` pattern.
  * @param schemaProps   Schema property bag — unknown columns throw, preventing
  *                      callers from accidentally letting user input pick a column.
  * @param convertValue  Backend-specific JS-to-SQL coercion (e.g. boolean → 0/1).
@@ -82,6 +82,16 @@ export function buildSearchWhere<Entity>(
       // parameter, and an empty list of either kind degenerates to a constant
       // predicate binding nothing, so only the dialect knows how many
       // placeholders it used.
+      paramIndex += built.params.length;
+      continue;
+    }
+
+    if (normalized.kind === "like") {
+      // Bound as given, not through `convertValue`: a pattern is not a column
+      // value, and coercing it (a date column parsing it, say) would change it.
+      const built = dialect.likePredicate(quotedColumn, normalized.pattern, paramIndex);
+      conditions.push(built.sql);
+      params.push(...built.params);
       paramIndex += built.params.length;
       continue;
     }
