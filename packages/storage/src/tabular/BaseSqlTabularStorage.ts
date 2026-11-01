@@ -646,13 +646,17 @@ export abstract class BaseSqlTabularStorage<
    *   given 1-based parameter index.
    * @param startIndex - Param index to start numbering from. Returns the
    *   index to use after this clause's params.
+   * @param notNullColumns - Columns that cannot hold NULL (the primary key).
+   *   A DESC comparison on one drops its `OR col IS NULL` arm, which can never
+   *   match and keeps an index from serving the predicate.
    */
   protected buildKeysetWhere(
     effectiveOrderBy: ReadonlyArray<OrderBy<Entity>>,
     cursorValues: ReadonlyArray<ValueOptionType>,
     quote: string,
     placeholder: (index: number) => string,
-    startIndex: number
+    startIndex: number,
+    notNullColumns: ReadonlySet<string> = new Set()
   ): { whereClause: string; params: ValueOptionType[]; nextIndex: number } {
     if (effectiveOrderBy.length !== cursorValues.length) {
       throw new Error(
@@ -687,6 +691,8 @@ export abstract class BaseSqlTabularStorage<
       } else {
         if (dir === "ASC") {
           parts.push(`${colExpr} > ${placeholder(idx)}`);
+        } else if (notNullColumns.has(String(effectiveOrderBy[i].column))) {
+          parts.push(`${colExpr} < ${placeholder(idx)}`);
         } else {
           // DESC: rows smaller than v, then any NULLs after them.
           parts.push(`(${colExpr} < ${placeholder(idx)} OR ${colExpr} IS NULL)`);
@@ -728,6 +734,7 @@ export abstract class BaseSqlTabularStorage<
     const pkColumns = this.primaryKeyColumns() as unknown as Array<keyof Entity>;
     const orderBy = request.orderBy;
     const effectiveOrderBy = this.buildEffectiveOrderBy(orderBy, pkColumns);
+    const notNullColumns: ReadonlySet<string> = new Set(pkColumns.map(String));
     const effectiveOrderForCursor = effectiveOrderBy.map((o) => ({
       column: String(o.column),
       direction: o.direction,
@@ -762,7 +769,8 @@ export abstract class BaseSqlTabularStorage<
         cursorValues,
         dialect.quote,
         dialect.placeholder,
-        paramIdx
+        paramIdx,
+        notNullColumns
       );
       whereClauses.push(`(${built.whereClause})`);
       params.push(...built.params);
@@ -775,10 +783,16 @@ export abstract class BaseSqlTabularStorage<
     // keyset predicates in `buildKeysetWhere` assume NULLs-first-for-ASC,
     // NULLs-last-for-DESC; the ORDER BY must match that for resumed pages
     // to land in the right slot.
+    //
+    // A primary key column holds no NULL, so its placement changes nothing
+    // and is left out: a plain btree index serves `ASC` (and, scanned
+    // backward, `DESC`) but not `ASC NULLS FIRST`, and with the clause
+    // Postgres reads every row past the cursor and sorts them for each page.
     const orderByClause = effectiveOrderBy
       .map((o) => {
-        const nulls = o.direction === "ASC" ? "NULLS FIRST" : "NULLS LAST";
-        return `${q}${String(o.column)}${q} ${o.direction} ${nulls}`;
+        const column = `${q}${String(o.column)}${q} ${o.direction}`;
+        if (notNullColumns.has(String(o.column))) return column;
+        return `${column} ${o.direction === "ASC" ? "NULLS FIRST" : "NULLS LAST"}`;
       })
       .join(", ");
 
