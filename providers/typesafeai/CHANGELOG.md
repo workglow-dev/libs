@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.15
+
+### Bug Fixes
+
+#### typesafeai
+
+- match jev-preview's fallback description to the live listing
+
 ## 0.6.14
 
 ### Refactors

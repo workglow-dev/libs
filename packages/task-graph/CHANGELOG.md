@@ -1,5 +1,35 @@
 # @workglow/task-graph
 
+## 0.6.15
+
+### Features
+
+#### task-graph,ai
+
+- stream AgentTask rounds live, retracting a failed attempt's tail
+
+### Bug Fixes
+
+#### task-graph
+
+- detach a cache sink only for a retraction that removes text
+
+#### task-graph,ai
+
+- one rule for how much a text-retract removes
+
+### Tests
+
+#### task-graph
+
+- find the finish event with a type guard
+
+### Documentation
+
+#### task-graph
+
+- point the text-retract fold at retractText
+
 ## 0.6.14
 
 _No changes in this package._

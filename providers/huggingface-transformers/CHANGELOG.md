@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.15
+
+### Features
+
+- LFM3 support
+
 ## 0.6.14
 
 ### Features

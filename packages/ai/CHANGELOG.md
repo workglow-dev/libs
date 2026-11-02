@@ -1,5 +1,30 @@
 # @workglow/ai
 
+## 0.6.15
+
+### Features
+
+- LFM3 support
+
+#### ai
+
+- let a host round runner retract text through AgentRoundContext
+
+#### task-graph,ai
+
+- stream AgentTask rounds live, retracting a failed attempt's tail
+
+### Bug Fixes
+
+#### task-graph,ai
+
+- one rule for how much a text-retract removes
+
+#### ai
+
+- abandon a round's call when its stream stops being read
+- ignore a non-positive or NaN retraction in a round attempt
+
 ## 0.6.14
 
 ### Bug Fixes

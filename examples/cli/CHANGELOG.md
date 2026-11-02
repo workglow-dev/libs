@@ -1,5 +1,35 @@
 # @workglow/cli
 
+## 0.6.15
+
+### Features
+
+#### task-graph,ai
+
+- stream AgentTask rounds live, retracting a failed attempt's tail
+
+### Bug Fixes
+
+#### cli
+
+- no "attempt failed" note for an interrupted agent chat turn
+
+#### task-graph
+
+- detach a cache sink only for a retraction that removes text
+
+#### task-graph,ai
+
+- one rule for how much a text-retract removes
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `preact`: ^11.1.1
+
 ## 0.6.14
 
 ### Features

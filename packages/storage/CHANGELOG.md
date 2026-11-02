@@ -1,5 +1,20 @@
 # @workglow/storage
 
+## 0.6.15
+
+### Features
+
+#### storage
+
+- add a `like` pattern-match criterion to tabular search
+
+### Bug Fixes
+
+#### storage
+
+- validate like criteria on deleteSearch and updateWhere
+- let a key index serve keyset pages
+
 ## 0.6.14
 
 _No changes in this package._

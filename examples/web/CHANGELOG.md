@@ -1,5 +1,29 @@
 # @workglow/web
 
+## 0.6.15
+
+### Features
+
+#### task-graph,ai
+
+- stream AgentTask rounds live, retracting a failed attempt's tail
+
+### Bug Fixes
+
+#### task-graph,ai
+
+- one rule for how much a text-retract removes
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `@lezer/common`: 1.5.5
+- `@lezer/lr`: 1.4.12
+- `react-resizable-panels`: ^4.16.1
+
 ## 0.6.14
 
 ### Chores

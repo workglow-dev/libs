@@ -1,5 +1,58 @@
 # @workglow/test
 
+## 0.6.15
+
+### Features
+
+- LFM3 support
+
+#### storage
+
+- add a `like` pattern-match criterion to tabular search
+
+#### tasks
+
+- cap a linear global regex scan at 16 Ki code units
+- cap the linear regex runner's input at 64 Ki code units
+- a linear-time regex runner for hosts that cannot interrupt a match
+
+#### task-graph,ai
+
+- stream AgentTask rounds live, retracting a failed attempt's tail
+
+### Bug Fixes
+
+#### storage
+
+- let a key index serve keyset pages
+
+#### tasks
+
+- read \k as the letter in a legacy pattern with no named group
+- close linear regex runner divergences found in review
+
+### Tests
+
+#### tf-mediapipe
+
+- drop the WASM pin-vs-installed version test
+
+#### ai-provider-api
+
+- pin HF Inference conformance to Llama 3.1 8B on deepinfra
+
+### Build
+
+#### tf-mediapipe
+
+- take the WASM CDN versions from the installed SDKs
+
+### Chores
+
+#### ci
+
+- re-baseline a2a's typecheck budget, and keep the hostile regex fixtures as strings
+
 ## 0.6.14
 
 ### Features

@@ -1,5 +1,22 @@
 # @workglow/tasks
 
+## 0.6.15
+
+### Features
+
+#### tasks
+
+- cap a linear global regex scan at 16 Ki code units
+- cap the linear regex runner's input at 64 Ki code units
+- a linear-time regex runner for hosts that cannot interrupt a match
+
+### Bug Fixes
+
+#### tasks
+
+- read \k as the letter in a legacy pattern with no named group
+- close linear regex runner divergences found in review
+
 ## 0.6.14
 
 ### Bug Fixes

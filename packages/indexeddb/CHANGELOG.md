@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.15
+
+### Features
+
+#### storage
+
+- add a `like` pattern-match criterion to tabular search
+
 ## 0.6.14
 
 _No changes in this package._

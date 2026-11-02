@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.15
+
+### Bug Fixes
+
+#### tf-mediapipe
+
+- bump WASM pins to the installed MediaPipe SDKs
+- pin the WASM filesets to the installed SDKs
+
+### Tests
+
+#### tf-mediapipe
+
+- drop the WASM pin-vs-installed version test
+
+### Build
+
+#### tf-mediapipe
+
+- take the WASM CDN versions from the installed SDKs
+
 ## 0.6.14
 
 ### Bug Fixes

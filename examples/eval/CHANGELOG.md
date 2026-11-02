@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.15
+
+### Features
+
+#### task-graph,ai
+
+- stream AgentTask rounds live, retracting a failed attempt's tail
+
+### Bug Fixes
+
+#### task-graph
+
+- detach a cache sink only for a retraction that removes text
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `hyparquet`: ^1.32.0
+
 ## 0.6.14
 
 ### Chores

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.15
+
+### Bug Fixes
+
+#### storage
+
+- validate like criteria on deleteSearch and updateWhere
+
 ## 0.6.14
 
 _No changes in this package._
