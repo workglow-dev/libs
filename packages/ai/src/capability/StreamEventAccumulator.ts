@@ -89,6 +89,11 @@ export class StreamEventAccumulator<T extends TaskOutput = TaskOutput> {
         this.hasTextDeltas = true;
         this.lastEventType = "text-retract";
         const e = event as Extract<StreamEvent<T>, { type: "text-retract" }>;
+        if (e.port === REFUSAL_OUTPUT_KEY) {
+          this.refusalText = retractText(this.refusalText, e.length);
+          if (this.refusalText.length === 0) this.refusalCategory = undefined;
+          return;
+        }
         const text = this.textAccumulator.get(e.port);
         if (text !== undefined) this.textAccumulator.set(e.port, retractText(text, e.length));
         return;

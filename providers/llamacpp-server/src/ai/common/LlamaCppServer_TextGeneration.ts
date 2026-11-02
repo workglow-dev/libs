@@ -14,6 +14,7 @@ import type {
 } from "@workglow/ai";
 import { normalizeChatMessages, toOpenAIMessages } from "@workglow/ai/worker";
 import {
+  createChatRefusalReader,
   createEstimatedOutputUsageReporter,
   localOnlyFetch,
   mapOpenAIChatUsage,
@@ -110,9 +111,14 @@ export function createLlamaCppServerTextGenerationStream(
         );
       }
       let usage: Usage | undefined;
+      const refusals = createChatRefusalReader(emit);
       for await (const delta of readChatCompletionDeltas(response, signal)) {
         if (delta.done) break;
         usage = mapOpenAIChatUsage(delta.usage) ?? usage;
+        refusals.read({
+          delta: { refusal: delta.refusalDelta },
+          finish_reason: delta.finishReason,
+        });
         if (delta.contentDelta) {
           provisionalUsage.onText(delta.contentDelta);
           emit({ type: "text-delta", port: "text", textDelta: delta.contentDelta });

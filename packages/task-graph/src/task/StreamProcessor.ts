@@ -305,6 +305,15 @@ export class StreamProcessor<Input extends TaskInput, Output extends TaskOutput>
               this.task.status = TaskStatus.STREAMING;
               this.task.emit("status", this.task.status);
             }
+            // The reserved refusal field is not a declared port, so it has no
+            // accumulator or router: a retraction naming it takes back refusal
+            // text a failed attempt streamed, and nothing else needs undoing.
+            if (event.port === REFUSAL_OUTPUT_KEY) {
+              refusalText = retractText(refusalText, event.length);
+              if (refusalText.length === 0) refusalCategory = undefined;
+              this.task.emit("stream_chunk", event as StreamEvent);
+              break;
+            }
             if (accumulated) {
               const text = accumulated.get(event.port);
               if (text !== undefined) accumulated.set(event.port, retractText(text, event.length));

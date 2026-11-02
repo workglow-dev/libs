@@ -11,6 +11,7 @@ import type {
   Usage,
 } from "@workglow/ai";
 import {
+  createChatRefusalReader,
   createEstimatedOutputUsageReporter,
   mapOpenAIChatUsage,
   OPENAI_STREAM_USAGE_OPTIONS,
@@ -101,6 +102,7 @@ export const Xai_TextGeneration_Stream: AiProviderRunFn<
     );
 
     let usage: Usage | undefined;
+    const refusals = createChatRefusalReader(emit);
     for await (const chunk of stream as AsyncIterable<{
       choices?: Array<{ delta?: { content?: string | null; refusal?: string | null } }>;
       usage?: unknown;
@@ -113,10 +115,7 @@ export const Xai_TextGeneration_Stream: AiProviderRunFn<
         provisionalUsage.onText(delta);
         emit({ type: "text-delta", port: "text", textDelta: delta });
       }
-      const refusalDelta = chunk.choices?.[0]?.delta?.refusal ?? "";
-      if (refusalDelta) {
-        emit({ type: "refusal", refusal: refusalDelta });
-      }
+      refusals.read(chunk.choices?.[0]);
     }
     provisionalUsage.flush();
     emit({ type: "finish", data: {} as TextGenerationTaskOutput, usage });

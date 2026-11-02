@@ -104,6 +104,8 @@ export interface IChatCompletionDelta {
   readonly contentDelta?: string;
   /** The model's thinking, streamed as `delta.reasoning_content` by a reasoning model. */
   readonly reasoningDelta?: string | undefined;
+  /** A safety refusal, streamed as `delta.refusal` beside (never inside) `content`. */
+  readonly refusalDelta?: string | undefined;
   readonly toolCallDeltas?: ReadonlyArray<{
     readonly index?: number;
     readonly id?: string;
@@ -162,6 +164,7 @@ export async function* readChatCompletionDeltas(
             delta?: {
               content?: string;
               reasoning_content?: string;
+              refusal?: string | null;
               tool_calls?: IChatCompletionDelta["toolCallDeltas"];
             };
             finish_reason?: string;
@@ -176,6 +179,7 @@ export async function* readChatCompletionDeltas(
         const choice = chunk.choices?.[0];
         const contentDelta = choice?.delta?.content;
         const reasoningDelta = choice?.delta?.reasoning_content;
+        const refusalDelta = choice?.delta?.refusal ?? undefined;
         const toolCallDeltas = choice?.delta?.tool_calls;
         const finishReason = choice?.finish_reason;
         // The usage-bearing chunk carries an empty `choices` array, so it must
@@ -184,11 +188,12 @@ export async function* readChatCompletionDeltas(
         if (
           contentDelta !== undefined ||
           reasoningDelta !== undefined ||
+          refusalDelta !== undefined ||
           toolCallDeltas !== undefined ||
           finishReason ||
           usage !== undefined
         ) {
-          yield { contentDelta, reasoningDelta, toolCallDeltas, finishReason, usage };
+          yield { contentDelta, reasoningDelta, refusalDelta, toolCallDeltas, finishReason, usage };
         }
       }
     }

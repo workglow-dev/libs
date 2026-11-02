@@ -10,6 +10,7 @@ import { createPartialJsonStream, parsePartialJson } from "@workglow/util/worker
 import type { ToolCallingTaskOutput } from "../task/ToolCallingTask";
 import type { ToolCalls, ToolDefinition } from "../task/ToolCallingUtils";
 import { buildToolDescription, sanitizeToolArgs } from "../task/ToolCallingUtils";
+import { createChatRefusalReader } from "./RefusalHelpers";
 import { createEstimatedOutputUsageReporter, mapOpenAIChatUsage } from "./UsageMapping";
 
 /**
@@ -175,6 +176,7 @@ export async function accumulateOpenAIChatStream(
     provisionalUsage.onPrompt(options.promptText);
   }
   let usage: Usage | undefined;
+  const refusals = createChatRefusalReader(emit);
 
   for await (const chunk of stream) {
     usage = mapUsage(chunk?.usage) ?? usage;
@@ -202,10 +204,9 @@ export async function accumulateOpenAIChatStream(
     // OpenAI-compatible chat completions surface safety refusals as a `refusal`
     // string on the delta (distinct from `content`). Emit it as a first-class
     // refusal event so it lands in the reserved `refusal` output field.
-    const refusalDelta: string = choice.delta?.refusal ?? "";
-    if (refusalDelta) {
-      emit({ type: "refusal", refusal: refusalDelta });
-    }
+    // A stream ended by `finish_reason: "content_filter"` with no refusal text
+    // is reported the same way.
+    refusals.read(choice);
 
     const tcDeltas = choice.delta?.tool_calls;
     if (!Array.isArray(tcDeltas)) continue;
