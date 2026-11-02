@@ -11,6 +11,7 @@ import type {
   Usage,
 } from "@workglow/ai";
 import {
+  createChatRefusalReader,
   createEstimatedOutputUsageReporter,
   jsonModeChatParts,
   OPENAI_STREAM_USAGE_OPTIONS,
@@ -72,7 +73,7 @@ export const DeepSeek_StructuredGeneration_Stream: AiProviderRunFn<
   );
 
   const json = createPartialJsonStream();
-  let refusal = "";
+  const refusals = createChatRefusalReader(emit);
   let finishReason: string | null | undefined;
   let usage: Usage | undefined;
   // The reasoning-exhaustion guard below only distinguishes "no content at all"
@@ -90,14 +91,10 @@ export const DeepSeek_StructuredGeneration_Stream: AiProviderRunFn<
         emit({ type: "object-delta", port: "object", objectDelta: partial });
       }
     }
-    refusal += chunk.choices?.[0]?.delta?.refusal ?? "";
+    refusals.read(chunk.choices?.[0]);
     finishReason = chunk.choices?.[0]?.finish_reason ?? finishReason;
   }
   provisionalUsage.flush();
-
-  if (refusal) {
-    emit({ type: "refusal", refusal });
-  }
 
   assertNotTruncatedByReasoning(finishReason, anyContent, input.maxTokens);
 

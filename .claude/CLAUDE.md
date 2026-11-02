@@ -484,6 +484,16 @@ called, and any other load is never one, because it runs text-only.
 main-thread state (credential stores, service registries) there — resolve it in the task
 class (e.g. `AiTask.getJobInput()`) and pass it through the serialized job input.
 
+**Refusals are reported, never swallowed.** An OpenAI-shaped stream refuses two ways: a
+`delta.refusal` string, and a reply ended by `finish_reason: "content_filter"` with an empty
+body. Read both with `createChatRefusalReader(emit)` (`@workglow/ai/provider-utils`) rather than
+reading `delta.content` alone, or the task completes as an empty answer. Text already streamed
+before a refusal stays streamed. Refusal text a failed attempt streamed is taken back with a
+`text-retract` on the reserved `refusal` port (`REFUSAL_OUTPUT_KEY`), which `AgentRoundAttempt`
+sends for a retried round and `AgentRoundContext.onRefusal` lets a host runner stream. A provider
+whose wire has no refusal field says so in `runToolTurnConformance`'s `refusal: { kind: "none",
+reason }`.
+
 Rules for writing a run-fn:
 
 - **Never accumulate output.** A provider stream function (`AiProviderStreamFn`) yields

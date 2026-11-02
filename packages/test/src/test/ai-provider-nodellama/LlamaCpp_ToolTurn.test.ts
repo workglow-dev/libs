@@ -161,6 +161,10 @@ runToolTurnConformance({
   reasoningStream: "reasoning-port",
   // Each reasoning block goes back as an ended `thought` segment of its model response.
   reasoningReplay: { kind: "text" },
+  refusal: {
+    kind: "none",
+    reason: "node-llama-cpp streams text segments from a local session; it has no refusal field",
+  },
   toolResultImages: {
     kind: "text-only",
     reason:

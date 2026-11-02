@@ -55,4 +55,5 @@ runToolTurnConformance({
     kind: "text-only",
     reason: "DeepSeek's chat models read text only, so the result names the image in its place",
   },
+  refusal: { kind: "stream" },
 });

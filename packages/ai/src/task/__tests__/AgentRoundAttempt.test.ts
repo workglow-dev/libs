@@ -5,7 +5,12 @@
  */
 
 import { PermanentJobError, RetryableJobError } from "@workglow/job-queue";
-import type { IExecuteContext, StreamTextDelta, StreamTextRetract } from "@workglow/task-graph";
+import type {
+  IExecuteContext,
+  StreamRefusal,
+  StreamTextDelta,
+  StreamTextRetract,
+} from "@workglow/task-graph";
 import { retractText } from "@workglow/task-graph";
 import { Container, ServiceRegistry } from "@workglow/util";
 import { describe, expect, it } from "vitest";
@@ -69,13 +74,13 @@ function options(
   };
 }
 
-type RoundEvent = StreamTextDelta | StreamTextRetract;
+type RoundEvent = StreamTextDelta | StreamTextRetract | StreamRefusal;
 
 /** Folds one port of a round's events the way the stream does, retractions included. */
 function folded(events: readonly RoundEvent[], port: string): string {
   let text = "";
   for (const event of events) {
-    if (event.port !== port) continue;
+    if (event.type === "refusal" || event.port !== port) continue;
     text = event.type === "text-retract" ? retractText(text, event.length) : text + event.textDelta;
   }
   return text;
@@ -248,6 +253,45 @@ describe("settleRound", () => {
     ]);
     expect(folded(events, "text")).toBe("done");
     expect(settled).toMatchObject({ status: "settled", attempts: 1 });
+  });
+
+  it("forwards a refusal as it arrives and takes a failed attempt's back before the retry", async () => {
+    const { context } = contextFor([
+      async (_input, round) => {
+        round.onRefusal("I can't ", "output-refusal");
+        throw new RetryableJobError("overloaded", new Date());
+      },
+      async (_input, round) => {
+        round.onRefusal("Not now.");
+        return ANSWER;
+      },
+    ]);
+    const { events } = await drain(settleRound(options(context)));
+    expect(events).toEqual([
+      { type: "refusal", refusal: "I can't ", category: "output-refusal" },
+      { type: "text-retract", port: "refusal", length: "I can't ".length },
+      { type: "refusal", refusal: "Not now." },
+    ]);
+  });
+
+  it("passes on a host runner's refusal retraction, capped at what this attempt forwarded", async () => {
+    const { context } = contextFor([
+      async (_input, round) => {
+        round.onRefusal("draft");
+        round.onTextRetract("refusal", 2);
+        // More than the attempt sent: only its own refusal can be taken back.
+        round.onTextRetract("refusal", 100);
+        round.onRefusal("No.");
+        return ANSWER;
+      },
+    ]);
+    const { events } = await drain(settleRound(options(context)));
+    expect(events).toEqual([
+      { type: "refusal", refusal: "draft" },
+      { type: "text-retract", port: "refusal", length: 2 },
+      { type: "text-retract", port: "refusal", length: 3 },
+      { type: "refusal", refusal: "No." },
+    ]);
   });
 
   it("sets a round's reasoning apart from an earlier round's, once it has some", async () => {

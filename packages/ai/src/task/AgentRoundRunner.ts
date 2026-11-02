@@ -28,7 +28,14 @@ export interface AgentRoundContext {
    * `text-retract`, capped at what this attempt forwarded on that port, so a
    * host can never take back an earlier round's text.
    */
-  readonly onTextRetract: (port: "text" | "reasoning", length: number) => void;
+  readonly onTextRetract: (port: "text" | "reasoning" | "refusal", length: number) => void;
+  /**
+   * A refusal the round's model gave, as it streams: re-emitted as the turn's
+   * own, so the turn's `refusal` output reads what the model said. Taken back
+   * with a `text-retract` on the `refusal` port if the attempt fails, like the
+   * round's text, so a retried round contributes only its retry's.
+   */
+  readonly onRefusal: (refusal: string, category?: string) => void;
   /**
    * Progress while the round has nothing to say yet — a model being downloaded
    * or loaded. `progress` is 0..100, or undefined when there is no denominator.

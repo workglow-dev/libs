@@ -67,4 +67,5 @@ runToolTurnConformance({
       "refuses it as unknown, varies by provider",
   },
   toolResultImages: { kind: "user-turn-after" },
+  refusal: { kind: "stream" },
 });

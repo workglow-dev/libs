@@ -172,5 +172,9 @@ runToolTurnConformance({
   turns: visionTurns,
   reasoningStream: "reasoning-port",
   reasoningReplay: { kind: "text" },
+  refusal: {
+    kind: "none",
+    reason: "the Transformers.js pipeline decodes text and tool calls; it has no refusal channel",
+  },
   toolResultImages: { kind: "user-turn-after" },
 });

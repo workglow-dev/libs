@@ -6,12 +6,13 @@
 
 import { RetryableJobError } from "@workglow/job-queue";
 import type {
+  StreamRefusal,
   IExecuteContext,
   StreamEvent,
   StreamTextDelta,
   StreamTextRetract,
 } from "@workglow/task-graph";
-import { retractionLength } from "@workglow/task-graph";
+import { REFUSAL_OUTPUT_KEY, retractionLength } from "@workglow/task-graph";
 import { createEmitQueue } from "../capability/emitQueue";
 import type { AgentRoundRunner } from "./AgentRoundRunner";
 import { AGENT_ROUND_RUNNER } from "./AgentRoundRunner";
@@ -23,7 +24,7 @@ import type { ToolCallingTaskInput, ToolCallingTaskOutput } from "./ToolCallingT
 import { ToolCallingTask } from "./ToolCallingTask";
 
 /** What a round puts on the turn's wire: its text and reasoning, and the retraction of a failed attempt's. */
-type RoundStreamEvent = StreamTextDelta | StreamTextRetract;
+type RoundStreamEvent = StreamTextDelta | StreamTextRetract | StreamRefusal;
 
 /** Between two rounds' reasoning, which would otherwise run together into one thought. */
 export const REASONING_ROUND_SEPARATOR = "\n\n";
@@ -166,6 +167,8 @@ async function* attemptRound(
         onTextDelta: (delta) => queue.push({ type: "text-delta", port: "text", textDelta: delta }),
         onReasoningDelta: (delta) =>
           queue.push({ type: "text-delta", port: "reasoning", textDelta: delta }),
+        onRefusal: (refusal, category) =>
+          queue.push({ type: "refusal", refusal, ...(category !== undefined ? { category } : {}) }),
         onTextRetract: (port, length) => queue.push({ type: "text-retract", port, length }),
         // Progress is advisory: a failed update must not surface as an
         // unhandled rejection, nor fail a round that is otherwise fine.
@@ -178,6 +181,10 @@ async function* attemptRound(
     context.own(task);
     abandon = () => task.abort();
     off = task.subscribe("stream_chunk", (event: StreamEvent) => {
+      if (event.type === "refusal") {
+        queue.push(event);
+        return;
+      }
       if (event.type !== "text-delta" && event.type !== "text-retract") return;
       const port = event.port ?? "text";
       if (port !== "text" && port !== "reasoning") return;
@@ -219,12 +226,20 @@ async function* attemptRound(
   // appends after the earlier rounds as if it never ran.
   let textSent = 0;
   let reasoningSent = 0;
+  // A refusal is forwarded as it arrives too, so a host sees it while the round
+  // is still running, and a failed attempt's is taken back by the same rule.
+  let refusalSent = 0;
   // Rounds are told apart on the wire exactly as in the settled output, and
   // only once this round has something to say: a separator ahead of nothing
   // would leave the streamed reasoning ending differently than the final one.
   let separatorSent = false;
   try {
     for await (const event of queue.iterable) {
+      if (event.type === "refusal") {
+        refusalSent += event.refusal.length;
+        yield event;
+        continue;
+      }
       if (event.type === "text-retract") {
         // Counted as the fold removes it: a NaN would poison the counters and a
         // fraction would drift them from the text, so a failed attempt's own
@@ -235,6 +250,10 @@ async function* attemptRound(
           const length = Math.min(requested, textSent);
           textSent -= length;
           if (length > 0) yield { type: "text-retract", port: "text", length };
+        } else if (event.port === REFUSAL_OUTPUT_KEY) {
+          const length = Math.min(requested, refusalSent);
+          refusalSent -= length;
+          if (length > 0) yield { type: "text-retract", port: REFUSAL_OUTPUT_KEY, length };
         } else {
           let length = Math.min(requested, reasoningSent);
           reasoningSent -= length;
@@ -263,6 +282,9 @@ async function* attemptRound(
     await run;
   } catch (err) {
     if (textSent > 0) yield { type: "text-retract", port: "text", length: textSent };
+    if (refusalSent > 0) {
+      yield { type: "text-retract", port: REFUSAL_OUTPUT_KEY, length: refusalSent };
+    }
     const reasoningLength = reasoningSent + (separatorSent ? REASONING_ROUND_SEPARATOR.length : 0);
     if (reasoningLength > 0) {
       yield { type: "text-retract", port: "reasoning", length: reasoningLength };

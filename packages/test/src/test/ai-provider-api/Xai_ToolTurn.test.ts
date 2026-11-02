@@ -56,4 +56,5 @@ runToolTurnConformance({
       "replayable (encrypted) reasoning exists only on the Responses API, which this adapter does not call",
   },
   toolResultImages: { kind: "user-turn-after" },
+  refusal: { kind: "stream" },
 });

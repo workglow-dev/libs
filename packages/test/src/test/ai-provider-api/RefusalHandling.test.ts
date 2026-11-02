@@ -16,6 +16,7 @@ import { collectStream } from "@workglow/ai";
 import { createChatRefusalReader } from "@workglow/ai/provider-utils";
 import { _testOnly } from "@workglow/huggingface-inference/ai";
 import { createLlamaCppServerTextGenerationStream } from "@workglow/llamacpp-server/ai-runtime";
+import { _testOnly as xaiTestOnly } from "@workglow/xai/ai";
 import type { StreamEvent } from "@workglow/task-graph";
 import { REFUSAL_OUTPUT_KEY, Task, TaskRegistry } from "@workglow/task-graph";
 import type { DataPortSchema } from "@workglow/util/schema";
@@ -179,6 +180,68 @@ describe("llamacpp-server text generation", () => {
   });
 });
 
+describe("xAI (the OpenAI-shaped cloud loops)", () => {
+  const reg = (key: string) => {
+    const found = xaiTestOnly.XAI_RUN_FNS.find((r) => [...r.serves].sort().join(",") === key);
+    if (!found) throw new Error(`no xAI run-fn for ${key}`);
+    return found.runFn;
+  };
+  const model = {
+    model_id: "grok-x",
+    provider_config: { model_name: "grok-3-mini", api_key: "test-key" },
+  } as any;
+  const sse = (chunks: readonly unknown[]): Response => {
+    const enc = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(enc.encode(`data: ${JSON.stringify(c)}\n\n`));
+        controller.enqueue(enc.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+  afterEach(() => vi.restoreAllMocks());
+
+  const runs = [
+    {
+      label: "structured generation",
+      key: "json-mode,text.generation",
+      input: {
+        prompt: "hi",
+        outputSchema: { type: "object", properties: { a: { type: "number" } } },
+      },
+    },
+    { label: "text rewriter", key: "text.rewriter", input: { prompt: "p", text: "t" } },
+  ] as const;
+
+  for (const run of runs) {
+    it(`${run.label}: reports delta.refusal and a bare content_filter ending`, async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      fetchSpy.mockResolvedValueOnce(
+        sse([
+          { choices: [{ delta: { refusal: "No " } }] },
+          { choices: [{ delta: { refusal: "way." } }] },
+        ])
+      );
+      const refused: any[] = [];
+      await reg(run.key)(run.input as never, model, new AbortController().signal, (e: any) =>
+        refused.push(e)
+      );
+      expect(refusalOf(refused)).toBe("No way.");
+
+      fetchSpy.mockResolvedValueOnce(
+        sse([{ choices: [{ delta: {}, finish_reason: "content_filter" }] }])
+      );
+      const filtered: any[] = [];
+      await reg(run.key)(run.input as never, model, new AbortController().signal, (e: any) =>
+        filtered.push(e)
+      );
+      expect(filtered.filter((e) => e.type === "refusal")).toHaveLength(1);
+    });
+  }
+});
+
 describe("taking back refusal text", () => {
   type Out = { text: string };
   const SCHEMA = {
@@ -207,7 +270,7 @@ describe("taking back refusal text", () => {
     { type: "refusal", refusal: "I can't ", category: "output-refusal" },
     { type: "text-retract", port: REFUSAL_OUTPUT_KEY, length: 8 },
     { type: "refusal", refusal: "Not now." },
-    { type: "finish", data: {} },
+    { type: "finish", data: { text: "" } },
   ];
 
   it("StreamProcessor leaves only the retried attempt's refusal", async () => {
@@ -223,7 +286,7 @@ describe("taking back refusal text", () => {
       { type: "refusal", refusal: "No.", category: "output-refusal" },
       { type: "text-retract", port: REFUSAL_OUTPUT_KEY, length: 3 },
       { type: "text-delta", port: "text", textDelta: "answer" },
-      { type: "finish", data: {} },
+      { type: "finish", data: { text: "" } },
     ];
     const out = (await task.run({})) as Record<string, unknown>;
     expect(out[REFUSAL_OUTPUT_KEY]).toBeUndefined();

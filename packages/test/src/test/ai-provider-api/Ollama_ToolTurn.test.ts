@@ -67,5 +67,9 @@ runToolTurnConformance({
   turns: chatCompletionTurns,
   reasoningStream: "reasoning-port",
   reasoningReplay: { kind: "text" },
+  refusal: {
+    kind: "none",
+    reason: "Ollama's chat API has no refusal field; done_reason is a plain string",
+  },
   toolResultImages: { kind: "user-turn-after" },
 });

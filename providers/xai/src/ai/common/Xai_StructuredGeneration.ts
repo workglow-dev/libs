@@ -11,6 +11,7 @@ import type {
   Usage,
 } from "@workglow/ai";
 import {
+  createChatRefusalReader,
   createEstimatedOutputUsageReporter,
   jsonModeChatParts,
   mapOpenAIChatUsage,
@@ -60,7 +61,7 @@ export const Xai_StructuredGeneration_Stream: AiProviderRunFn<
   );
 
   const json = createPartialJsonStream();
-  let refusal = "";
+  const refusals = createChatRefusalReader(emit);
   let usage: Usage | undefined;
   for await (const chunk of stream) {
     usage = mapOpenAIChatUsage(chunk.usage) ?? usage;
@@ -72,13 +73,9 @@ export const Xai_StructuredGeneration_Stream: AiProviderRunFn<
         emit({ type: "object-delta", port: "object", objectDelta: partial });
       }
     }
-    refusal += chunk.choices?.[0]?.delta?.refusal ?? "";
+    refusals.read(chunk.choices?.[0]);
   }
   provisionalUsage.flush();
-
-  if (refusal) {
-    emit({ type: "refusal", refusal });
-  }
 
   emit({
     type: "finish",

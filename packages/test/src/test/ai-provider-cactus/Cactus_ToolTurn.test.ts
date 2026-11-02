@@ -85,6 +85,10 @@ runToolTurnConformance({
       "Needle answers one query and keeps no conversation; a round's thinking is not " +
       "part of what the next round's query carries",
   },
+  refusal: {
+    kind: "none",
+    reason: "the on-device engine returns text and tool calls only; it has no refusal field",
+  },
   toolResultImages: {
     kind: "text-only",
     reason: "Needle reads one text query, so a tool's image can only be named in it",
