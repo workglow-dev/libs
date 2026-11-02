@@ -23,9 +23,9 @@
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.15",
     "@codemirror/language": "6.13.1",
-    "@lezer/common": "1.5.4",
+    "@lezer/common": "1.5.5",
     "@lezer/highlight": "1.2.5",
-    "@lezer/lr": "1.4.11",
+    "@lezer/lr": "1.4.12",
     "@workglow/ai": "workspace:*",
     "@workglow/knowledge-base": "workspace:*",
     "@workglow/huggingface-transformers": "workspace:*",
@@ -50,7 +50,7 @@
     "react": "catalog:",
     "react-dom": "^19.3.1",
     "react-icons": "^5.7.0",
-    "react-resizable-panels": "^4.15.0",
+    "react-resizable-panels": "^4.16.1",
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
