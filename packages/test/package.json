@@ -39,6 +39,7 @@
     "@workglow/ai": "workspace:*",
     "@workglow/anthropic": "workspace:*",
     "@workglow/aws": "workspace:*",
+    "@workglow/bootstrap": "workspace:*",
     "@workglow/browser-control": "workspace:*",
     "@workglow/bun-webview": "workspace:*",
     "@workglow/cactus": "workspace:*",
