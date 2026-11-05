@@ -841,8 +841,9 @@ describe("PostgresTabularStorage regressions", () => {
   // A compound key's `IN` list is a nested expression tree, so its length is
   // bounded by the server's `max_stack_depth`, not by the 65535 bind-parameter
   // cap the chunk size was originally derived from. Sizing only against that
-  // cap emitted 15000-tuple lists for a 2-column key and a stock server threw
-  // `stack depth limit exceeded` past 6534 of them.
+  // cap emitted 15000-tuple lists for a 2-column key, and the ceiling varies by
+  // server: a 2MB production server threw `stack depth limit exceeded` at 1500
+  // tuples after succeeding at 1000.
   //
   // Asserted as a statement-shape contract rather than as "does not throw":
   // these tests run on PGlite, whose stack ceiling is its own, so a throw-based
@@ -885,9 +886,47 @@ describe("PostgresTabularStorage regressions", () => {
     // Under the old parameter-derived size (30000/2 = 15000) this was a single
     // 5000-tuple statement; it must now be split.
     expect(selects.length).toBeGreaterThan(1);
-    for (const sql of selects) expect(countTuples(sql)).toBeLessThanOrEqual(2000);
+    expect(selects).toHaveLength(10);
+    for (const sql of selects) expect(countTuples(sql)).toBeLessThanOrEqual(500);
     // Chunking must not drop the tail — every key is still asked for.
     expect(selects.reduce((sum, sql) => sum + countTuples(sql), 0)).toBe(5000);
+  });
+
+  it("returns every row when a compound integer+text key getBulk spans several chunks", async () => {
+    const MixedSchema = {
+      type: "object",
+      properties: {
+        id: { type: "integer" },
+        code: { type: "string" },
+        v: { type: "string" },
+      },
+      required: ["id", "code", "v"],
+      additionalProperties: false,
+    } as const satisfies DataPortSchemaObject;
+
+    const storage = new PostgresTabularStorage<typeof MixedSchema, readonly ["id", "code"]>(
+      junctionDb,
+      `mixed_bulk_${uuid4().replace(/-/g, "_")}`,
+      MixedSchema,
+      ["id", "code"] as const
+    );
+    await storage.setupDatabase();
+
+    // 1203 keys = three chunks at 500, the last one partial.
+    const n = 1203;
+    await storage.putBulk(
+      Array.from({ length: n }, (_, i) => ({ id: i, code: `c${i % 7}`, v: `v${i}` }))
+    );
+    const keys = Array.from({ length: n }, (_, i) => ({ id: i, code: `c${i % 7}` }));
+    // Plus keys that match nothing, including a right id with the wrong code.
+    keys.push({ id: 5, code: "nope" }, { id: n + 1, code: "c0" });
+
+    const rows = await storage.getBulk(keys);
+    expect(rows).toHaveLength(n);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    for (let i = 0; i < n; i++) {
+      expect(byId.get(i)).toEqual({ id: i, code: `c${i % 7}`, v: `v${i}` });
+    }
   });
 
   it("leaves a single-column getBulk on the flat placeholder list", async () => {

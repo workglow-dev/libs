@@ -87,14 +87,16 @@ const pad = (n: number, width = 2): string => String(n).padStart(width, "0");
  *
  * Postgres parses `(a, b) IN ((..), (..), ...)` into a nested expression tree,
  * so the list length is bounded by `max_stack_depth` rather than by the 65535
- * bind-parameter cap. A stock server (2MB) fails past 6534 tuples with `stack
- * depth limit exceeded`, and at the same 6534 for both 2- and 3-column keys —
- * the count of tuples is what matters, not the count of parameters. Since
- * `max_stack_depth` is server-side configuration a client cannot read, this
- * keeps roughly 3x headroom under that measured ceiling instead of sitting
- * just below it. The cost is only extra round-trips on very large reads.
+ * bind-parameter cap, and it is the count of tuples that matters, not the
+ * count of parameters. Where that ceiling sits depends on the server, not just
+ * on the setting: an otherwise idle stock server (2MB) has gone to 6534 tuples,
+ * but a production server at the same 2MB, with extensions and hooks loaded,
+ * failed a 2-column read with `stack depth limit exceeded` at 1500 tuples
+ * after succeeding at 1000. A client cannot read the server's stack budget,
+ * so this sits well under the lowest ceiling seen. The cost is only extra
+ * round-trips on very large reads.
  */
-const COMPOUND_IN_TUPLE_LIMIT = 2000;
+const COMPOUND_IN_TUPLE_LIMIT = 500;
 
 /**
  * How {@link PostgresTabularStorage}'s value decoding treats one column,
@@ -1502,12 +1504,11 @@ export class PostgresTabularStorage<
    *
    * The bind-parameter cap is not the only ceiling. A compound key's row-value
    * list is parsed as a nested expression tree, so a long one exhausts the
-   * server's `max_stack_depth` (2MB by default) and fails with `stack depth
-   * limit exceeded` long before 65535 parameters are in sight — measured at
-   * 6534 tuples on a stock server, and identically for 2- and 3-column keys,
-   * which is what shows the limit tracks the number of TUPLES rather than the
-   * number of parameters. Compound keys are therefore additionally bounded by
-   * {@link COMPOUND_IN_TUPLE_LIMIT}. Single-column keys emit a flat placeholder
+   * server's `max_stack_depth` and fails with `stack depth limit exceeded`
+   * long before 65535 parameters are in sight. The point of failure tracks the
+   * number of TUPLES and varies by server (1500 failed on a 2MB production
+   * server; see {@link COMPOUND_IN_TUPLE_LIMIT}), so compound keys are
+   * additionally bounded by that limit. Single-column keys emit a flat placeholder
    * list, which does not nest, and keep the parameter-derived size.
    */
   override async getBulk(keys: readonly PrimaryKey[]): Promise<Entity[]> {
