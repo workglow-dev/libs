@@ -5,7 +5,7 @@
  */
 
 import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
-import { Task, TaskConfigSchema } from "@workglow/task-graph";
+import { Task, TaskConfigSchema, TaskInvalidInputError } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
@@ -105,7 +105,7 @@ export class BrowserFillTask extends Task<
     } else if (input.label) {
       await ctx.fillByLabel(input.label, input.value);
     } else {
-      throw new Error("BrowserFillTask: either ref or label must be provided");
+      throw new TaskInvalidInputError("BrowserFillTask: either ref or label must be provided");
     }
     return { sessionId: input.sessionId };
   }

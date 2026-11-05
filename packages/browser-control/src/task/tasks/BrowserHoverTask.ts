@@ -5,7 +5,7 @@
  */
 
 import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
-import { Task, TaskConfigSchema } from "@workglow/task-graph";
+import { Task, TaskConfigSchema, TaskInvalidInputError } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
@@ -85,7 +85,7 @@ export class BrowserHoverTask extends Task<
     if (input.ref) {
       await ctx.hover(input.ref);
     } else {
-      throw new Error("BrowserHoverTask: ref must be provided");
+      throw new TaskInvalidInputError("BrowserHoverTask: ref must be provided");
     }
     return { sessionId: input.sessionId };
   }

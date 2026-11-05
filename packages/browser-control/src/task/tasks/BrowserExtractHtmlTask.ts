@@ -5,7 +5,7 @@
  */
 
 import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
-import { Task, TaskConfigSchema } from "@workglow/task-graph";
+import { Task, TaskConfigSchema, TaskConfigurationError } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
@@ -99,7 +99,9 @@ export class BrowserExtractHtmlTask extends Task<
     let ref = this.config.ref;
     if (!ref) {
       if (!this.config.selector) {
-        throw new Error("BrowserExtractHtmlTask requires either config.ref or config.selector");
+        throw new TaskConfigurationError(
+          "BrowserExtractHtmlTask requires either config.ref or config.selector"
+        );
       }
       const found = await ctx.querySelector(this.config.selector);
       if (!found) {

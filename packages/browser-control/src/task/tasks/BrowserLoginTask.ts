@@ -10,7 +10,13 @@ import type {
   TaskConfig,
   TaskEntitlements,
 } from "@workglow/task-graph";
-import { Entitlements, mergeEntitlements, Task, TaskConfigSchema } from "@workglow/task-graph";
+import {
+  Entitlements,
+  mergeEntitlements,
+  Task,
+  TaskConfigSchema,
+  TaskInvalidInputError,
+} from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
@@ -130,7 +136,7 @@ export class BrowserLoginTask extends Task<
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
     const parsed = new URL(input.url, "https://placeholder");
     if (parsed.protocol === "javascript:") {
-      throw new Error("BrowserLoginTask: javascript: URLs are not allowed");
+      throw new TaskInvalidInputError("BrowserLoginTask: javascript: URLs are not allowed");
     }
     const ctx = BrowserSessionRegistry.get(input.sessionId);
     const mode = this.config.mode ?? "manual";
