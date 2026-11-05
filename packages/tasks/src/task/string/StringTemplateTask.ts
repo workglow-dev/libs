@@ -8,12 +8,15 @@ import type { IExecuteContext, IExecutePreviewContext, TaskConfig } from "@workg
 import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 
+/**
+ * One pass over the template. Replacing key by key re-scanned what earlier keys had
+ * substituted, so a value such as "{{secret}}" expanded into another key's value --
+ * or did not, depending on key order. A placeholder with no value stays as written.
+ */
 function renderStringTemplate(template: string, values: Record<string, unknown>): string {
-  let text = template;
-  for (const [key, value] of Object.entries(values)) {
-    text = text.replaceAll(`{{${key}}}`, String(value));
-  }
-  return text;
+  return template.replace(/\{\{([^{}]+)\}\}/g, (placeholder, key: string) =>
+    Object.hasOwn(values, key) ? String(values[key]) : placeholder
+  );
 }
 
 const inputSchema = {

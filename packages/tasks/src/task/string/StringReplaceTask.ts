@@ -9,7 +9,8 @@ import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 
 function replaceString(text: string, search: string, replace: string): string {
-  return text.replaceAll(search, replace);
+  // A function replacement is inserted as is; a string one would expand `$&`, `$$`, `$1`.
+  return text.replaceAll(search, () => replace);
 }
 
 const inputSchema = {

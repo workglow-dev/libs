@@ -100,6 +100,13 @@ describe("StringTask", () => {
       const result = await task.run({ text: "hello world", search: " ", replace: "" });
       expect(result.text).toBe("helloworld");
     });
+
+    test("inserts the replacement literally, `$` patterns included", async () => {
+      // String.replaceAll(string, string) expands `$&`, `$$`, `$1`… in the replacement.
+      const task = new StringReplaceTask();
+      const result = await task.run({ text: "price: 10", search: "10", replace: "$& USD ($$5)" });
+      expect(result.text).toBe("price: $& USD ($$5)");
+    });
   });
 
   describe("StringSliceTask", () => {
@@ -151,6 +158,26 @@ describe("StringTask", () => {
   });
 
   describe("StringTemplateTask", () => {
+    test("substitutes once: a value holding a placeholder is not expanded again", async () => {
+      // Replacing key by key re-scanned earlier substitutions, so a value such as
+      // "{{secret}}" pulled another key into the output -- or not, by key order.
+      const values = { note: "{{secret}}", name: "Ann", secret: "s3cr3t" };
+      const reordered = { secret: "s3cr3t", name: "Ann", note: "{{secret}}" };
+      const template = "Hello {{name}}! Note: {{note}}";
+      const a = await new StringTemplateTask().run({ template, values });
+      const b = await new StringTemplateTask().run({ template, values: reordered });
+      expect(a.text).toBe("Hello Ann! Note: {{secret}}");
+      expect(b.text).toBe(a.text);
+    });
+
+    test("leaves a placeholder with no value as written", async () => {
+      const result = await new StringTemplateTask().run({
+        template: "{{known}} and {{unknown}}",
+        values: { known: "x" },
+      });
+      expect(result.text).toBe("x and {{unknown}}");
+    });
+
     test("replaces placeholders", async () => {
       const task = new StringTemplateTask();
       const result = await task.run({
