@@ -49,4 +49,14 @@ describe("DelayTask", () => {
       expect(error).toBeInstanceOf(TaskAbortedError);
     }
   });
+
+  it("stops a long delay as soon as it is aborted", async () => {
+    // The abort was checked only between sleeps of delay/100 ms: a one-minute delay
+    // noticed it up to 600 ms late, an hour's up to 36 s.
+    const task = new DelayTask({ delay: 60_000 });
+    const started = Date.now();
+    setTimeout(() => task.abort(), 50);
+    await expect(task.run({})).rejects.toBeInstanceOf(TaskAbortedError);
+    expect(Date.now() - started).toBeLessThan(300);
+  });
 });
