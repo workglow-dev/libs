@@ -5,7 +5,7 @@
  */
 
 import { javaScript, JavaScriptTask } from "@workglow/javascript/task";
-import { TaskGraph, TaskStatus, Workflow } from "@workglow/task-graph";
+import { TaskAbortedError, TaskGraph, TaskStatus, Workflow } from "@workglow/task-graph";
 import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
 import { describe, expect, test } from "vitest";
@@ -356,5 +356,29 @@ describe("JavaScriptTask", () => {
     const outputSchema = JavaScriptTask.outputSchema();
     expect(inputSchema).toBeDefined();
     expect(outputSchema).toBeDefined();
+  });
+
+  // `Interpreter.run()` is a synchronous loop: a script that never ends held the
+  // event loop forever, so no timer — and no abort — could ever run again.
+  test("a script that never ends can still be aborted", async () => {
+    const task = new JavaScriptTask();
+    const timer = setTimeout(() => task.abort(), 100);
+    const started = Date.now();
+    await expect(task.run({ javascript_code: "while (true) {}" })).rejects.toBeInstanceOf(
+      TaskAbortedError
+    );
+    clearTimeout(timer);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  test("timers keep running while a long script executes", async () => {
+    let ticks = 0;
+    const interval = setInterval(() => ticks++, 10);
+    const result = await new JavaScriptTask().run({
+      javascript_code: "var s = 0; for (var i = 0; i < 300000; i++) { s += i; } s",
+    });
+    clearInterval(interval);
+    expect(result.output).toBe(44999850000);
+    expect(ticks).toBeGreaterThan(0);
   });
 });

@@ -4,11 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { TaskConfig, TaskEntitlements } from "@workglow/task-graph";
+import type { IExecuteContext, TaskConfig, TaskEntitlements } from "@workglow/task-graph";
 import {
   CreateWorkflow,
   Entitlements,
   Task,
+  TaskAbortedError,
   TaskConfigSchema,
   TaskInvalidInputError,
   TaskRegistry,
@@ -19,10 +20,41 @@ import { Interpreter } from "./interpreter";
 
 const isValidIdentifier = (key: string) => /^[a-z_$][\w$]*$/i.test(key);
 
-function runJavaScript(
+/** How long the interpreter runs before letting the event loop take a turn. */
+const SLICE_MS = 50;
+/** Steps between clock reads; one step is far below a microsecond. */
+const STEPS_PER_CLOCK_CHECK = 10_000;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * Runs the interpreter in time slices rather than with `Interpreter.run()`,
+ * which is one synchronous loop: a script that never ended held the event loop
+ * for good, so no timer, abort or UI update could run again. `run()` is itself
+ * `while (step()) {}`, so slicing changes no result — only that other work, and
+ * an abort, get a turn every {@link SLICE_MS}.
+ */
+async function runInSlices(
+  interpreter: Interpreter,
+  signal: AbortSignal | undefined
+): Promise<void> {
+  let sliceEnd = performance.now() + SLICE_MS;
+  let steps = 0;
+  while (interpreter.step()) {
+    if (++steps % STEPS_PER_CLOCK_CHECK !== 0 || performance.now() < sliceEnd) continue;
+    await yieldToEventLoop();
+    if (signal?.aborted) throw new TaskAbortedError("JavaScript execution aborted");
+    sliceEnd = performance.now() + SLICE_MS;
+  }
+}
+
+async function runJavaScript(
   input: JavaScriptTaskInput,
-  configuredCode: string | undefined
-): JavaScriptTaskOutput {
+  configuredCode: string | undefined,
+  signal: AbortSignal | undefined
+): Promise<JavaScriptTaskOutput> {
   const output = {} as JavaScriptTaskOutput;
   const code = input.javascript_code || configuredCode;
   if (code) {
@@ -34,11 +66,12 @@ function runJavaScript(
         .map((key) => `var ${key} = ${JSON.stringify(input[key])};`)
         .join("\n");
       const myInterpreter = new Interpreter(`${inputVariablesString} ${code}`);
-      myInterpreter.run();
+      await runInSlices(myInterpreter, signal);
       // The interpreter's value is a sandboxed pseudo-object for arrays/objects; callers
       // expect plain JS, so unwrap it. Primitives pass through untouched.
       output.output = myInterpreter.pseudoToNative(myInterpreter.value);
     } catch (e) {
+      if (e instanceof TaskAbortedError) throw e;
       throw new TaskInvalidInputError(
         `JavaScript execution failed: ${e instanceof Error ? e.message : String(e)}`
       );
@@ -145,12 +178,12 @@ export class JavaScriptTask extends Task<
     return inputSchema;
   }
 
-  override async execute(input: JavaScriptTaskInput) {
-    return runJavaScript(input, this.config.javascript_code);
+  override async execute(input: JavaScriptTaskInput, context: IExecuteContext) {
+    return runJavaScript(input, this.config.javascript_code, context.signal);
   }
 
   override async executePreview(input: JavaScriptTaskInput) {
-    return runJavaScript(input, this.config.javascript_code);
+    return runJavaScript(input, this.config.javascript_code, undefined);
   }
 }
 
