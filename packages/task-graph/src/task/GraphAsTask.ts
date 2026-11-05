@@ -302,9 +302,16 @@ export class GraphAsTask<
         ? bridgeSubGraphTaskEvents(this.subGraph, parentGraph)
         : () => {};
 
+      // The subgraph listens to this signal rather than the caller's directly, so a
+      // consumer that stops reading early can stop the run it no longer awaits.
+      const runAbort = new AbortController();
+      const forwardAbort = (): void => runAbort.abort(context.signal?.reason);
+      if (context.signal?.aborted) forwardAbort();
+      else context.signal?.addEventListener("abort", forwardAbort, { once: true });
+
       const runPromise = this.subGraph
         .run<Output>(input, {
-          parentSignal: context.signal,
+          parentSignal: runAbort.signal,
           accumulateLeafOutputs: false,
           ...this.runner.subGraphRunContext,
           enforceEntitlements: this.runConfig?.enforceEntitlements,
@@ -349,6 +356,14 @@ export class GraphAsTask<
       } finally {
         unsub();
         bridgeUnsub();
+        context.signal?.removeEventListener("abort", forwardAbort);
+        if (!subgraphDone) {
+          // The consumer left before the subgraph settled — it failed mid-stream
+          // or closed this generator. Nothing awaits the run any more: stop it,
+          // and keep its eventual rejection from surfacing as unhandled.
+          runPromise.catch(() => {});
+          runAbort.abort();
+        }
       }
 
       const results = await runPromise;
