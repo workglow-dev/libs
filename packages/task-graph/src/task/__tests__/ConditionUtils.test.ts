@@ -274,6 +274,39 @@ describe("ConditionUtils", () => {
       });
     });
 
+    describe("blank values are not the number 0", () => {
+      // `Number("")`, `Number("  ")` and `Number([])` are all 0, so a blank value
+      // used to compare numerically — a field nobody filled equalled "0", and an
+      // unfilled compare value made `x > ""` true for every positive x.
+      it("does not equate a blank field with 0", () => {
+        expect(evaluateCondition("", "equals", "0")).toBe(false);
+        expect(evaluateCondition("  ", "equals", "0")).toBe(false);
+        expect(evaluateCondition([], "equals", "0")).toBe(false);
+        expect(evaluateCondition("", "not_equals", "0")).toBe(true);
+      });
+
+      it("does not equate 0 with a blank compare value", () => {
+        expect(evaluateCondition(0, "equals", "")).toBe(false);
+        expect(evaluateCondition(0, "not_equals", "")).toBe(true);
+      });
+
+      it("still equates two blanks as strings", () => {
+        expect(evaluateCondition("", "equals", "")).toBe(true);
+      });
+
+      it("treats a blank operand to an ordering operator as non-numeric", () => {
+        expect(evaluateCondition("", "less_than", "1")).toBe(false);
+        expect(evaluateCondition("", "greater_or_equal", "0")).toBe(false);
+        expect(evaluateCondition(5, "greater_than", "")).toBe(false);
+        expect(evaluateCondition(-5, "less_or_equal", " ")).toBe(false);
+      });
+
+      it("keeps numeric comparison for padded numerals", () => {
+        expect(evaluateCondition(" 42 ", "equals", "42")).toBe(true);
+        expect(evaluateCondition("7", "greater_than", " 5 ")).toBe(true);
+      });
+    });
+
     describe("unknown operator", () => {
       it("should return false for unknown operator", () => {
         expect(evaluateCondition("hello", "unknown_op" as any, "hello")).toBe(false);

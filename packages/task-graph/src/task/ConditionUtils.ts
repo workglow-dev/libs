@@ -46,6 +46,19 @@ export interface UIConditionConfig {
 }
 
 /**
+ * The number a condition operand stands for, or NaN when it is not numeric.
+ *
+ * `Number()` alone reads a blank string, a whitespace-only string and an empty
+ * array as 0, which would make a field nobody filled equal "0" and an unfilled
+ * compare value satisfy `x > ""` for every positive x. Blank is not a number.
+ */
+function conditionNumber(value: unknown): number {
+  if (typeof value === "string" && value.trim() === "") return NaN;
+  if (Array.isArray(value) && value.length === 0) return NaN;
+  return Number(value);
+}
+
+/**
  * Evaluates a condition based on operator type.
  *
  * @param fieldValue - The value of the field being tested
@@ -75,19 +88,20 @@ export function evaluateCondition(
   }
 
   const strValue = asText(fieldValue);
-  const numValue = Number(fieldValue);
+  const numValue = conditionNumber(fieldValue);
+  const compareNum = conditionNumber(compareValue);
 
   switch (operator) {
     case "equals":
       // Try numeric comparison first, then string
-      if (!isNaN(numValue) && !isNaN(Number(compareValue))) {
-        return numValue === Number(compareValue);
+      if (!isNaN(numValue) && !isNaN(compareNum)) {
+        return numValue === compareNum;
       }
       return strValue === compareValue;
 
     case "not_equals":
-      if (!isNaN(numValue) && !isNaN(Number(compareValue))) {
-        return numValue !== Number(compareValue);
+      if (!isNaN(numValue) && !isNaN(compareNum)) {
+        return numValue !== compareNum;
       }
       return strValue !== compareValue;
 
@@ -99,7 +113,6 @@ export function evaluateCondition(
       // non-numeric (Number(...) is NaN) the comparison can never be true and
       // would silently never fire; surface it as a clear diagnostic and return
       // false rather than failing quietly forever.
-      const compareNum = Number(compareValue);
       if (isNaN(numValue) || isNaN(compareNum)) {
         getLogger().warn(
           `Non-numeric operand in '${operator}' comparison (field=${JSON.stringify(fieldValue)}, compare=${JSON.stringify(compareValue)}); evaluating as false`
