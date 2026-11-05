@@ -53,6 +53,19 @@ describe("AiImageOutputTask", () => {
       const policy = task.getCachePolicy({ prompt: "x", model: "m", seed: 42 });
       expect(policy).toEqual({ kind: "deterministic" });
     });
+
+    // Task.getCachePolicy's order: a caller's `cacheable: false` wins first. A seed
+    // makes the output reproducible; it does not override the caller opting out.
+    it("honours a caller's cacheable: false even when a seed is set", () => {
+      const viaConfig = new TestImageTask({ cacheable: false } as never);
+      expect(viaConfig.getCachePolicy({ prompt: "x", model: "m", seed: 42 })).toEqual({
+        kind: "none",
+      });
+      const viaRunConfig = new TestImageTask({}, { cacheable: false } as never);
+      expect(viaRunConfig.getCachePolicy({ prompt: "x", model: "m", seed: 42 })).toEqual({
+        kind: "none",
+      });
+    });
   });
 
   describe("streaming accumulator (snapshot replacement)", () => {
