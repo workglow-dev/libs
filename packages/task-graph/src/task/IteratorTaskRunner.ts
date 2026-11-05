@@ -338,6 +338,9 @@ export class IteratorTaskRunner<
         outputCache: this.outputCache,
         registry: this.registry,
         resourceScope: this.resourceScope,
+        // A clone's run is a graph run of its own: without the flag every task in
+        // it is scheduled unchecked, whatever the outer run enforces.
+        enforceEntitlements: this.task.runConfig?.enforceEntitlements,
         ...this.streamRunOptions,
       });
 

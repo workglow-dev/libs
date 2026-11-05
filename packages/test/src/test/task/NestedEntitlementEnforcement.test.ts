@@ -10,13 +10,18 @@ import {
   Dataflow,
   ENTITLEMENT_ENFORCER,
   Entitlements,
+  FallbackTask,
   GraphAsTask,
+  MapTask,
+  ReduceTask,
   Task,
   TaskEntitlementError,
   TaskGraph,
   TaskGraphRunner,
+  WhileTask,
   type IEntitlementEnforcer,
   type IExecuteContext,
+  type ITask,
   type TaskEntitlements,
 } from "@workglow/task-graph";
 import { Container, ServiceRegistry } from "@workglow/util";
@@ -193,6 +198,135 @@ describe("entitlement enforcement reaches nested work", () => {
     graph.addTask(group);
 
     await expect(run(graph)).rejects.toThrow(TaskEntitlementError);
+    expect(fetched).toEqual([]);
+  });
+});
+
+// Every compound task runs its subgraph its own way — a clone per item, the
+// same graph per pass, each alternative on its own — and each of those runs is
+// a separate place enforcement has to be handed on. The group above is one of
+// them; these are the rest, with the same runtime-only url.
+describe("entitlement enforcement reaches the subgraphs of loop and fallback tasks", () => {
+  function urlSourceAndFetch(): TaskGraph {
+    const inner = new TaskGraph();
+    inner.addTask(
+      new (class extends Task<Record<string, unknown>, Record<string, unknown>> {
+        public static override type = "LoopInnerUrlSource";
+        public static override inputSchema(): DataPortSchema {
+          return { type: "object", properties: {}, additionalProperties: true } as DataPortSchema;
+        }
+        public static override outputSchema(): DataPortSchema {
+          return {
+            type: "object",
+            properties: { url: { type: "string", format: "uri", title: "URL" } },
+            required: ["url"],
+          } as DataPortSchema;
+        }
+        public override async execute() {
+          return { url: METADATA_URL };
+        }
+      })({ id: "src" } as never)
+    );
+    inner.addTask(
+      new FetchUrlTask({ id: "inner-fetch", defaults: { response_type: "text" } } as never)
+    );
+    inner.addDataflow(new Dataflow("src", "url", "inner-fetch", "url"));
+    return inner;
+  }
+
+  function denyMetadata(): ServiceRegistry {
+    const registry = new ServiceRegistry(new Container());
+    registry.register(ENTITLEMENT_ENFORCER, () =>
+      createPolicyEnforcer({
+        deny: [{ id: Entitlements.NETWORK_PRIVATE, resources: ["http://169.254.169.254/*"] }],
+        grant: [
+          { id: Entitlements.NETWORK_HTTP },
+          { id: Entitlements.CREDENTIAL },
+          { id: Entitlements.NETWORK_PRIVATE },
+        ],
+        ask: [],
+      })
+    );
+    return registry;
+  }
+
+  async function expectDenied(task: ITask, input: Record<string, unknown>): Promise<void> {
+    fetched = [];
+    const graph = new TaskGraph();
+    graph.addTask(task);
+    await expect(
+      new TaskGraphRunner(graph).runGraph(input, {
+        registry: denyMetadata(),
+        enforceEntitlements: true,
+      })
+    ).rejects.toThrow(TaskEntitlementError);
+    expect(fetched).toEqual([]);
+  }
+
+  it("MapTask: every item's clone is checked", async () => {
+    const map = new MapTask({ id: "map", maxIterations: 5 } as never);
+    map.subGraph = urlSourceAndFetch();
+    await expectDenied(map, { items: [1, 2] });
+  });
+
+  it("ReduceTask: every step is checked", async () => {
+    const reduce = new ReduceTask({ id: "reduce", maxIterations: 5 } as never);
+    reduce.subGraph = urlSourceAndFetch();
+    await expectDenied(reduce, { items: [1] });
+  });
+
+  it("WhileTask: every pass is checked", async () => {
+    const loop = new WhileTask({ id: "while", maxIterations: 1, condition: () => false } as never);
+    loop.subGraph = urlSourceAndFetch();
+    await expectDenied(loop, {});
+  });
+
+  it("FallbackTask in data mode: every attempt is checked", async () => {
+    const fallback = new FallbackTask({
+      id: "fallback",
+      fallbackMode: "data",
+      alternatives: [{}],
+    } as never);
+    fallback.subGraph = urlSourceAndFetch();
+    await expectDenied(fallback, {});
+  });
+
+  it("FallbackTask in task mode: every alternative is checked", async () => {
+    // The url reaches the alternative from upstream, at run time, so pre-flight
+    // sees only an unscoped `network:private` that the broad grant covers.
+    const alternatives = new TaskGraph();
+    alternatives.addTask(
+      new FetchUrlTask({ id: "alt-fetch", defaults: { response_type: "text" } } as never)
+    );
+    const fallback = new FallbackTask({ id: "fallback", fallbackMode: "task" } as never);
+    fallback.subGraph = alternatives;
+
+    const graph = new TaskGraph();
+    graph.addTask(
+      new (class extends Task<Record<string, unknown>, Record<string, unknown>> {
+        public static override type = "OuterUrlSource";
+        public static override outputSchema(): DataPortSchema {
+          return {
+            type: "object",
+            properties: { url: { type: "string", format: "uri", title: "URL" } },
+            required: ["url"],
+          } as DataPortSchema;
+        }
+        public override async execute() {
+          return { url: METADATA_URL };
+        }
+      })({ id: "outer-src" } as never)
+    );
+    graph.addTask(fallback);
+    graph.addDataflow(new Dataflow("outer-src", "url", "fallback", "url"));
+
+    fetched = [];
+    await expect(
+      new TaskGraphRunner(graph).runGraph(
+        {},
+        { registry: denyMetadata(), enforceEntitlements: true }
+      )
+    ).rejects.toThrow(TaskEntitlementError);
     expect(fetched).toEqual([]);
   });
 });
