@@ -20,7 +20,7 @@ import type {
   TokenBudget,
 } from "@workglow/knowledge-base";
 import type { IExecuteContext, IRunConfig, TaskConfig } from "@workglow/task-graph";
-import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
+import { CreateWorkflow, Task, TaskInvalidInputError, Workflow } from "@workglow/task-graph";
 import { uuid4 } from "@workglow/util";
 import type { DataPortSchema } from "@workglow/util/schema";
 import type { Capability } from "../capability/Capabilities";
@@ -185,10 +185,10 @@ export class HierarchicalChunkerTask extends Task<
     } = input;
 
     if (!doc_id) {
-      throw new Error("doc_id is required");
+      throw new TaskInvalidInputError("doc_id is required");
     }
     if (!documentTree) {
-      throw new Error("documentTree is required");
+      throw new TaskInvalidInputError("documentTree is required");
     }
 
     const root = documentTree as DocumentNode;
@@ -319,7 +319,7 @@ export class HierarchicalChunkerTask extends Task<
     const overlapTokens = tokenBudget.overlapTokens;
 
     if (budgetAfterReserved <= 0) {
-      throw new Error(
+      throw new TaskInvalidInputError(
         `Invalid token budget: reservedTokens (${tokenBudget.reservedTokens}) must be less than maxTokensPerChunk (${tokenBudget.maxTokensPerChunk})`
       );
     }
@@ -335,7 +335,7 @@ export class HierarchicalChunkerTask extends Task<
     const maxTokens = budgetAfterReserved - effectivePrefixTokens;
 
     if (overlapTokens >= maxTokens) {
-      throw new Error(
+      throw new TaskInvalidInputError(
         `Invalid token budget: overlapTokens (${overlapTokens}) must be less than effective maxTokens (${maxTokens})`
       );
     }

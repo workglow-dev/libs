@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { CreateWorkflow, Workflow } from "@workglow/task-graph";
+import { CreateWorkflow, TaskConfigurationError, Workflow } from "@workglow/task-graph";
 
 import type { CachePolicy, IExecuteContext, IRunConfig, TaskConfig } from "@workglow/task-graph";
 import type { DataPortSchema } from "@workglow/util/schema";
@@ -130,7 +130,9 @@ export class ModelInfoTask extends AiTask<
       "model.info",
     ]);
     if (!runFn) {
-      throw new Error(`Provider "${model.provider}" has no run function serving "model.info".`);
+      throw new TaskConfigurationError(
+        `Provider "${model.provider}" has no run function serving "model.info".`
+      );
     }
     const { emit, result } = accumulatingEmit<ModelInfoTaskOutput>();
     await runFn(input, model, context.signal, emit);
