@@ -25,6 +25,27 @@ function formatDate(input: {
   const locale = input.locale;
   const timeZone = input.timeZone;
 
+  try {
+    return formatAs(date, format, locale, timeZone);
+  } catch (error) {
+    // Intl rejects an unknown locale tag or IANA zone with a RangeError; both are input.
+    if (error instanceof RangeError) {
+      // Node's message for a bad locale does not name it, so say what was passed.
+      throw new TaskInvalidInputError(
+        `Cannot format date with locale ${JSON.stringify(locale ?? null)} and time zone ` +
+          `${JSON.stringify(timeZone ?? null)}: ${error.message}`
+      );
+    }
+    throw error;
+  }
+}
+
+function formatAs(
+  date: Date,
+  format: string,
+  locale: string | undefined,
+  timeZone: string | undefined
+): string {
   switch (format) {
     case "iso":
       return date.toISOString();
