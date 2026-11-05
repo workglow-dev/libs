@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { IExecuteContext, TaskConfig } from "@workglow/task-graph";
+import type { IExecuteContext, IExecutePreviewContext, TaskConfig } from "@workglow/task-graph";
 import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 
@@ -56,8 +56,21 @@ export class ScalarMaxTask<
     return outputSchema;
   }
 
-  override async execute(input: Input, _context: IExecuteContext): Promise<Output> {
-    return { result: Math.max(...input.values) } as Output;
+  override async execute(input: Input, _context?: IExecuteContext): Promise<Output> {
+    // Folded rather than spread: `Math.max(...values)` passes every element as an
+    // argument, and engines cap argument counts — a million values threw a RangeError.
+    // Folding with Math.max itself keeps its NaN and signed-zero rules.
+    let result = -Infinity;
+    for (const value of input.values) result = Math.max(result, value);
+    return { result } as Output;
+  }
+
+  /** Pure and instant, so a preview shows the value a run would produce. */
+  override async executePreview(
+    input: Input,
+    _context: IExecutePreviewContext
+  ): Promise<Output | undefined> {
+    return this.execute(input);
   }
 }
 

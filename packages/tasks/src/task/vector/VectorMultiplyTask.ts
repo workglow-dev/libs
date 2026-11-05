@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { IExecuteContext, TaskConfig } from "@workglow/task-graph";
+import type { IExecuteContext, IExecutePreviewContext, TaskConfig } from "@workglow/task-graph";
 import { CreateWorkflow, Task, TaskInvalidInputError, Workflow } from "@workglow/task-graph";
 import type {
   DataPortSchema,
@@ -65,7 +65,7 @@ export class VectorMultiplyTask<
     return outputSchema;
   }
 
-  override async execute(input: Input, _context: IExecuteContext): Promise<Output> {
+  override async execute(input: Input, _context?: IExecuteContext): Promise<Output> {
     const { vectors } = input as { vectors: TypedArray[] };
     if (vectors.length === 0) {
       throw new TaskInvalidInputError("At least one vector is required");
@@ -80,6 +80,14 @@ export class VectorMultiplyTask<
       vectors.reduce((acc, v) => acc * Number(v[i]), 1)
     );
     return { result: createTypedArrayFrom(vectors, values) } as Output;
+  }
+
+  /** Pure and instant, so a preview shows the value a run would produce. */
+  override async executePreview(
+    input: Input,
+    _context: IExecutePreviewContext
+  ): Promise<Output | undefined> {
+    return this.execute(input);
   }
 }
 
