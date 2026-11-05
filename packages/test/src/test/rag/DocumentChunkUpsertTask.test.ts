@@ -5,6 +5,7 @@
  */
 
 import { ChunkVectorUpsertTask } from "@workglow/ai";
+import { TaskInvalidInputError } from "@workglow/task-graph";
 import type { ChunkRecord, KnowledgeBase } from "@workglow/knowledge-base";
 import { createKnowledgeBase, registerKnowledgeBase } from "@workglow/knowledge-base";
 import { setLogger, uuid4 } from "@workglow/util";
@@ -160,6 +161,9 @@ describe("ChunkVectorUpsertTask", () => {
     await expect(task.run({ knowledgeBase: kb, chunks, vector: vectors })).rejects.toThrow(
       "Mismatch"
     );
+    await expect(
+      new ChunkVectorUpsertTask().run({ knowledgeBase: kb, chunks, vector: vectors })
+    ).rejects.toBeInstanceOf(TaskInvalidInputError);
     report("chunk-upsert: mismatch-throw", s);
   });
 
@@ -172,6 +176,9 @@ describe("ChunkVectorUpsertTask", () => {
     await expect(task.run({ knowledgeBase: kb, chunks, vector: vectors })).rejects.toThrow(
       /share one doc_id/
     );
+    await expect(
+      new ChunkVectorUpsertTask().run({ knowledgeBase: kb, chunks, vector: vectors })
+    ).rejects.toBeInstanceOf(TaskInvalidInputError);
     report("chunk-upsert: mixed-doc-ids", s);
   });
 

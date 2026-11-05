@@ -13,7 +13,13 @@ import type {
   TaskConfig,
   TaskEntitlements,
 } from "@workglow/task-graph";
-import { CreateWorkflow, Entitlements, Task, Workflow } from "@workglow/task-graph";
+import {
+  CreateWorkflow,
+  Entitlements,
+  Task,
+  TaskInvalidInputError,
+  Workflow,
+} from "@workglow/task-graph";
 import type { DataPortSchema, TypedArray } from "@workglow/util/schema";
 import { TypedArraySchema } from "@workglow/util/schema";
 import type { Capability } from "../capability/Capabilities";
@@ -135,7 +141,7 @@ export class ChunkVectorUpsertTask extends Task<
     const vectorArray: TypedArray[] = Array.isArray(vector) ? vector : [vector];
 
     if (chunkArray.length !== vectorArray.length) {
-      throw new Error(
+      throw new TaskInvalidInputError(
         `Mismatch: ${chunkArray.length} chunks but ${vectorArray.length} vectors — they must be 1:1 aligned`
       );
     }
@@ -152,7 +158,7 @@ export class ChunkVectorUpsertTask extends Task<
     // a misleading single doc_id, so we reject it up front.
     for (let i = 1; i < chunkArray.length; i++) {
       if (chunkArray[i].doc_id !== doc_id) {
-        throw new Error(
+        throw new TaskInvalidInputError(
           `ChunkVectorUpsertTask expects all chunks to share one doc_id, but chunk[${i}] has doc_id=${JSON.stringify(chunkArray[i].doc_id)} (expected ${JSON.stringify(doc_id)}).`
         );
       }

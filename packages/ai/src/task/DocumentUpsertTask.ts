@@ -13,7 +13,13 @@ import type {
   TaskConfig,
   TaskEntitlements,
 } from "@workglow/task-graph";
-import { CreateWorkflow, Entitlements, Task, Workflow } from "@workglow/task-graph";
+import {
+  CreateWorkflow,
+  Entitlements,
+  Task,
+  TaskInvalidInputError,
+  Workflow,
+} from "@workglow/task-graph";
 import type { DataPortSchema } from "@workglow/util/schema";
 import type { Capability } from "../capability/Capabilities";
 
@@ -143,7 +149,7 @@ export class DocumentUpsertTask extends Task<
       ...(title !== undefined ? { title } : {}),
     };
     if (!merged.title) {
-      throw new Error(
+      throw new TaskInvalidInputError(
         "DocumentUpsertTask: title is required — provide it via the 'title' input or 'metadata.title'"
       );
     }
