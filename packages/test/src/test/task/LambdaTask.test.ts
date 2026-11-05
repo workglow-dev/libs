@@ -134,4 +134,12 @@ describe("LambdaTask", () => {
     }
     expect(progressCounter).toEqual(2); // manual updateProgress(0.5) + terminal-100 tick
   });
+
+  test("keeps the run config it was constructed with", () => {
+    // The constructor took only `config`, so a cache or any other run setting
+    // passed as the second argument was dropped without a word.
+    const runConfig = { cacheable: false, timeout: 1234 };
+    const task = new LambdaTask({ execute: async () => ({}) }, runConfig as never);
+    expect(task.runConfig).toMatchObject(runConfig);
+  });
 });

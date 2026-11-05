@@ -7,6 +7,7 @@
 import type {
   IExecuteContext,
   IExecutePreviewContext,
+  IRunConfig,
   TaskConfig,
   TaskInput,
   TaskOutput,
@@ -87,13 +88,13 @@ export class LambdaTask<
     return false;
   }
 
-  constructor(config: Partial<Config> = {}) {
+  constructor(config: Partial<Config> = {}, runConfig: Partial<IRunConfig> = {}) {
     if (!config.execute && !config.executePreview) {
       throw new TaskConfigurationError(
         "LambdaTask must have either execute or executePreview function in config"
       );
     }
-    super(config);
+    super(config, runConfig);
   }
 
   override async execute(input: Input, context: IExecuteContext): Promise<Output> {
