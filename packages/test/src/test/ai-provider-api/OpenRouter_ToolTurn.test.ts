@@ -48,6 +48,7 @@ function openRouterChunks(reply: ScriptedReply): unknown[] {
     );
   }
   if (reply.text !== undefined) chunks.push(chunk({ content: reply.text }));
+  if (reply.refusal !== undefined) chunks.push(chunk({ refusal: reply.refusal }));
   const calls = reply.toolCalls ?? [];
   if (calls.length > 0) {
     chunks.push(
@@ -61,7 +62,9 @@ function openRouterChunks(reply: ScriptedReply): unknown[] {
       })
     );
   }
-  chunks.push(chunk({}, calls.length > 0 ? "tool_calls" : "stop"));
+  chunks.push(
+    chunk({}, reply.contentFiltered ? "content_filter" : calls.length > 0 ? "tool_calls" : "stop")
+  );
   return chunks;
 }
 
@@ -100,4 +103,5 @@ runToolTurnConformance({
     wireForm: (payload) => (JSON.parse(payload) as { details: unknown }).details,
   },
   toolResultImages: { kind: "user-turn-after" },
+  refusal: { kind: "stream" },
 });

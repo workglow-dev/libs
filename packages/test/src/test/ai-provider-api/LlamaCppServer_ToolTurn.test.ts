@@ -43,4 +43,5 @@ runToolTurnConformance({
   reasoningStream: "reasoning-port",
   reasoningReplay: { kind: "text" },
   toolResultImages: { kind: "user-turn-after" },
+  refusal: { kind: "stream" },
 });

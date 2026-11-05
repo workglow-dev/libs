@@ -110,6 +110,10 @@ runToolTurnConformance({
     kind: "none",
     reason: "the Prompt API returns no reasoning, so a round has none to carry forward",
   },
+  refusal: {
+    kind: "none",
+    reason: "Chrome's built-in model returns text only; its prompt API has no refusal field",
+  },
   toolResultImages: {
     kind: "text-only",
     reason:

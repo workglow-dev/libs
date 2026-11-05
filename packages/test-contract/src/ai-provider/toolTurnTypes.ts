@@ -24,6 +24,13 @@ export interface ScriptedReply {
   readonly reasoning?: string | undefined;
   readonly text?: string | undefined;
   readonly toolCalls?: ReadonlyArray<ScriptedToolCall> | undefined;
+  /** A safety refusal the model gives instead of an answer, written as the vendor's refusal field. */
+  readonly refusal?: string | undefined;
+  /**
+   * The reply is withheld by the provider's content filter: an empty body that
+   * ends in the vendor's filtered finish reason, saying nothing else.
+   */
+  readonly contentFiltered?: boolean | undefined;
 }
 
 /** What the suite hands a harness to run, the harness adding its own model. */
@@ -125,6 +132,18 @@ export type ToolResultImages =
       readonly reason: string;
     };
 
+/** Whether a provider reports a refusal, and if not, why there is none to report. */
+export type RefusalSupport =
+  | {
+      /** The vendor's stream can carry a refusal, and the harness writes it that way. */
+      readonly kind: "stream";
+    }
+  | {
+      readonly kind: "none";
+      /** Why this provider's wire has no refusal to read. */
+      readonly reason: string;
+    };
+
 export interface ToolTurnConformanceOpts {
   readonly name: string;
   readonly skip?: boolean;
@@ -143,6 +162,12 @@ export interface ToolTurnConformanceOpts {
   readonly reasoningStream: "reasoning-port" | { readonly notForwarded: string };
   readonly reasoningReplay: ReasoningReplay;
   readonly toolResultImages: ToolResultImages;
+  /**
+   * Whether a refusal, and a reply withheld by a content filter, reach the
+   * turn as `refusal` events instead of completing as an empty answer. Omitted
+   * means the block does not run for this adapter.
+   */
+  readonly refusal?: RefusalSupport;
   /**
    * Names of assertions currently broken in this adapter, each run as an
    * expected failure until the adapter is fixed:

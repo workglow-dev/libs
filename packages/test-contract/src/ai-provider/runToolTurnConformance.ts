@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe } from "vitest";
 import { nativeTurnBlock } from "./assertions/nativeTurn";
 import { reasoningPortBlock } from "./assertions/reasoningPort";
 import { reasoningRoundTripBlock } from "./assertions/reasoningRoundTrip";
+import { refusalBlock } from "./assertions/refusal";
 import { emptyToolResultBlock, toolResultImageBlock } from "./assertions/toolResultShape";
 import type { ToolTurnConformanceOpts, ToolTurnHarness } from "./toolTurnTypes";
 
@@ -46,5 +47,6 @@ export function runToolTurnConformance(opts: ToolTurnConformanceOpts): void {
     reasoningRoundTripBlock(opts, harness);
     toolResultImageBlock(opts, harness);
     emptyToolResultBlock(opts, harness);
+    refusalBlock(opts, harness);
   });
 }

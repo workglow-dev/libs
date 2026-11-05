@@ -24,6 +24,7 @@ export * from "./ai-provider/assertions/noFinishAccumulation";
 export * from "./ai-provider/assertions/pricingMatchesModality";
 export * from "./ai-provider/assertions/reasoningPort";
 export * from "./ai-provider/assertions/reasoningRoundTrip";
+export * from "./ai-provider/assertions/refusal";
 export * from "./ai-provider/assertions/registryCoverage";
 export * from "./ai-provider/assertions/sessionReuse";
 export * from "./ai-provider/assertions/signalHonoring";

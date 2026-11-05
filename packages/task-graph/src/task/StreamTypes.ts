@@ -40,6 +40,11 @@ export type StreamTextDelta = {
  * For a producer that streams text it may yet abandon, such as a model call
  * that fails partway and is retried: the folded port then reads as if the
  * abandoned text had never been sent.
+ *
+ * `port` may also be {@link REFUSAL_OUTPUT_KEY}: refusal text is streamed by
+ * `refusal` events, not on a port, and a retried call must be able to take
+ * back what the failed attempt said, or its refusal stays on an answer that
+ * then succeeded. Taking back all of it clears the refusal category too.
  */
 export type StreamTextRetract = {
   type: "text-retract";

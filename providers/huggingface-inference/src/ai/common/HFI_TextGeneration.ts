@@ -11,6 +11,7 @@ import type {
   Usage,
 } from "@workglow/ai";
 import {
+  createChatRefusalReader,
   createEstimatedOutputUsageReporter,
   mapOpenAIChatUsage,
 } from "@workglow/ai/provider-utils";
@@ -88,6 +89,7 @@ export const HFI_TextGeneration_Stream: AiProviderRunFn<
   // when it does not, `usage` stays undefined and the estimate above remains
   // the only feedback.
   let usage: Usage | undefined;
+  const refusals = createChatRefusalReader(emit);
   for await (const chunk of stream) {
     usage = mapOpenAIChatUsage((chunk as { usage?: unknown }).usage) ?? usage;
     const delta = chunk.choices?.[0]?.delta?.content ?? "";
@@ -95,6 +97,8 @@ export const HFI_TextGeneration_Stream: AiProviderRunFn<
       provisionalUsage.onText(delta);
       emit({ type: "text-delta", port: "text", textDelta: delta });
     }
+    // A `delta.refusal`, or a `content_filter` ending, is a refusal rather than an empty answer.
+    refusals.read(chunk.choices?.[0]);
   }
   provisionalUsage.flush();
   emit({ type: "finish", data: {} as TextGenerationTaskOutput, usage });

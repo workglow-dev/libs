@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { RetryableJobError } from "@workglow/job-queue";
 import type { AiProviderRunFn, ModelConfig, ToolDefinition } from "@workglow/ai";
 import type { AgentRoundRunner, ToolCallingTaskInput } from "@workglow/ai";
 import {
@@ -1224,6 +1225,27 @@ describe("AgentTask", () => {
       };
       return { runner, inputs, signals };
     }
+
+    it("reports a refusal on the turn's output, with a retried round's taken back", async () => {
+      scriptModel([{ text: "the in-process model must not be asked" }]);
+      let call = 0;
+      registry.registerInstance(AGENT_ROUND_RUNNER, async (_input, context) => {
+        call++;
+        if (call === 1) {
+          context.onRefusal("I can't ", "output-refusal");
+          throw new RetryableJobError("overloaded", new Date());
+        }
+        context.onRefusal("Not now.");
+        return { text: "", toolCalls: [] };
+      });
+      const output = (await new AgentTask().run(
+        { model: MODEL, prompt: "do it", tools: [] },
+        { registry }
+      )) as Record<string, unknown>;
+      expect(call).toBe(2);
+      expect(output.refusal).toBe("Not now.");
+      expect(output.refusalCategory).toBeUndefined();
+    });
 
     it("sends every round through the runner and runs the tools here", async () => {
       const called = scriptModel([{ text: "the in-process model must not be asked" }]);

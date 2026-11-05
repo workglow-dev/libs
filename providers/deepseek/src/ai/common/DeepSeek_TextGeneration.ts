@@ -11,6 +11,7 @@ import type {
   Usage,
 } from "@workglow/ai";
 import {
+  createChatRefusalReader,
   createEstimatedOutputUsageReporter,
   OPENAI_STREAM_USAGE_OPTIONS,
 } from "@workglow/ai/provider-utils";
@@ -109,6 +110,7 @@ export const DeepSeek_TextGeneration_Stream: AiProviderRunFn<
     let emittedText = "";
     let finishReason: string | null | undefined;
     let usage: Usage | undefined;
+    const refusals = createChatRefusalReader(emit);
     for await (const chunk of stream as AsyncIterable<{
       choices?: Array<{
         delta?: { content?: string | null; refusal?: string | null };
@@ -125,10 +127,7 @@ export const DeepSeek_TextGeneration_Stream: AiProviderRunFn<
         provisionalUsage.onText(delta);
         emit({ type: "text-delta", port: "text", textDelta: delta });
       }
-      const refusalDelta = chunk.choices?.[0]?.delta?.refusal ?? "";
-      if (refusalDelta) {
-        emit({ type: "refusal", refusal: refusalDelta });
-      }
+      refusals.read(chunk.choices?.[0]);
       finishReason = chunk.choices?.[0]?.finish_reason ?? finishReason;
     }
     provisionalUsage.flush();
