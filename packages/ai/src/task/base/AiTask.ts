@@ -171,6 +171,16 @@ export function withoutToolExecutors<Input extends TaskInput>(input: Input): Inp
   return stripped ? ({ ...input, tools: plain } as Input) : input;
 }
 
+/** A model id from a port that holds either the id or its resolved ModelConfig. */
+function modelIdOf(model: unknown): string | undefined {
+  if (typeof model === "string") return model;
+  if (model !== null && typeof model === "object") {
+    const id = (model as { model_id?: unknown }).model_id;
+    if (typeof id === "string") return id;
+  }
+  return undefined;
+}
+
 export class AiTask<
   Input extends AiTaskInput = AiTaskInput,
   Output extends TaskOutput = TaskOutput,
@@ -200,13 +210,10 @@ export class AiTask<
       { id: Entitlements.AI_INFERENCE, reason: "Runs AI model inference" },
     ];
     // Prefer runInputData.model (runtime) over defaults.model (construction-time).
-    const runModel = this.runInputData?.model;
-    const modelId =
-      typeof runModel === "string"
-        ? runModel
-        : typeof this.defaults.model === "string"
-          ? this.defaults.model
-          : undefined;
+    // The runner resolves a model id to its ModelConfig before the run-time check,
+    // so read the id off a resolved object too -- and prefer the run's model to the
+    // default it may have replaced, or a grant for one model would admit another.
+    const modelId = modelIdOf(this.runInputData?.model) ?? modelIdOf(this.defaults.model);
     if (modelId) {
       base.push({
         id: Entitlements.AI_MODEL,
