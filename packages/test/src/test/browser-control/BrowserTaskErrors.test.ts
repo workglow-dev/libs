@@ -14,8 +14,10 @@ import {
   BrowserNavigateTask,
   BrowserSelectTask,
   BrowserSessionRegistry,
+  BrowserSessionTask,
   BrowserWaitTask,
   getBrowserDeps,
+  registerBrowserDeps,
 } from "@workglow/browser-control/task";
 import type { IExecuteContext } from "@workglow/task-graph";
 import { TaskConfigurationError, TaskInvalidInputError } from "@workglow/task-graph";
@@ -82,5 +84,22 @@ describe("browser-control tasks refuse with task errors", () => {
     // Each test file runs in a fresh module registry, and this one registers no deps.
     expect(globalServiceRegistry.has(BROWSER_CONTROL_TASK_DEPS)).toBe(false);
     expect(() => getBrowserDeps()).toThrow(TaskConfigurationError);
+  });
+
+  // Runs after the case above, which needs the deps unregistered.
+  it("a backend the host does not offer is a configuration error", async () => {
+    registerBrowserDeps({
+      createContext: () => new MockBrowserContext(),
+      availableBackends: ["local"],
+      defaultBackend: "local",
+      profileStorage: {
+        save: async () => {},
+        load: async () => null,
+        delete: async () => {},
+      },
+    });
+    await expect(
+      new BrowserSessionTask({ backend: "cloud" } as never).execute({} as never, context)
+    ).rejects.toBeInstanceOf(TaskConfigurationError);
   });
 });

@@ -10,7 +10,13 @@ import type {
   TaskConfig,
   TaskEntitlements,
 } from "@workglow/task-graph";
-import { Entitlements, mergeEntitlements, Task, TaskConfigSchema } from "@workglow/task-graph";
+import {
+  Entitlements,
+  mergeEntitlements,
+  Task,
+  TaskConfigSchema,
+  TaskConfigurationError,
+} from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 import { getBrowserDeps } from "../BrowserTaskDeps";
@@ -157,7 +163,7 @@ export class BrowserSessionTask extends Task<
     const backend = this.config.backend ?? deps.defaultBackend;
 
     if (!deps.availableBackends.includes(backend)) {
-      throw new Error(
+      throw new TaskConfigurationError(
         `BrowserSessionTask: backend "${backend}" is not available. Available backends: ${deps.availableBackends.join(", ")}`
       );
     }
