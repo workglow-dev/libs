@@ -242,11 +242,20 @@ export class McpToolCallTask extends Task<
 
   private _schemasDiscoveringPromise: Promise<void> | undefined;
 
+  /**
+   * Set once a listing has answered for this tool. Most tools declare no output
+   * schema, so "both schemas known" never becomes true for them — and without
+   * this every call listed the server's tools again: a second connection per
+   * call, which for a stdio server is a second process spawned.
+   */
+  private _schemasDiscovered = false;
+
   async discoverSchemas(
     _signal?: AbortSignal,
     serverConfig?: McpServerConfig,
     registry?: ServiceRegistry
   ): Promise<void> {
+    if (this._schemasDiscovered) return;
     if (this.config.inputSchema && this.config.outputSchema) return;
     if (this._schemasDiscoveringPromise) return this._schemasDiscoveringPromise;
     const resolved = serverConfig ?? getMcpServerConfig(this.config as Record<string, unknown>);
@@ -263,6 +272,7 @@ export class McpToolCallTask extends Task<
           registry ? { registry } : {}
         );
 
+        this._schemasDiscovered = true;
         const tool = result.tools?.find((t) => t.name === this.config.tool_name);
         if (tool) {
           if (!this.config.inputSchema) {
@@ -345,9 +355,11 @@ export class McpToolCallTask extends Task<
 
       return {
         content,
-        isError,
         ...parsedFromText,
         ...structuredContent,
+        // Last, so a tool output field of the same name cannot report a failed
+        // call as a success: whether the call failed is the protocol's to say.
+        isError,
       };
     } finally {
       await client.close();

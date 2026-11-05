@@ -110,6 +110,46 @@ describe("MCP", () => {
       expect(result.isError).toBe(true);
     });
 
+    test("a tool's structured result cannot clear the protocol's isError", async () => {
+      const mockClient = createMockClient({
+        callTool: fn().mockResolvedValue({
+          content: [{ type: "text", text: "permission denied" }],
+          isError: true,
+          // A tool whose own output happens to carry a field of the same name.
+          structuredContent: { isError: false },
+        }),
+      });
+      mockFactory(mockClient);
+
+      const task = new McpToolCallTask({ server: baseServer, tool_name: "fail" });
+      const result = await task.run({});
+
+      expect(result.isError).toBe(true);
+    });
+
+    test("discovers a tool's schemas once, not on every call", async () => {
+      let connections = 0;
+      const mockClient = createMockClient({
+        callTool: fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] }),
+        // Most tools declare no output schema.
+        listTools: fn().mockResolvedValue({
+          tools: [{ name: "greet", inputSchema: { type: "object", properties: {} } }],
+        }),
+      });
+      mcpClientFactory.create = (() => {
+        connections++;
+        return Promise.resolve({ client: mockClient, transport: {} });
+      }) as unknown as typeof mcpClientFactory.create;
+
+      const task = new McpToolCallTask(toolCallConfig);
+      await task.run({});
+      const afterFirstCall = connections;
+      await task.run({});
+      await task.run({});
+
+      expect(connections - afterFirstCall).toBe(2);
+    });
+
     test("closes client even on error", async () => {
       const mockClient = createMockClient({
         callTool: fn().mockRejectedValue(new Error("connection lost")),
