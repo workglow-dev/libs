@@ -895,6 +895,47 @@ export class Task<
   }
 
   /**
+   * Compiled input schemas that are not the static one — an instance's dynamic schema, or
+   * either kind with stream-wired ports removed — cached per class and keyed by the
+   * schema's JSON text. Compiling costs ~25× a validation, and these are rebuilt on every
+   * run; keying by content rather than identity keeps a schema edited in place from
+   * validating against its old shape.
+   */
+  protected static getDerivedInputSchemaNode(schema: DataPortSchema): SchemaNode {
+    let key: string | undefined;
+    try {
+      key = JSON.stringify(schema);
+    } catch {
+      key = undefined;
+    }
+    if (key === undefined) return this.generateInputSchemaNode(schema);
+    if (!Object.hasOwn(this, "__derivedInputSchemaNodes")) {
+      Object.defineProperty(this, "__derivedInputSchemaNodes", {
+        value: new Map<string, SchemaNode>(),
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+    }
+    const cache = (this as any).__derivedInputSchemaNodes as Map<string, SchemaNode>;
+    const hit = cache.get(key);
+    if (hit) {
+      // Re-insert so eviction drops the least recently used schema.
+      cache.delete(key);
+      cache.set(key, hit);
+      return hit;
+    }
+    const node = this.generateInputSchemaNode(schema);
+    cache.set(key, node);
+    if (cache.size > Task.MAX_DERIVED_INPUT_SCHEMA_NODES) {
+      cache.delete(cache.keys().next().value as string);
+    }
+    return node;
+  }
+
+  private static readonly MAX_DERIVED_INPUT_SCHEMA_NODES = 32;
+
+  /**
    * Validates an input data object against the task's input schema.
    *
    * `skipPorts` exempts the named input ports from validation: they are dropped
@@ -919,14 +960,13 @@ export class Task<
       // removed; drop their keys from the object so `additionalProperties:false`
       // does not then reject them as unknown.
       const base = ctor.hasDynamicSchemas ? this.inputSchema() : ctor.inputSchema();
-      schemaNode = ctor.generateInputSchemaNode(Task.schemaWithoutPorts(base, skip));
+      schemaNode = ctor.getDerivedInputSchemaNode(Task.schemaWithoutPorts(base, skip));
       validated = { ...(input as Record<string, unknown>) };
       for (const port of skip) delete validated[port];
     } else if (ctor.hasDynamicSchemas) {
       // Dynamic-schema tasks use instance inputSchema() (e.g. config.inputSchema), not the static fallback.
       // The cached getInputSchemaNode uses static inputSchema() which would reject valid instance-specific inputs.
-      const instanceSchema = this.inputSchema();
-      schemaNode = ctor.generateInputSchemaNode(instanceSchema);
+      schemaNode = ctor.getDerivedInputSchemaNode(this.inputSchema());
     } else {
       schemaNode = this.getInputSchemaNode();
     }
