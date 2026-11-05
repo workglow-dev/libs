@@ -22,7 +22,7 @@ import {
   TaskRegistry,
   hasStructuredOutput,
 } from "@workglow/task-graph";
-import type { ServiceRegistry } from "@workglow/util";
+import type { ResourceScope, ServiceRegistry } from "@workglow/util";
 import { asText, getLogger } from "@workglow/util";
 import type { DataPortSchema, JsonSchema } from "@workglow/util/schema";
 
@@ -335,27 +335,7 @@ export class AiTask<
       }
     }
 
-    // Register a disposer so the caller can release the in-memory model when
-    // done. The disposer is wired via the "model.dispose" capability —
-    // distinct from "model.download-remove" (which deletes the on-disk
-    // copy). Providers opt in by registering a run-fn whose `serves` set
-    // contains "model.dispose"; bypasses the task's own `requires` so we
-    // don't gate the lifecycle hook on the task.
-    if (executeContext.resourceScope) {
-      const registry = getAiProviderRegistry();
-      const disposeFn = registry.getRunFnFor(model.provider, ["model.dispose"]);
-      if (disposeFn) {
-        const modelPath =
-          (model as ModelConfig & { model?: string }).model ??
-          (model.provider_config as Record<string, unknown> | undefined)?.["model_path"] ??
-          model.model_id;
-        const resourceKey = `ai:${model.provider}:${asText(modelPath)}`;
-        executeContext.resourceScope.register(resourceKey, async () => {
-          await disposeFn({ model } as TaskInput, model, AbortSignal.timeout(30_000), noopEmit);
-        });
-        executeContext.resourceScope.touch(resourceKey);
-      }
-    }
+    this.registerModelDisposal(model, executeContext.resourceScope);
 
     return output;
   }
@@ -364,6 +344,32 @@ export class AiTask<
    * Get the input to submit to the job queue (or direct execution).
    * Transforms the task input to AiJobInput format.
    */
+  /**
+   * Hands the release of the in-memory model to the run's resource scope. Wired via
+   * the "model.dispose" capability — distinct from "model.download-remove", which
+   * deletes the on-disk copy. Providers opt in by registering a run-fn whose `serves`
+   * set contains "model.dispose"; looked up bypassing the task's own `requires` so the
+   * lifecycle hook is not gated on the task. Called from both the one-shot and the
+   * streaming path: a model a streamed run loaded is just as resident.
+   */
+  protected registerModelDisposal(
+    model: ModelConfig,
+    resourceScope: ResourceScope | undefined
+  ): void {
+    if (!resourceScope) return;
+    const disposeFn = getAiProviderRegistry().getRunFnFor(model.provider, ["model.dispose"]);
+    if (!disposeFn) return;
+    const modelPath =
+      (model as ModelConfig & { model?: string }).model ??
+      (model.provider_config as Record<string, unknown> | undefined)?.["model_path"] ??
+      model.model_id;
+    const resourceKey = `ai:${model.provider}:${asText(modelPath)}`;
+    resourceScope.register(resourceKey, async () => {
+      await disposeFn({ model } as TaskInput, model, AbortSignal.timeout(30_000), noopEmit);
+    });
+    resourceScope.touch(resourceKey);
+  }
+
   protected async getJobInput(input: Input): Promise<AiJobInput<Input>> {
     const model = input.model as ModelConfig;
 
