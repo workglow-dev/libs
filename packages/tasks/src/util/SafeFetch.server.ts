@@ -12,7 +12,12 @@
  *      (unless `allowPrivate` is set).
  *   4. Connection pinning via an undici Agent whose `connect.lookup` hook
  *      returns the pre-resolved IP — this prevents a second DNS lookup at
- *      connect time and defeats DNS rebinding (TOCTOU).
+ *      connect time and defeats DNS rebinding (TOCTOU) **under Node only**.
+ *      Bun resolves `undici` to its own implementation, which never calls the
+ *      `connect.lookup` hook and resolves the hostname again itself, so under
+ *      Bun the checked address and the connected address can differ: steps
+ *      1–3 still refuse a name that resolves privately at check time, but a
+ *      name that changes its answer between check and connect is not stopped.
  *
  * Registered at module load from `packages/tasks/src/node.ts` via
  * `registerSafeFetch`.
