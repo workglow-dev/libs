@@ -4,9 +4,10 @@
  * All Rights Reserved
  */
 import type { IExecuteContext, IExecutePreviewContext, TaskConfig } from "@workglow/task-graph";
-import { Task } from "@workglow/task-graph";
+import { Task, TaskInvalidInputError } from "@workglow/task-graph";
 import type { GpuImage, ImageValue } from "@workglow/util/media";
 import { applyFilter, CpuImage, GpuImageFactory, hasFilterOp } from "@workglow/util/media";
+import { assertWithinPixelBudget } from "./imageCodecLimits";
 
 export interface ImageFilterInput {
   image: ImageValue;
@@ -34,6 +35,31 @@ export abstract class ImageFilterTask<
     return params;
   }
 
+  /**
+   * The largest output this filter can build from a source of the given size, for a
+   * filter that changes the size. It is held to the pixel budget decoding is, before
+   * any buffer is allocated. Undefined (the default) for a filter that keeps the size.
+   */
+  protected outputSize(
+    _params: P,
+    _source: { readonly width: number; readonly height: number }
+  ): { readonly width: number; readonly height: number } | undefined {
+    return undefined;
+  }
+
+  private assertOutputWithinBudget(params: P, source: GpuImage): void {
+    const size = this.outputSize(params, source);
+    if (!size) return;
+    try {
+      assertWithinPixelBudget(size.width, size.height);
+    } catch (err) {
+      throw new TaskInvalidInputError(
+        `${this.type}: output ${size.width}x${size.height} is over the image pixel budget`,
+        { cause: err }
+      );
+    }
+  }
+
   private async runFilter(input: Input): Promise<Output | undefined> {
     const previewScale = input.image.previewScale;
     let gpu: GpuImage = await GpuImageFactory.from(input.image);
@@ -44,6 +70,7 @@ export abstract class ImageFilterTask<
         gpu = cpu;
       }
       const params = this.scalePreviewParams(this.opParams(input), previewScale);
+      this.assertOutputWithinBudget(params, gpu);
       const out = applyFilter(gpu, this.filterName, params);
       gpu.dispose();
       try {

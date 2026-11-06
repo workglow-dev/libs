@@ -18,6 +18,7 @@ const inputSchema = {
       title: "Border Width",
       description: "Border width in pixels",
       minimum: 1,
+      maximum: 8192,
       default: 10,
     },
     color: {
@@ -80,6 +81,13 @@ export class ImageBorderTask extends ImageFilterTask<
       borderWidth: (input.borderWidth as number | undefined) ?? 10,
       color: input.color as string | { r: number; g: number; b: number; a?: number },
     };
+  }
+
+  protected override outputSize(
+    { borderWidth }: BorderParams,
+    source: { readonly width: number; readonly height: number }
+  ): { readonly width: number; readonly height: number } {
+    return { width: source.width + 2 * borderWidth, height: source.height + 2 * borderWidth };
   }
 
   protected override scalePreviewParams(
