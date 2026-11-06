@@ -424,4 +424,23 @@ describe("JavaScriptTask", () => {
     const result = await task.run({ javascript_code: "'a1b2c3'.split(/\\d/).join('-')" });
     expect(result.output).toBe("a-b-c-");
   });
+
+  // A timer not yet due is waited for, not stepped: step() reports progress while
+  // nothing runs, and charging those spins ran a 2000-step budget out on one setTimeout.
+  test("waiting for a setTimeout does not spend the step budget", async () => {
+    const task = new JavaScriptTask({ maxSteps: 2000 } as never);
+    await expect(
+      task.run({
+        javascript_code: "var done = false; setTimeout(function () { done = true; }, 100);",
+      })
+    ).resolves.toBeDefined();
+  });
+
+  test("a preview does not wait on a timer that never stops", async () => {
+    const started = Date.now();
+    await new JavaScriptTask().runPreview({
+      javascript_code: "var n = 0; setInterval(function () { n++; }, 1000); n",
+    });
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
 });

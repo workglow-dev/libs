@@ -37,8 +37,13 @@ const STEPS_PER_CLOCK_CHECK = 10_000;
 const DEFAULT_MAX_STEPS = 50_000_000;
 const PREVIEW_MAX_STEPS = 1_000_000;
 
-/** `Status.ASYNC` from the interpreter; its enum is a `const enum` declared without a value module. */
+/** `Status.TASK` and `Status.ASYNC` from the interpreter; its enum is a `const enum` with no value module. */
+const TASK_STATUS = 2;
 const ASYNC_STATUS = 3;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -54,7 +59,8 @@ function yieldToEventLoop(): Promise<void> {
 async function runInSlices(
   interpreter: Interpreter,
   signal: AbortSignal | undefined,
-  maxSteps: number
+  maxSteps: number,
+  waitForTimers: boolean
 ): Promise<void> {
   let sliceEnd = performance.now() + SLICE_MS;
   let steps = 0;
@@ -62,8 +68,20 @@ async function runInSlices(
     // Paused on an async native (a regex the interpreter runs in a Worker where it has
     // no `vm`): step() would report progress without making any, and the wait would be
     // charged to the budget. Let the event loop deliver the answer instead.
-    while (interpreter.getStatus() === ASYNC_STATUS) {
-      await yieldToEventLoop();
+    // A queued timer not yet due is the same: nothing runs until it is, so a run sleeps
+    // until then (in slices, so an abort is still noticed) rather than spin.
+    for (let status = interpreter.getStatus(); ; status = interpreter.getStatus()) {
+      if (status === ASYNC_STATUS) {
+        await yieldToEventLoop();
+      } else if (status === TASK_STATUS) {
+        // A preview must be quick and cannot be aborted: it shows what the script
+        // has computed by the time only timers are left.
+        if (!waitForTimers) return;
+        const due = interpreter.tasks[0]?.time ?? Date.now();
+        await sleep(Math.min(Math.max(due - Date.now(), 0), SLICE_MS));
+      } else {
+        break;
+      }
       if (signal?.aborted) throw new TaskAbortedError("JavaScript execution aborted");
       sliceEnd = performance.now() + SLICE_MS;
     }
@@ -82,7 +100,8 @@ async function runJavaScript(
   input: JavaScriptTaskInput,
   configuredCode: string | undefined,
   signal: AbortSignal | undefined,
-  maxSteps: number
+  maxSteps: number,
+  waitForTimers: boolean
 ): Promise<JavaScriptTaskOutput> {
   const output = {} as JavaScriptTaskOutput;
   const code = input.javascript_code || configuredCode;
@@ -95,7 +114,7 @@ async function runJavaScript(
         .map((key) => `var ${key} = ${JSON.stringify(input[key])};`)
         .join("\n");
       const myInterpreter = new Interpreter(`${inputVariablesString} ${code}`);
-      await runInSlices(myInterpreter, signal, maxSteps);
+      await runInSlices(myInterpreter, signal, maxSteps, waitForTimers);
       // The interpreter's value is a sandboxed pseudo-object for arrays/objects; callers
       // expect plain JS, so unwrap it. Primitives pass through untouched.
       output.output = myInterpreter.pseudoToNative(myInterpreter.value);
@@ -233,7 +252,8 @@ export class JavaScriptTask extends Task<
       input,
       this.config.javascript_code,
       context.signal,
-      this.config.maxSteps ?? DEFAULT_MAX_STEPS
+      this.config.maxSteps ?? DEFAULT_MAX_STEPS,
+      true
     );
   }
 
@@ -242,7 +262,8 @@ export class JavaScriptTask extends Task<
       input,
       this.config.javascript_code,
       undefined,
-      Math.min(this.config.maxSteps ?? PREVIEW_MAX_STEPS, PREVIEW_MAX_STEPS)
+      Math.min(this.config.maxSteps ?? PREVIEW_MAX_STEPS, PREVIEW_MAX_STEPS),
+      false
     );
   }
 }
