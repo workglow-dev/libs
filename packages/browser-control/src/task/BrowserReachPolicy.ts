@@ -128,7 +128,11 @@ export function assertLandedWithinReach(requested: string, landed: string, taskT
   );
 }
 
-/** `filesystem:read` scoped to each path, or unscoped while the paths are unknown. */
+/**
+ * `filesystem:read` scoped to the file each path resolves to, or unscoped while the
+ * paths are unknown. Declared by real path, as `FileLoaderTask` declares: a grant for
+ * a symlink must not cover the file behind it, and the upload reads the real file.
+ */
 export function uploadEntitlements(filePaths: unknown): TaskEntitlements {
   const reason = "Reads local files for upload to browser";
   const known =
@@ -138,10 +142,54 @@ export function uploadEntitlements(filePaths: unknown): TaskEntitlements {
   return {
     entitlements: [
       known
-        ? { id: Entitlements.FILESYSTEM_READ, reason, resources: filePaths as string[] }
+        ? {
+            id: Entitlements.FILESYSTEM_READ,
+            reason,
+            resources: (filePaths as string[]).map(realPathIfResolvable),
+          }
         : { id: Entitlements.FILESYSTEM_READ, reason },
     ],
   };
+}
+
+interface NodeFsPath {
+  readonly fs: typeof import("node:fs");
+  readonly path: typeof import("node:path");
+}
+
+/**
+ * Node's fs and path where the runtime hands them over synchronously
+ * (`process.getBuiltinModule`, Node 22.3+ and Bun) — entitlements are declared
+ * synchronously. Undefined in a browser, which never uploads a local file.
+ */
+function nodeFsPathSync(): NodeFsPath | undefined {
+  const getBuiltin = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } })
+    .process?.getBuiltinModule;
+  if (typeof getBuiltin !== "function") return undefined;
+  const fs = getBuiltin(NODE_FS) as NodeFsPath["fs"] | undefined;
+  const path = getBuiltin(NODE_PATH) as NodeFsPath["path"] | undefined;
+  return fs && path ? { fs, path } : undefined;
+}
+
+/** The real path a file path resolves to (its directory, if the file does not exist). */
+function realPathOf({ fs, path }: NodeFsPath, p: string): string {
+  const resolved = path.resolve(p);
+  try {
+    return fs.realpathSync(resolved);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
+  }
+}
+
+function realPathIfResolvable(p: string): string {
+  const node = nodeFsPathSync();
+  if (!node) return p;
+  try {
+    return realPathOf(node, p);
+  } catch {
+    return p;
+  }
 }
 
 // Built at run time so no bundler resolves them: a literal (even a concatenated one,
@@ -166,16 +214,7 @@ export async function containUploadPaths(
 ): Promise<string[]> {
   const fs = (await import(/* @vite-ignore */ NODE_FS)) as typeof import("node:fs");
   const path = (await import(/* @vite-ignore */ NODE_PATH)) as typeof import("node:path");
-  const realOf = (p: string): string => {
-    const resolved = path.resolve(p);
-    try {
-      return fs.realpathSync(resolved);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-      return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
-    }
-  };
-  const real = filePaths.map(realOf);
+  const real = filePaths.map((p) => realPathOf({ fs, path }, p));
   if (allowAnyRoot === true) return real;
   const configured = roots ?? [process.cwd()];
   const realRoots = configured.map((root) => {
@@ -190,7 +229,11 @@ export async function containUploadPaths(
     }
   });
   for (const p of real) {
-    const inside = realRoots.some((root) => p === root || p.startsWith(root + path.sep));
+    // A filesystem root already ends in a separator (`/`, `C:\\`); adding another
+    // made `//` the prefix, which no path has.
+    const inside = realRoots.some(
+      (root) => p === root || p.startsWith(root.endsWith(path.sep) ? root : root + path.sep)
+    );
     if (!inside) {
       throw new TaskEntitlementError(
         `Upload path ${p} is outside the configured roots: ${configured.join(", ")}`

@@ -21,7 +21,7 @@ import {
   TaskInvalidInputError,
 } from "@workglow/task-graph";
 import { Container, ServiceRegistry } from "@workglow/util";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -201,6 +201,23 @@ describe("browser upload reach", () => {
       )
     ).rejects.toBeInstanceOf(TaskEntitlementError);
     expect(ctx.calls.some((c) => c.method === "uploadFile")).toBe(false);
+  });
+
+  // A grant names files; what is uploaded is the file a path resolves to. A grant for
+  // a symlink must not cover the file behind it.
+  it("declares the file a symlink resolves to, not the link", () => {
+    const link = join(root, "link.txt");
+    symlinkSync(outside, link);
+    const ents = new BrowserUploadTask({ defaults: { filePaths: [link] } } as never).entitlements();
+    expect(find(ents, Entitlements.FILESYSTEM_READ)?.resources).toEqual([outside]);
+  });
+
+  it("accepts a file under a filesystem root configured as the root", async () => {
+    await new BrowserUploadTask({ roots: ["/"] } as never).execute(
+      { sessionId, ref: "e1", filePaths: [inside] },
+      context
+    );
+    expect(ctx.calls.find((c) => c.method === "uploadFile")?.args[1]).toEqual([inside]);
   });
 
   it("declares filesystem:read scoped to the paths it was given", () => {
