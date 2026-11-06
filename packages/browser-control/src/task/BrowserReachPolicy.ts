@@ -43,10 +43,34 @@ export function assertNavigableUrl(url: string, taskType: string): void {
       `${taskType}: ${parsed.protocol} urls are not allowed; only http(s) and about:blank`
     );
   }
+  // An absolute url the classifier cannot place (credentials in it, no host) cannot be
+  // declared by destination, so it is not opened — as a fetch refuses it.
+  if (isAbsoluteHttpUrl(url)) {
+    const classification = classifyUrl(url);
+    if (classification.kind === "invalid") {
+      throw new TaskInvalidInputError(
+        `${taskType}: ${classification.reason ?? "url cannot be classified"}: ${url}`
+      );
+    }
+  }
 }
 
 function isAbsoluteHttpUrl(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
+}
+
+/** Both declared unscoped: only a broad grant covers a destination not known yet. */
+function unknownDestination(reason: string): TaskEntitlements {
+  return {
+    entitlements: [
+      { id: Entitlements.BROWSER_CONTROL_NAVIGATE, reason },
+      {
+        id: Entitlements.NETWORK_PRIVATE,
+        reason:
+          "Destination is not known before the run; private/internal hosts must be explicitly allowed",
+      },
+    ],
+  };
 }
 
 /**
@@ -60,22 +84,14 @@ export function navigationEntitlements(url: unknown, reason: string): TaskEntitl
     if (typeof url === "string" && /^about:blank$/i.test(url.trim())) {
       return { entitlements: [{ id: Entitlements.BROWSER_CONTROL_NAVIGATE, reason }] };
     }
-    return {
-      entitlements: [
-        { id: Entitlements.BROWSER_CONTROL_NAVIGATE, reason },
-        {
-          id: Entitlements.NETWORK_PRIVATE,
-          reason:
-            "Destination is not known before the run; private/internal hosts must be explicitly allowed",
-        },
-      ],
-    };
+    return unknownDestination(reason);
   }
+  const classification = classifyUrl(url);
+  if (classification.kind === "invalid") return unknownDestination(reason);
   const pattern = urlResourcePattern(url);
   const entitlements: TaskEntitlement[] = [
     { id: Entitlements.BROWSER_CONTROL_NAVIGATE, reason, resources: [pattern] },
   ];
-  const classification = classifyUrl(url);
   if (classification.kind === "private") {
     entitlements.push({
       id: Entitlements.NETWORK_PRIVATE,

@@ -53,6 +53,9 @@ describe("browser navigation reach", () => {
     ["data:text/html,<script>alert(1)</script>"],
     ["javascript:alert(1)"],
     ["chrome://settings"],
+    // classifyUrl calls a url carrying credentials invalid, so it was declared with no
+    // private scope while the browser still reached the private host behind it.
+    ["http://user:pass@169.254.169.254/latest/meta-data/"],
   ])("refuses %s before the browser is asked to open it", async (url) => {
     await expect(
       new BrowserNavigateTask().execute({ sessionId, url }, context)
@@ -91,6 +94,14 @@ describe("browser navigation reach", () => {
     expect(find(ents, Entitlements.NETWORK_PRIVATE)?.resources).toEqual([
       "http://169.254.169.254/*",
     ]);
+  });
+
+  it("declares a url it cannot classify unscoped, as it does an unknown one", () => {
+    const ents = new BrowserNavigateTask({
+      defaults: { url: "http://user:pass@169.254.169.254/latest/meta-data/" },
+    } as never).entitlements();
+    expect(find(ents, Entitlements.NETWORK_PRIVATE)).toBeDefined();
+    expect(find(ents, Entitlements.NETWORK_PRIVATE)?.resources).toBeUndefined();
   });
 
   it("fails closed while the destination is unknown", () => {
