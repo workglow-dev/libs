@@ -315,6 +315,36 @@ describe("entitlement enforcement reaches the subgraphs of loop and fallback tas
     await expectDenied(fallback, {});
   });
 
+  // Run directly rather than scheduled by a graph: the fallback's own nested runs must
+  // carry the enforcement the direct run asked for.
+  it("FallbackTask run directly: every attempt is checked in both modes", async () => {
+    const data = new FallbackTask({
+      id: "fb-data",
+      fallbackMode: "data",
+      alternatives: [{}],
+    } as never);
+    data.subGraph = urlSourceAndFetch();
+    fetched = [];
+    await expect(
+      data.run({}, { registry: denyMetadata(), enforceEntitlements: true })
+    ).rejects.toThrow(TaskEntitlementError);
+    expect(fetched).toEqual([]);
+
+    const alternatives = new TaskGraph();
+    alternatives.addTask(
+      new FetchUrlTask({ id: "alt-fetch", defaults: { response_type: "text" } } as never)
+    );
+    const task = new FallbackTask({ id: "fb-task", fallbackMode: "task" } as never);
+    task.subGraph = alternatives;
+    await expect(
+      task.run({ url: METADATA_URL } as never, {
+        registry: denyMetadata(),
+        enforceEntitlements: true,
+      })
+    ).rejects.toThrow(TaskEntitlementError);
+    expect(fetched).toEqual([]);
+  });
+
   it("FallbackTask in task mode: every alternative is checked", async () => {
     // The url reaches the alternative from upstream, at run time, so pre-flight
     // sees only an unscoped `network:private` that the broad grant covers.
