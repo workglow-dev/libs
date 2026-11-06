@@ -404,4 +404,15 @@ describe("JavaScriptTask", () => {
     });
     expect(result.output).toBe(499500);
   });
+
+  test("is not cached unless the graph says the script is pure", () => {
+    // Scripts can call Math.random() and Date.now(); a cached answer would be stale.
+    expect(new JavaScriptTask().getCachePolicy({} as never)).toEqual({ kind: "none" });
+    expect(new JavaScriptTask({ cacheable: true }).getCachePolicy({} as never)).toEqual({
+      kind: "deterministic",
+    });
+    // A run that opts out still wins.
+    const optedOut = new JavaScriptTask({ cacheable: true }, { cacheable: false });
+    expect(optedOut.getCachePolicy({} as never)).toEqual({ kind: "none" });
+  });
 });

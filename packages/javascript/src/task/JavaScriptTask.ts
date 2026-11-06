@@ -4,7 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { IExecuteContext, TaskConfig, TaskEntitlements } from "@workglow/task-graph";
+import type {
+  CachePolicy,
+  IExecuteContext,
+  TaskConfig,
+  TaskEntitlements,
+} from "@workglow/task-graph";
 import {
   CreateWorkflow,
   Entitlements,
@@ -158,6 +163,20 @@ export class JavaScriptTask extends Task<
   public static override description =
     "Executes JavaScript code in a sandboxed interpreter environment";
   public static override customizable = true;
+
+  /**
+   * Not cached by default: the interpreter provides `Math.random()` and `Date.now()`,
+   * so a script's output need not be a function of its input. A graph whose script is
+   * pure opts in with `config.cacheable: true`; a run's `cacheable: false` still wins.
+   */
+  public static override cachePolicy: CachePolicy = { kind: "none" };
+
+  public override getCachePolicy(input: JavaScriptTaskInput): CachePolicy {
+    if (this.config?.cacheable === true && this.runConfig?.cacheable !== false) {
+      return { kind: "deterministic" };
+    }
+    return super.getCachePolicy(input);
+  }
   public static override hasDynamicSchemas = true;
 
   public static override entitlements(): TaskEntitlements {
