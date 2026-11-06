@@ -146,13 +146,9 @@ describe("ConditionalBuilder (Workflow.if)", () => {
     expect(conditional.isBranchActive("else")).toBe(true);
   });
 
-  it("routes a throwing condition consistently with ConditionalTask error-as-false semantics", async () => {
-    // If the primary condition throws, it should be treated as false
-    // (matching ConditionalTask.ts:339-343). With an else arm defined,
-    // the else branch runs via defaultBranch — NOT because the inverted
-    // condition's own try/catch forces it true. The observable outcome is
-    // the same (else runs), but the internals must not rely on a wrapper
-    // that diverges from the documented error-as-false behavior.
+  it("fails when the condition throws, rather than taking the else arm", async () => {
+    // ConditionalTask fails the task on a throwing condition (as WhileTask does); the
+    // builder's else arm must not turn that failure into a route.
     const workflow = new Workflow();
     workflow
       .if(() => {
@@ -165,20 +161,17 @@ describe("ConditionalBuilder (Workflow.if)", () => {
     const tasks = workflow.graph.getTasks();
     const conditional = tasks.find((t) => t instanceof ConditionalTask) as ConditionalTask;
 
-    // The else-branch condition, when invoked directly, must propagate
-    // the underlying error (or return false) — not silently return true.
-    // ConditionalTask itself is responsible for catching and treating-as-false.
+    // The else-branch condition, invoked directly, propagates the underlying error
+    // rather than silently returning true.
     const branches = conditional.config.branches!;
     const elseBranch = branches.find((b) => b.id === "else")!;
     expect(() => elseBranch.condition({})).toThrow("boom");
 
-    // End-to-end behavior: condition throws → then inactive → defaultBranch (else) fires.
-    await conditional.run({});
-    expect(conditional.isBranchActive("then")).toBe(false);
-    expect(conditional.isBranchActive("else")).toBe(true);
+    await expect(conditional.run({})).rejects.toThrow(/branch "then".*boom/);
+    expect(conditional.getActiveBranches().size).toBe(0);
   });
 
-  it("with no else arm, a throwing condition leaves all branches inactive", async () => {
+  it("with no else arm, a throwing condition fails the task", async () => {
     const workflow = new Workflow();
     workflow
       .if(() => {
@@ -190,8 +183,7 @@ describe("ConditionalBuilder (Workflow.if)", () => {
     const tasks = workflow.graph.getTasks();
     const conditional = tasks.find((t) => t instanceof ConditionalTask) as ConditionalTask;
 
-    await conditional.run({});
-    expect(conditional.isBranchActive("then")).toBe(false);
+    await expect(conditional.run({})).rejects.toThrow(/boom/);
     expect(conditional.getActiveBranches().size).toBe(0);
   });
 

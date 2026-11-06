@@ -278,7 +278,9 @@ describe("ConditionalTask", () => {
         expect(task.activeBranches.size).toBe(0);
       });
 
-      it("should handle condition that throws error", async () => {
+      it("fails the task when a condition throws, naming the branch, instead of routing on", async () => {
+        // Treating a throw as "not taken" sent the data down the next branch (here the
+        // fallback) and reported success. WhileTask fails on a throwing condition too.
         const task = new ConditionalTask({
           branches: [
             {
@@ -292,11 +294,8 @@ describe("ConditionalTask", () => {
           ],
         });
 
-        await task.run({ value: 10 });
-
-        // Should skip the throwing branch and move to fallback
-        expect(task.isBranchActive("throws")).toBe(false);
-        expect(task.isBranchActive("fallback")).toBe(true);
+        await expect(task.run({ value: 10 })).rejects.toThrow(/branch "throws".*condition error/);
+        expect(task.isBranchActive("fallback")).toBe(false);
       });
 
       it("should handle null/undefined input gracefully", async () => {
