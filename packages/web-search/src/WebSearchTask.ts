@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { IExecuteContext, TaskEntitlements } from "@workglow/task-graph";
+import type { CachePolicy, IExecuteContext, TaskEntitlements } from "@workglow/task-graph";
 import { Task, TaskConfigurationError } from "@workglow/task-graph";
 import { FetchUrlTask, fetchUrlEntitlementsFor } from "@workglow/tasks";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
@@ -207,6 +207,12 @@ export class WebSearchTask extends Task<WebSearchTaskInput, WebSearchTaskOutput>
   public static override description =
     "Searches the web through a configured provider and returns ranked sources, plus a " +
     "synthesized answer from providers that produce one.";
+
+  /**
+   * Not cached: results (and a grounded provider's answer) change over time, and the
+   * cache key is only the query — as `FetchUrlTask` reading the same web is not cached.
+   */
+  public static override cachePolicy: CachePolicy = { kind: "none" };
 
   /**
    * Declared statically as the fetch's own entitlements, so a graph enforcing

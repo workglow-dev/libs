@@ -4,7 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { IExecuteContext, TaskConfig, TaskEntitlements } from "@workglow/task-graph";
+import type {
+  CachePolicy,
+  IExecuteContext,
+  TaskConfig,
+  TaskEntitlements,
+} from "@workglow/task-graph";
 import {
   CreateWorkflow,
   Task,
@@ -602,7 +607,13 @@ export class FileGrepTask<Config extends TaskConfig = TaskConfig> extends Task<
   public static override category = "Document";
   public static override title = "File Grep";
   public static override description = "Search a file for matching lines (grep)";
-  public static override cacheable = true;
+  /**
+   * Not cached: the result is the document as it is now, and the cache key is only the
+   * url — a file or resource changed between runs would be answered as it was.
+   * `cachePolicy` rather than `cacheable = false`: the server variants extend this class,
+   * and the resolver honours `cacheable` only where a class declares it itself.
+   */
+  public static override cachePolicy: CachePolicy = { kind: "none" };
   public static override hasDynamicEntitlements: boolean = true;
 
   /**
