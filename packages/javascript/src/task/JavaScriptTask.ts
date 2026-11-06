@@ -37,7 +37,8 @@ const STEPS_PER_CLOCK_CHECK = 10_000;
 const DEFAULT_MAX_STEPS = 50_000_000;
 const PREVIEW_MAX_STEPS = 1_000_000;
 
-/** `Status.TASK` and `Status.ASYNC` from the interpreter; its enum is a `const enum` with no value module. */
+/** `Status.DONE`, `TASK` and `ASYNC` from the interpreter; its enum is a `const enum` with no value module. */
+const DONE_STATUS = 0;
 const TASK_STATUS = 2;
 const ASYNC_STATUS = 3;
 
@@ -70,7 +71,8 @@ async function runInSlices(
     // charged to the budget. Let the event loop deliver the answer instead.
     // A queued timer not yet due is the same: nothing runs until it is, so a run sleeps
     // until then (in slices, so an abort is still noticed) rather than spin.
-    for (let status = interpreter.getStatus(); ; status = interpreter.getStatus()) {
+    let status = interpreter.getStatus();
+    for (; ; status = interpreter.getStatus()) {
       if (status === ASYNC_STATUS) {
         await yieldToEventLoop();
       } else if (status === TASK_STATUS) {
@@ -85,10 +87,12 @@ async function runInSlices(
       if (signal?.aborted) throw new TaskAbortedError("JavaScript execution aborted");
       sliceEnd = performance.now() + SLICE_MS;
     }
-    if (!interpreter.step()) break;
+    // Checked before stepping, so a budget of N runs N steps, not N + 1.
+    if (status === DONE_STATUS) break;
     if (steps >= maxSteps) {
       throw new Error(`script did not finish within ${maxSteps} steps`);
     }
+    interpreter.step();
     if (++steps % STEPS_PER_CLOCK_CHECK !== 0 || performance.now() < sliceEnd) continue;
     await yieldToEventLoop();
     if (signal?.aborted) throw new TaskAbortedError("JavaScript execution aborted");
