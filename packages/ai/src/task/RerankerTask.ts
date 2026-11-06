@@ -146,15 +146,8 @@ function escapeRegExp(value: string): string {
  */
 export class RerankerTask extends Task<RerankerTaskInput, RerankerTaskOutput, RerankerTaskConfig> {
   public static override type = "RerankerTask";
-  /**
-   * Informational: capability this task uses. NOT enforced by the dispatcher —
-   * RerankerTask extends `Task` (not `AiTask`) and implements its own `execute()`,
-   * so `gateOrThrow` is never called against this value. The audit test in
-   * `task/index.test.ts` validates the value is a known {@link Capability}.
-   */
-  public static readonly requires: readonly Capability[] = [
-    "text.reranking",
-  ] as const satisfies Capability[];
+  /** Heuristic: calls no model, so it requires no model capability. */
+  public static readonly requires: readonly Capability[] = [] as const satisfies Capability[];
   public static override category = "RAG";
   public static override title = "Reranker";
   public static override description = "Rerank retrieved chunks using in-process heuristics";
