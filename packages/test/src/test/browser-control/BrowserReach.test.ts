@@ -99,6 +99,34 @@ describe("browser navigation reach", () => {
     expect(find(ents, Entitlements.NETWORK_PRIVATE)?.resources).toBeUndefined();
   });
 
+  // Entitlements are declared for the url asked for; a redirect picks where the page
+  // lands. Landing on a private host nothing declared is refused, as a fetch's redirect
+  // hop is, and the page is cleared so a later extract cannot read it.
+  function redirectTo(landing: string): void {
+    const navigate = ctx.navigate.bind(ctx);
+    ctx.navigate = async (url, options) => {
+      await navigate(url, options);
+      if (url !== "about:blank") ctx.currentPage.url = landing;
+    };
+  }
+
+  it("refuses a public navigation that lands on a private host", async () => {
+    redirectTo("http://169.254.169.254/latest/meta-data/");
+    await expect(
+      new BrowserNavigateTask().execute({ sessionId, url: "https://example.com/x" }, context)
+    ).rejects.toBeInstanceOf(TaskEntitlementError);
+    expect(ctx.currentPage.url).toBe("about:blank");
+  });
+
+  it("allows a private navigation that stays on its declared origin", async () => {
+    redirectTo("http://10.0.0.5:8080/after");
+    const out = await new BrowserNavigateTask().execute(
+      { sessionId, url: "http://10.0.0.5:8080/before" },
+      context
+    );
+    expect(out.url).toBe("http://10.0.0.5:8080/after");
+  });
+
   it("is refused by a policy denying the private host, and never navigates", async () => {
     const registry = new ServiceRegistry(new Container());
     registry.register(ENTITLEMENT_ENFORCER, () =>

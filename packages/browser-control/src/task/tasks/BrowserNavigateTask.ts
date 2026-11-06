@@ -12,7 +12,11 @@ import type {
 } from "@workglow/task-graph";
 import { Task, TaskConfigSchema } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
-import { assertNavigableUrl, navigationEntitlements } from "../BrowserReachPolicy";
+import {
+  assertLandedWithinReach,
+  assertNavigableUrl,
+  navigationEntitlements,
+} from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
 const browserNavigateTaskConfigSchema = {
@@ -126,8 +130,15 @@ export class BrowserNavigateTask extends Task<
     const ctx = BrowserSessionRegistry.get(input.sessionId);
     const waitUntil = this.config.waitUntil ?? "load";
     await ctx.navigate(input.url, { waitUntil });
-    const title = await ctx.title();
     const url = await ctx.currentUrl();
+    try {
+      assertLandedWithinReach(input.url, url, "BrowserNavigateTask");
+    } catch (err) {
+      // Leave nothing a later extract or screenshot task could read.
+      await ctx.navigate("about:blank");
+      throw err;
+    }
+    const title = await ctx.title();
     return { sessionId: input.sessionId, title, url };
   }
 }

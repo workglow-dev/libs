@@ -18,7 +18,11 @@ import {
 } from "@workglow/task-graph";
 import { HUMAN_CONNECTOR, resolveHumanConnector, uuid4 } from "@workglow/util";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
-import { assertNavigableUrl, navigationEntitlements } from "../BrowserReachPolicy";
+import {
+  assertLandedWithinReach,
+  assertNavigableUrl,
+  navigationEntitlements,
+} from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
 const browserLoginTaskConfigSchema = {
@@ -130,6 +134,12 @@ export class BrowserLoginTask extends Task<
     const connector = resolveHumanConnector(executeContext);
 
     await ctx.navigate(input.url);
+    try {
+      assertLandedWithinReach(input.url, await ctx.currentUrl(), "BrowserLoginTask");
+    } catch (err) {
+      await ctx.navigate("about:blank");
+      throw err;
+    }
     await executeContext.updateProgress(20, "Navigated to login page");
     await executeContext.updateProgress(50, "Waiting for manual login...");
 

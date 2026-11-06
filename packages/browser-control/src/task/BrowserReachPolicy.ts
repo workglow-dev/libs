@@ -10,6 +10,7 @@ import {
   Entitlements,
   TaskEntitlementError,
   TaskInvalidInputError,
+  urlMatchesScope,
   urlResourcePattern,
 } from "@workglow/task-graph";
 
@@ -85,6 +86,30 @@ export function navigationEntitlements(url: unknown, reason: string): TaskEntitl
     });
   }
   return { entitlements };
+}
+
+/**
+ * Refuses a page that landed on a private host its navigation did not declare — the
+ * check `safeFetch` makes on every redirect hop. Entitlements are declared for the url
+ * asked for, and a redirect chooses where the page ends up: without this a public url
+ * answering 302 to a metadata endpoint hands that page to the extract and screenshot
+ * tasks. A private destination may land anywhere on its declared origin; a relative or
+ * unknown one declared `network:private` unscoped, so a broad grant already covered it.
+ * Only the landing page is checked: navigations a page makes later, by script or a
+ * click, are outside it.
+ */
+export function assertLandedWithinReach(requested: string, landed: string, taskType: string): void {
+  if (!isAbsoluteHttpUrl(landed) || classifyUrl(landed).kind !== "private") return;
+  if (!isAbsoluteHttpUrl(requested)) return;
+  if (
+    classifyUrl(requested).kind === "private" &&
+    urlMatchesScope(landed, [urlResourcePattern(requested)])
+  ) {
+    return;
+  }
+  throw new TaskEntitlementError(
+    `${taskType}: navigating to ${requested} ended at ${landed}, a private host it did not declare`
+  );
 }
 
 /** `filesystem:read` scoped to each path, or unscoped while the paths are unknown. */
