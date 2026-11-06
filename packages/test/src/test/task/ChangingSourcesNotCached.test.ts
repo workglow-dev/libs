@@ -6,9 +6,13 @@
 
 import { ChunkRetrievalTask, KbSearchTask } from "@workglow/ai";
 import type { Task } from "@workglow/task-graph";
+import { CACHE_REGISTRY, DefaultCacheRegistry } from "@workglow/task-graph";
+import { Container, ServiceRegistry } from "@workglow/util";
 import { InMemoryTaskOutputRepository } from "@workglow/task-graph/test";
 import { WebSearchTask } from "@workglow/web-search";
 import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -45,5 +49,34 @@ describe("tasks reading a changing source are not cached", () => {
 
     expect((first as { text: string }).text).toContain("version 1");
     expect((second as { text: string }).text).toContain("version 2");
+  });
+
+  // The readers own a FetchUrlTask for http(s). Their own outputs are uncached, but the
+  // owned fetch is a task with the default policy: it answered the second load from the
+  // first one's response.
+  it("a url whose body changes between two loads is fetched afresh", async () => {
+    let body = "version 1\n";
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(body);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const url = `http://127.0.0.1:${port}/doc.txt`;
+      // A host's cache arrives through the registry, which owned children share.
+      const registry = new ServiceRegistry(new Container());
+      registry.registerInstance(
+        CACHE_REGISTRY,
+        new DefaultCacheRegistry({ deterministic: new InMemoryTaskOutputRepository() })
+      );
+      const first = await new FileLoaderTask().run({ url } as never, { registry });
+      body = "version 2\n";
+      const second = await new FileLoaderTask().run({ url } as never, { registry });
+      expect((first as { text: string }).text).toContain("version 1");
+      expect((second as { text: string }).text).toContain("version 2");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

@@ -663,7 +663,8 @@ export class FileGrepTask<Config extends TaskConfig = TaskConfig> extends Task<
 
     await context.updateProgress(0, "Fetching file");
 
-    const fetchTask = context.own(new FetchUrlTask({ queue: false }));
+    // Uncached like this task: the file is read afresh each run, not from the fetch cache.
+    const fetchTask = context.own(new FetchUrlTask({ queue: false }, { cacheable: false }));
     const response = await fetchTask.run({
       url,
       response_type: "text",
