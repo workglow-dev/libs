@@ -17,6 +17,8 @@ import { CreateWorkflow, Task, TaskConfigSchema, Workflow } from "@workglow/task
 import type { DataPortSchema } from "@workglow/util/schema";
 import type { Capability } from "../capability/Capabilities";
 import type { ModelConfig } from "../model/ModelSchema";
+import type { Slots } from "./ConcurrencySlots";
+import { createSlots } from "./ConcurrencySlots";
 import { TextNamedEntityRecognitionTask } from "./TextNamedEntityRecognitionTask";
 import { TextSummaryTask } from "./TextSummaryTask";
 import { TypeModel } from "./base/AiTaskSchemas";
@@ -132,24 +134,6 @@ const configSchema = {
   },
   additionalProperties: false,
 } as const satisfies DataPortSchema;
-
-type Slots = <T>(work: () => Promise<T>) => Promise<T>;
-
-/** Runs at most `limit` pieces of work at once, the rest in the order they asked. */
-function createSlots(limit: number): Slots {
-  let running = 0;
-  const waiting: Array<() => void> = [];
-  return async <T>(work: () => Promise<T>): Promise<T> => {
-    if (running >= limit) await new Promise<void>((resolve) => waiting.push(resolve));
-    running++;
-    try {
-      return await work();
-    } finally {
-      running--;
-      waiting.shift()?.();
-    }
-  };
-}
 
 /**
  * Task for enriching document nodes with summaries and entities
