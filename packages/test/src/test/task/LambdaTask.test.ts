@@ -5,6 +5,7 @@
  */
 
 import { TaskGraph, Workflow } from "@workglow/task-graph";
+import { InMemoryTaskOutputRepository } from "@workglow/task-graph/test";
 import { lambda, LambdaTask } from "@workglow/tasks";
 import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
@@ -141,5 +142,15 @@ describe("LambdaTask", () => {
     const runConfig = { cacheable: false, timeout: 1234 };
     const task = new LambdaTask({ execute: async () => ({}) }, runConfig as never);
     expect(task.runConfig).toMatchObject(runConfig);
+  });
+
+  test("never answers from the output cache: the function is not part of the key", async () => {
+    // Keyed by type and input alone, two different lambdas sharing a cache returned
+    // each other's results -- `square(3)` came back as `double(3)`.
+    const cache = new InMemoryTaskOutputRepository();
+    const double = new LambdaTask({ execute: async (i: { n: number }) => ({ out: i.n * 2 }) });
+    const square = new LambdaTask({ execute: async (i: { n: number }) => ({ out: i.n * i.n }) });
+    expect(await double.run({ n: 3 }, { outputCache: cache })).toEqual({ out: 6 });
+    expect(await square.run({ n: 3 }, { outputCache: cache })).toEqual({ out: 9 });
   });
 });

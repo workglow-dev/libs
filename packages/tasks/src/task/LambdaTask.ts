@@ -5,6 +5,7 @@
  */
 
 import type {
+  CachePolicy,
   IExecuteContext,
   IExecutePreviewContext,
   IRunConfig,
@@ -73,7 +74,13 @@ export class LambdaTask<
   public static override title = "Lambda Task";
   public static override description = "A task that wraps a provided function and its input";
   public static override category = "Hidden";
-  public static override cacheable = true;
+  /**
+   * Never cached. The output cache keys on task type and input, and the function a
+   * lambda runs is not part of that key, so two lambdas sharing a cache would answer
+   * for each other. `QuickTask` (a function passed to `pipe()`) is uncached for the
+   * same reason.
+   */
+  public static override cachePolicy: CachePolicy = { kind: "none" };
   public static override configSchema(): DataPortSchema {
     return lambdaTaskConfigSchema;
   }
