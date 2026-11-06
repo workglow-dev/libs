@@ -177,9 +177,39 @@ describe("MCP", () => {
 
       expect(result.content).toBeDefined();
       expect(result.isError).toBe(false);
-      expect(result.temperature).toBe(22.5);
-      expect(result.conditions).toBe("Partly cloudy");
-      expect(result.humidity).toBe(65);
+      expect(result.structured).toEqual({
+        temperature: 22.5,
+        conditions: "Partly cloudy",
+        humidity: 65,
+      });
+      expect(result.temperature).toBeUndefined();
+    });
+
+    test("a tool field named content or isError cannot shadow the protocol's", async () => {
+      const mockClient = createMockClient({
+        callTool: fn().mockResolvedValue({
+          content: [{ type: "text", text: "ok" }],
+          structuredContent: { content: "tool's own", isError: "no" },
+          isError: false,
+        }),
+      });
+      mockFactory(mockClient);
+
+      const result = await new McpToolCallTask(toolCallConfig).run({});
+      expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+      expect(result.isError).toBe(false);
+      expect(result.structured).toEqual({ content: "tool's own", isError: "no" });
+    });
+
+    test("nests the tool's declared output schema under structured", () => {
+      const toolSchema = {
+        type: "object",
+        properties: { temperature: { type: "number" } },
+      } as const;
+      const task = new McpToolCallTask({ ...toolCallConfig, outputSchema: toolSchema });
+      const schema = task.outputSchema() as { properties: Record<string, unknown> };
+      expect(Object.keys(schema.properties).sort()).toEqual(["content", "isError", "structured"]);
+      expect(schema.properties.structured).toEqual(toolSchema);
     });
 
     test("parses JSON from single text content when no structuredContent", async () => {
@@ -201,7 +231,7 @@ describe("MCP", () => {
 
       expect(result.content).toBeDefined();
       expect(result.isError).toBe(false);
-      expect(result.results).toEqual([
+      expect((result.structured as { results: unknown }).results).toEqual([
         { title: "Model Context Protocol", url: "https://example.com" },
       ]);
     });

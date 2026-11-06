@@ -134,6 +134,14 @@ const toolContentSchema = {
   ],
 } as const;
 
+const anyStructuredSchema = {
+  type: "object",
+  additionalProperties: true,
+  title: "Structured",
+  description:
+    "The tool's structured result (its structuredContent, or a JSON object it returned as text)",
+} as const;
+
 const fallbackOutputSchema = {
   type: "object",
   properties: {
@@ -148,10 +156,27 @@ const fallbackOutputSchema = {
       title: "Is Error",
       description: "Whether the tool call resulted in an error",
     },
+    structured: anyStructuredSchema,
   },
   required: ["content", "isError"],
   additionalProperties: false,
 } as const satisfies DataPortSchema;
+
+/**
+ * The output ports for a tool: the protocol's `content` and `isError`, and the tool's
+ * own fields under `structured`. Kept apart so a tool field can never collide with —
+ * or be mistaken for — the protocol's, and so a tool that adds a field does not move
+ * the ports a graph is wired to.
+ */
+export function mcpToolOutputPortSchema(
+  toolOutputSchema: DataPortSchema | undefined
+): DataPortSchema {
+  if (!toolOutputSchema) return fallbackOutputSchema;
+  return {
+    ...fallbackOutputSchema,
+    properties: { ...fallbackOutputSchema.properties, structured: toolOutputSchema },
+  } as DataPortSchema;
+}
 
 const fallbackInputSchema = {
   type: "object",
@@ -236,8 +261,9 @@ export class McpToolCallTask extends Task<
     return this.config?.inputSchema ?? fallbackInputSchema;
   }
 
+  /** `config.outputSchema` is the tool's own output schema; it is nested under `structured`. */
   public override outputSchema(): DataPortSchema {
-    return this.config?.outputSchema ?? fallbackOutputSchema;
+    return mcpToolOutputPortSchema(this.config?.outputSchema);
   }
 
   private _schemasDiscoveringPromise: Promise<void> | undefined;
@@ -353,14 +379,8 @@ export class McpToolCallTask extends Task<
         }
       }
 
-      return {
-        content,
-        ...parsedFromText,
-        ...structuredContent,
-        // Last, so a tool output field of the same name cannot report a failed
-        // call as a success: whether the call failed is the protocol's to say.
-        isError,
-      };
+      const structured = structuredContent ?? parsedFromText;
+      return structured === undefined ? { content, isError } : { content, isError, structured };
     } finally {
       await client.close();
     }
