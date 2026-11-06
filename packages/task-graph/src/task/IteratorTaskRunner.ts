@@ -102,7 +102,7 @@ export class IteratorTaskRunner<
     const retainResults = this.task.retainsIterationResults();
     const orderedResults: Array<TaskOutput | undefined> =
       retainResults && preserveOrder ? new Array(iterationCount) : [];
-    const completionOrderResults: TaskOutput[] = [];
+    const completionOrderResults: Array<TaskOutput | undefined> = [];
 
     this.task.clearIterationGraphs();
     this.aggregatingParentMapProgress = true;
@@ -134,9 +134,9 @@ export class IteratorTaskRunner<
           retainResults
         );
 
+        // An iteration that produced nothing still holds its slot: dropping it would
+        // shift every later item's values onto the wrong input.
         for (const { index, result } of batchResults) {
-          if (result === undefined) continue;
-
           if (preserveOrder) {
             orderedResults[index] = result;
           } else {
@@ -145,9 +145,7 @@ export class IteratorTaskRunner<
         }
       }
 
-      const collected = preserveOrder
-        ? orderedResults.filter((result): result is TaskOutput => result !== undefined)
-        : completionOrderResults;
+      const collected = preserveOrder ? orderedResults : completionOrderResults;
 
       return this.task.collectResults(collected);
     } finally {

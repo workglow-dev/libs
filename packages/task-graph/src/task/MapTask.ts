@@ -137,7 +137,7 @@ export class MapTask<
    * `discardResults` is set (via `.forEach()`), returns the empty result
    * without touching the per-iteration outputs.
    */
-  public override collectResults(results: TaskOutput[]): Output {
+  public override collectResults(results: ReadonlyArray<TaskOutput | undefined>): Output {
     if (this.discardResults) {
       return this.getEmptyResult();
     }
