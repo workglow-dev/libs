@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MapTask, Task, TaskGraph } from "@workglow/task-graph";
+import { MapTask, Task, TaskGraph, TaskStatus } from "@workglow/task-graph";
 import type { DataPortSchema } from "@workglow/util/schema";
 import { describe, expect, it } from "vitest";
 
@@ -42,6 +42,11 @@ describe("MapTask output arrays line up with the input", () => {
     expect(out).toEqual({ n: [1, 2, 3, 4], even: [null, 2, null, 4] });
   });
 
+  it("gives a declared port one null per item when no iteration produced it", async () => {
+    const out = await mapOver().run({ n: [1, 3] } as never);
+    expect(out).toEqual({ n: [1, 3], even: [null, null] });
+  });
+
   it("keeps the ports aligned with each other when order is not preserved", async () => {
     const out = (await mapOver({ preserveOrder: false }).run({ n: [1, 2, 3, 4] } as never)) as {
       n: number[];
@@ -50,5 +55,18 @@ describe("MapTask output arrays line up with the input", () => {
     expect(out.n).toHaveLength(4);
     expect(out.even).toHaveLength(4);
     out.n.forEach((n, i) => expect(out.even[i]).toBe(n % 2 === 0 ? n : null));
+  });
+
+  // Workers stop picking up items once a run is aborted; what they leave must not be
+  // reported as a completed map with holes in it.
+  it("an abort between iterations fails the run rather than returning partial arrays", async () => {
+    const map = mapOver({ concurrencyLimit: 1 });
+    // Aborted once the first iteration has finished, so no running iteration fails:
+    // the workers simply stop picking up items.
+    map.on("iteration_complete", (index: number) => {
+      if (index === 0) map.abort();
+    });
+    await expect(map.run({ n: [1, 2, 3, 4] } as never)).rejects.toThrow();
+    expect(map.status).not.toBe(TaskStatus.COMPLETED);
   });
 });
