@@ -9,6 +9,7 @@ import {
   McpPromptGetTask,
   McpResourceReadTask,
   McpToolCallTask,
+  mcpToolOutputPortSchema,
 } from "@workglow/mcp/tasks";
 import { mcpClientFactory } from "@workglow/mcp/util";
 import { setLogger } from "@workglow/util";
@@ -210,6 +211,62 @@ describe("MCP", () => {
       const schema = task.outputSchema() as { properties: Record<string, unknown> };
       expect(Object.keys(schema.properties).sort()).toEqual(["content", "isError", "structured"]);
       expect(schema.properties.structured).toEqual(toolSchema);
+    });
+
+    // config.outputSchema is the node's ports, which a builder reads directly; a schema
+    // that is already the envelope is not wrapped a second time.
+    test("an output schema already in the envelope shape is kept, not wrapped again", () => {
+      const toolSchema = {
+        type: "object",
+        properties: { temperature: { type: "number" } },
+      } as const;
+      const envelope = mcpToolOutputPortSchema(toolSchema);
+      const task = new McpToolCallTask({ ...toolCallConfig, outputSchema: envelope });
+      expect(task.outputSchema()).toEqual(envelope);
+      expect(mcpToolOutputPortSchema(envelope)).toEqual(envelope);
+    });
+
+    test("the old content/isError-only schema reads as the envelope", () => {
+      const old = new McpToolCallTask(toolCallConfig).outputSchema() as {
+        properties: Record<string, unknown>;
+      };
+      const { structured: _, ...withoutStructured } = old.properties;
+      const legacy = { ...old, properties: withoutStructured };
+      const schema = mcpToolOutputPortSchema(legacy as never) as {
+        properties: Record<string, { type?: unknown }>;
+      };
+      expect(Object.keys(schema.properties).sort()).toEqual(["content", "isError", "structured"]);
+      expect(schema.properties.structured).not.toEqual(legacy);
+    });
+
+    test("a tool schema that merely has a content field is still nested", () => {
+      const toolSchema = {
+        type: "object",
+        properties: { content: { type: "string" }, isError: { type: "boolean" } },
+      } as const;
+      const schema = mcpToolOutputPortSchema(toolSchema) as {
+        properties: Record<string, unknown>;
+      };
+      expect(schema.properties.structured).toEqual(toolSchema);
+    });
+
+    test("discovery stores the tool's output schema as ports, under structured", async () => {
+      const toolSchema = { type: "object", properties: { temperature: { type: "number" } } };
+      const mockClient = createMockClient({
+        listTools: fn().mockResolvedValue({
+          tools: [
+            {
+              name: "greet",
+              inputSchema: { type: "object", properties: {} },
+              outputSchema: toolSchema,
+            },
+          ],
+        }),
+      });
+      mockFactory(mockClient);
+      const task = new McpToolCallTask(toolCallConfig);
+      await task.discoverSchemas();
+      expect(task.config.outputSchema).toEqual(mcpToolOutputPortSchema(toolSchema));
     });
 
     test("parses JSON from single text content when no structuredContent", async () => {
