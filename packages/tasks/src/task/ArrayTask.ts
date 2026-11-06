@@ -278,7 +278,7 @@ export abstract class ArrayTask<
 class ArrayTaskRunner<
   Input extends TaskInput = TaskInput,
   Output extends TaskOutput = TaskOutput,
-  Config extends GraphAsTaskConfig<Input> = GraphAsTaskConfig<Input>,
+  Config extends ArrayTaskConfig<Input> = ArrayTaskConfig<Input>,
 > extends GraphAsTaskRunner<Input, Output, Config> {
   declare task: ArrayTask<Input, Output, Config>;
 

@@ -54,8 +54,9 @@ export abstract class ImageFilterTask<
       assertWithinPixelBudget(size.width, size.height);
     } catch (err) {
       throw new TaskInvalidInputError(
-        `${this.type}: output ${size.width}x${size.height} is over the image pixel budget`,
-        { cause: err }
+        `${this.type}: output ${size.width}x${size.height} is over the image pixel budget: ${
+          err instanceof Error ? err.message : String(err)
+        }`
       );
     }
   }

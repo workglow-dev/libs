@@ -145,6 +145,7 @@ export class BrowserLoginTask extends Task<
         contentData: undefined,
         expectsResponse: true,
         mode: "single",
+        metadata: { url: input.url },
       },
       executeContext.signal
     );

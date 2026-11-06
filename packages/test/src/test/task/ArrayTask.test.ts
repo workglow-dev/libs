@@ -4,13 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {
-  IExecuteContext,
-  ITask,
-  TaskConfig,
-  TaskInput,
-  TaskOutput,
-} from "@workglow/task-graph";
+import type { IExecuteContext, ITask, TaskInput, TaskOutput } from "@workglow/task-graph";
 import {
   Dataflow,
   PROPERTY_ARRAY,
@@ -45,8 +39,7 @@ interface MultiplyOutput extends TaskOutput {
  */
 class MultiplyRunTask extends ArrayTask<
   ConvertAllToOptionalArray<MultiplyInput>,
-  ConvertAllToOptionalArray<MultiplyOutput>,
-  TaskConfig
+  ConvertAllToOptionalArray<MultiplyOutput>
 > {
   public static override inputSchema(): DataPortSchema {
     return {
@@ -330,8 +323,7 @@ interface QueryTestOutput extends TaskOutput {
  */
 class QueryAppendTask extends ArrayTask<
   ConvertAllToOptionalArray<QueryTestInput>,
-  ConvertAllToOptionalArray<QueryTestOutput>,
-  TaskConfig
+  ConvertAllToOptionalArray<QueryTestOutput>
 > {
   public static override inputSchema(): DataPortSchema {
     return {

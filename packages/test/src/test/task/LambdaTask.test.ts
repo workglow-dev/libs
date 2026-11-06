@@ -148,8 +148,8 @@ describe("LambdaTask", () => {
     // Keyed by type and input alone, two different lambdas sharing a cache returned
     // each other's results -- `square(3)` came back as `double(3)`.
     const cache = new InMemoryTaskOutputRepository();
-    const double = new LambdaTask({ execute: async (i: { n: number }) => ({ out: i.n * 2 }) });
-    const square = new LambdaTask({ execute: async (i: { n: number }) => ({ out: i.n * i.n }) });
+    const double = new LambdaTask({ execute: async (i) => ({ out: Number(i.n) * 2 }) });
+    const square = new LambdaTask({ execute: async (i) => ({ out: Number(i.n) * Number(i.n) }) });
     expect(await double.run({ n: 3 }, { outputCache: cache })).toEqual({ out: 6 });
     expect(await square.run({ n: 3 }, { outputCache: cache })).toEqual({ out: 9 });
   });
