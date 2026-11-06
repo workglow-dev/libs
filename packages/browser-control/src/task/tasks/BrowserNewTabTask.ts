@@ -4,10 +4,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
+import type {
+  CachePolicy,
+  IExecuteContext,
+  TaskConfig,
+  TaskEntitlements,
+} from "@workglow/task-graph";
 import { Task, TaskConfigSchema } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import {
+  assertLandedWithinReach,
+  assertNavigableUrl,
+  navigationEntitlements,
+} from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
+
+const NAVIGATE_REASON = "Opens a URL in a new browser tab";
 
 const browserNewTabTaskConfigSchema = {
   type: "object",
@@ -81,13 +93,38 @@ export class BrowserNewTabTask extends Task<
     return outputSchema;
   }
 
+  public static override hasDynamicEntitlements: boolean = true;
+
+  /** Read before any input is known, so it names what a url would need. */
+  public static override entitlements(): TaskEntitlements {
+    return navigationEntitlements(undefined, NAVIGATE_REASON);
+  }
+
+  /** A blank tab reaches nothing; a url is declared as {@link BrowserNavigateTask} declares it. */
+  public override entitlements(): TaskEntitlements {
+    const url = this.runInputData?.url ?? this.defaults.url;
+    if (typeof url !== "string" || url.length === 0) return { entitlements: [] };
+    return navigationEntitlements(url, NAVIGATE_REASON);
+  }
+
   override async execute(
     input: BrowserNewTabTaskInput,
     executeContext: IExecuteContext
   ): Promise<BrowserNewTabTaskOutput> {
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
+    if (input.url) assertNavigableUrl(input.url, "BrowserNewTabTask");
     const ctx = BrowserSessionRegistry.get(input.sessionId);
     const tabInfo = await ctx.newTab(input.url);
+    if (input.url) {
+      try {
+        assertLandedWithinReach(input.url, tabInfo.url, "BrowserNewTabTask");
+      } catch (err) {
+        // Closed so no later task can read it (a single-page backend ends the session).
+        // A failed close must not replace the refusal.
+        await ctx.closeTab(tabInfo.tabId).catch(() => undefined);
+        throw err;
+      }
+    }
     return { sessionId: input.sessionId, tabId: tabInfo.tabId };
   }
 }

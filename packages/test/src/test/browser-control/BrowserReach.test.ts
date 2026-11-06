@@ -7,6 +7,7 @@
 import {
   BrowserLoginTask,
   BrowserNavigateTask,
+  BrowserNewTabTask,
   BrowserSessionRegistry,
   BrowserUploadTask,
 } from "@workglow/browser-control/task";
@@ -136,6 +137,72 @@ describe("browser navigation reach", () => {
       context
     );
     expect(out.url).toBe("http://10.0.0.5:8080/after");
+  });
+
+  // A failed reset must not replace the refusal: the caller needs to read why.
+  it("reports the refusal even when clearing the page fails", async () => {
+    redirectTo("http://169.254.169.254/latest/meta-data/");
+    const navigate = ctx.navigate.bind(ctx);
+    ctx.navigate = async (url, options) => {
+      if (url === "about:blank") throw new Error("page crashed");
+      await navigate(url, options);
+    };
+    await expect(
+      new BrowserNavigateTask().execute({ sessionId, url: "https://example.com/x" }, context)
+    ).rejects.toBeInstanceOf(TaskEntitlementError);
+  });
+
+  // A new tab given a url navigates as surely as BrowserNavigateTask does.
+  describe("a new tab", () => {
+    it.each([["file:///etc/passwd"], ["data:text/html,<b>x</b>"], ["javascript:alert(1)"]])(
+      "refuses %s before opening a tab",
+      async (url) => {
+        await expect(
+          new BrowserNewTabTask().execute({ sessionId, url }, context)
+        ).rejects.toBeInstanceOf(TaskInvalidInputError);
+        expect(ctx.calls.some((c) => c.method === "newTab")).toBe(false);
+      }
+    );
+
+    it("closes a tab that landed on a private host it did not declare", async () => {
+      ctx.newTab = async (url) => {
+        ctx.calls.push({ method: "newTab", args: [url] } as never);
+        return { tabId: "tab-2", url: "http://169.254.169.254/latest/meta-data/", title: "" };
+      };
+      await expect(
+        new BrowserNewTabTask().execute({ sessionId, url: "https://example.com/x" }, context)
+      ).rejects.toBeInstanceOf(TaskEntitlementError);
+      expect(ctx.calls.find((c) => c.method === "closeTab")?.args[0]).toBe("tab-2");
+    });
+
+    it("declares browser:navigate scoped to its url, and nothing for a blank tab", () => {
+      const ents = new BrowserNewTabTask({
+        defaults: { url: "http://10.0.0.5/x" },
+      } as never).entitlements();
+      expect(find(ents, Entitlements.BROWSER_CONTROL_NAVIGATE)?.resources).toEqual([
+        "http://10.0.0.5/*",
+      ]);
+      expect(find(ents, Entitlements.NETWORK_PRIVATE)?.resources).toEqual(["http://10.0.0.5/*"]);
+      expect(new BrowserNewTabTask().entitlements().entitlements).toEqual([]);
+    });
+
+    // The class answer is read before any input is known, so it names the family a
+    // url could need — never narrower than an instance.
+    it("declares navigation on the class", () => {
+      expect(BrowserNewTabTask.hasDynamicEntitlements).toBe(true);
+      expect(
+        find(BrowserNewTabTask.entitlements(), Entitlements.BROWSER_CONTROL_NAVIGATE)
+      ).toBeDefined();
+    });
+
+    it("opens a blank tab and an http(s) one", async () => {
+      await new BrowserNewTabTask().execute({ sessionId }, context);
+      await new BrowserNewTabTask().execute({ sessionId, url: "https://example.com/a" }, context);
+      expect(ctx.calls.filter((c) => c.method === "newTab").map((c) => c.args[0])).toEqual([
+        undefined,
+        "https://example.com/a",
+      ]);
+    });
   });
 
   it("is refused by a policy denying the private host, and never navigates", async () => {

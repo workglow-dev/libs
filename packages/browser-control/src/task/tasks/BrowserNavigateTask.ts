@@ -134,8 +134,9 @@ export class BrowserNavigateTask extends Task<
     try {
       assertLandedWithinReach(input.url, url, "BrowserNavigateTask");
     } catch (err) {
-      // Leave nothing a later extract or screenshot task could read.
-      await ctx.navigate("about:blank");
+      // Leave nothing a later extract or screenshot task could read. A failed reset
+      // must not replace the refusal.
+      await ctx.navigate("about:blank").catch(() => undefined);
       throw err;
     }
     const title = await ctx.title();

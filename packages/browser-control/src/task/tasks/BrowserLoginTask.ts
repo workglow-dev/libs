@@ -137,7 +137,8 @@ export class BrowserLoginTask extends Task<
     try {
       assertLandedWithinReach(input.url, await ctx.currentUrl(), "BrowserLoginTask");
     } catch (err) {
-      await ctx.navigate("about:blank");
+      // As BrowserNavigateTask: clear the page, and keep the refusal if that fails.
+      await ctx.navigate("about:blank").catch(() => undefined);
       throw err;
     }
     await executeContext.updateProgress(20, "Navigated to login page");
