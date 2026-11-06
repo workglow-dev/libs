@@ -793,8 +793,11 @@ export class Task<
           enumerable: false,
         });
       } catch (error) {
-        getLogger().warn(`Failed to compile config schema for ${this.type}:`, { error });
-        return undefined;
+        throw new TaskConfigurationError(
+          `${this.type}: the config schema could not be compiled, so config cannot be validated: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       }
     }
     return (this as any).__compiledConfigSchema as SchemaNode;
@@ -857,35 +860,35 @@ export class Task<
   }
 
   /**
+   * Compiles an input schema, refusing one that will not compile: a task whose
+   * inputs cannot be validated does not run unvalidated.
+   */
+  protected static compileInputSchemaNode(schema: DataPortSchema, taskType: string): SchemaNode {
+    try {
+      return this.generateInputSchemaNode(schema);
+    } catch (error) {
+      throw new TaskConfigurationError(
+        `${taskType}: the input schema could not be compiled, so inputs cannot be validated: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  /**
    * Gets the compiled input schema, cached per class (not in a shared inherited Map).
    * Uses Object.hasOwn so each subclass stores its own compiled schema and never
    * picks up a stale entry cached by a different class with the same type name.
    */
   protected static getInputSchemaNode(): SchemaNode {
     if (!Object.hasOwn(this, "__compiledInputSchema")) {
-      const dataPortSchema = this.inputSchema();
-      const schemaNode = this.generateInputSchemaNode(dataPortSchema);
-      try {
-        Object.defineProperty(this, "__compiledInputSchema", {
-          value: schemaNode,
-          writable: true,
-          configurable: true,
-          enumerable: false,
-        });
-      } catch (error) {
-        // If compilation fails, fall back to accepting any object structure
-        // This is a safety net for schemas that json-schema-library can't compile
-        getLogger().warn(
-          `Failed to compile input schema for ${this.type}, falling back to permissive validation:`,
-          { error }
-        );
-        Object.defineProperty(this, "__compiledInputSchema", {
-          value: compileSchema({}),
-          writable: true,
-          configurable: true,
-          enumerable: false,
-        });
-      }
+      const schemaNode = this.compileInputSchemaNode(this.inputSchema(), this.type);
+      Object.defineProperty(this, "__compiledInputSchema", {
+        value: schemaNode,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
     }
     return (this as any).__compiledInputSchema as SchemaNode;
   }
@@ -908,7 +911,7 @@ export class Task<
     } catch {
       key = undefined;
     }
-    if (key === undefined) return this.generateInputSchemaNode(schema);
+    if (key === undefined) return this.compileInputSchemaNode(schema, this.type);
     if (!Object.hasOwn(this, "__derivedInputSchemaNodes")) {
       Object.defineProperty(this, "__derivedInputSchemaNodes", {
         value: new Map<string, SchemaNode>(),
@@ -925,7 +928,7 @@ export class Task<
       cache.set(key, hit);
       return hit;
     }
-    const node = this.generateInputSchemaNode(schema);
+    const node = this.compileInputSchemaNode(schema, this.type);
     cache.set(key, node);
     if (cache.size > Task.MAX_DERIVED_INPUT_SCHEMA_NODES) {
       cache.delete(cache.keys().next().value as string);

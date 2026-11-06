@@ -4,10 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { getLogger } from "@workglow/util";
 import { CycleError } from "@workglow/util/graph";
 import type { DataPortSchema, SchemaNode } from "@workglow/util/schema";
-import { compileSchema } from "@workglow/util/schema";
 import { registerGraphWrapperFactory } from "../task-graph/Conversions";
 import {
   computeGraphEntitlements,
@@ -151,20 +149,7 @@ export class GraphAsTask<
   protected override getInputSchemaNode(): SchemaNode {
     // every graph as task is different, so we need to compile the schema for each one
     if (!this._inputSchemaNode) {
-      try {
-        const dataPortSchema = this.inputSchema();
-        const schemaNode = Task.generateInputSchemaNode(dataPortSchema);
-        this._inputSchemaNode = schemaNode;
-      } catch (error) {
-        // If compilation fails, fall back to accepting any object structure.
-        // This is a safety net for schemas that json-schema-library can't compile.
-        getLogger().warn(
-          `GraphAsTask "${this.type}" (${String(this.id)}): Failed to compile input schema, ` +
-            `falling back to permissive validation. Inputs will NOT be validated.`,
-          { error, taskType: this.type, taskId: this.id }
-        );
-        this._inputSchemaNode = compileSchema({});
-      }
+      this._inputSchemaNode = Task.compileInputSchemaNode(this.inputSchema(), this.type);
     }
     return this._inputSchemaNode!;
   }
