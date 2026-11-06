@@ -415,4 +415,13 @@ describe("JavaScriptTask", () => {
     const optedOut = new JavaScriptTask({ cacheable: true }, { cacheable: false });
     expect(optedOut.getCachePolicy({} as never)).toEqual({ kind: "none" });
   });
+
+  // Where the interpreter has no `vm` (Bun, browsers), a regex runs in a Worker and the
+  // interpreter pauses until it answers. Waiting is not stepping: a pause charged to the
+  // budget failed a three-step split on a 2000-step budget.
+  test("a regex run in a worker does not spend the step budget while it waits", async () => {
+    const task = new JavaScriptTask({ maxSteps: 2000 } as never);
+    const result = await task.run({ javascript_code: "'a1b2c3'.split(/\\d/).join('-')" });
+    expect(result.output).toBe("a-b-c-");
+  });
 });

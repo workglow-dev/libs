@@ -37,6 +37,9 @@ const STEPS_PER_CLOCK_CHECK = 10_000;
 const DEFAULT_MAX_STEPS = 50_000_000;
 const PREVIEW_MAX_STEPS = 1_000_000;
 
+/** `Status.ASYNC` from the interpreter; its enum is a `const enum` declared without a value module. */
+const ASYNC_STATUS = 3;
+
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -55,7 +58,16 @@ async function runInSlices(
 ): Promise<void> {
   let sliceEnd = performance.now() + SLICE_MS;
   let steps = 0;
-  while (interpreter.step()) {
+  for (;;) {
+    // Paused on an async native (a regex the interpreter runs in a Worker where it has
+    // no `vm`): step() would report progress without making any, and the wait would be
+    // charged to the budget. Let the event loop deliver the answer instead.
+    while (interpreter.getStatus() === ASYNC_STATUS) {
+      await yieldToEventLoop();
+      if (signal?.aborted) throw new TaskAbortedError("JavaScript execution aborted");
+      sliceEnd = performance.now() + SLICE_MS;
+    }
+    if (!interpreter.step()) break;
     if (steps >= maxSteps) {
       throw new Error(`script did not finish within ${maxSteps} steps`);
     }
