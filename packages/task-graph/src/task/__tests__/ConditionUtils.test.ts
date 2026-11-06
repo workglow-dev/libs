@@ -4,7 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { evaluateCondition, getNestedValue } from "@workglow/task-graph";
+import {
+  conditionCompareValueError,
+  evaluateCondition,
+  getNestedValue,
+} from "@workglow/task-graph";
 import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
 import { describe, expect, it } from "vitest";
@@ -354,6 +358,19 @@ describe("ConditionUtils", () => {
     it("should handle array values", () => {
       const arr = [1, 2, 3];
       expect(getNestedValue({ items: arr }, "items")).toBe(arr);
+    });
+  });
+
+  describe("conditionCompareValueError", () => {
+    it("refuses a non-numeric or blank value for an ordering operator", () => {
+      expect(conditionCompareValueError("less_than", "ninety")).toMatch(/"ninety"/);
+      expect(conditionCompareValueError("greater_or_equal", "  ")).toBeDefined();
+    });
+
+    it("accepts a numeric value, and any value for a non-ordering operator", () => {
+      expect(conditionCompareValueError("less_than", "0.9")).toBeUndefined();
+      expect(conditionCompareValueError("equals", "ninety")).toBeUndefined();
+      expect(conditionCompareValueError("contains", "")).toBeUndefined();
     });
   });
 });

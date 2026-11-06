@@ -58,6 +58,28 @@ function conditionNumber(value: unknown): number {
   return Number(value);
 }
 
+const ORDERING_OPERATORS: ReadonlySet<ComparisonOperator> = new Set([
+  "greater_than",
+  "greater_or_equal",
+  "less_than",
+  "less_or_equal",
+]);
+
+/**
+ * Why a compare value can never satisfy its operator, or undefined if it can. An
+ * ordering comparison needs a number on both sides, and the compare value is fixed
+ * by the config, so a non-numeric one is known before anything is evaluated.
+ */
+export function conditionCompareValueError(
+  operator: ComparisonOperator,
+  compareValue: string
+): string | undefined {
+  if (!ORDERING_OPERATORS.has(operator) || !isNaN(conditionNumber(compareValue))) {
+    return undefined;
+  }
+  return `'${operator}' compares numbers, and ${JSON.stringify(compareValue)} is not one`;
+}
+
 /**
  * Evaluates a condition based on operator type.
  *

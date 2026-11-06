@@ -8,7 +8,8 @@ import type { DataPortSchema } from "@workglow/util/schema";
 import { bridgeSubGraphTaskEvents } from "../task-graph/SubGraphEventBridge";
 import { Workflow } from "../task-graph/Workflow";
 import { CreateEndLoopWorkflow, CreateLoopWorkflow } from "../task-graph/WorkflowFactories";
-import { evaluateCondition, getNestedValue } from "./ConditionUtils";
+import type { ComparisonOperator } from "./ConditionUtils";
+import { conditionCompareValueError, evaluateCondition, getNestedValue } from "./ConditionUtils";
 import type { GraphAsTaskConfig } from "./GraphAsTask";
 import { GraphAsTask, graphAsTaskConfigSchema } from "./GraphAsTask";
 import type { IExecuteContext, IRunConfig } from "./ITask";
@@ -206,6 +207,16 @@ export class WhileTask<
 
     if (!conditionOperator) {
       return undefined;
+    }
+
+    // A condition that can never be true ends the loop after its first pass, and the
+    // run succeeds with that pass's output; refuse it before any pass runs.
+    const invalid = conditionCompareValueError(
+      conditionOperator as ComparisonOperator,
+      conditionValue ?? ""
+    );
+    if (invalid) {
+      throw new TaskConfigurationError(`${this.type}: loop condition can never hold: ${invalid}`);
     }
 
     return (output: Output) => {

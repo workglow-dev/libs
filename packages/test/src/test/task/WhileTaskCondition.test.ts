@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Workflow } from "@workglow/task-graph";
+import { TaskConfigurationError, Workflow } from "@workglow/task-graph";
 import { RefineTask } from "@workglow/task-graph/test";
 import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
@@ -189,6 +189,48 @@ describe("WhileTask with serialized whileConfig", () => {
       // Iterations: 0.2, 0.4, 0.6 (stops after 3rd since 0.6 >= 0.5)
       expect(result.quality).toBeGreaterThanOrEqual(0.5);
       expect(result.quality).toBeLessThanOrEqual(0.8);
+    });
+  });
+  // An ordering comparison against a value that is not a number can never be true, and
+  // false ends the loop: it ran one pass and the run succeeded with that pass's output,
+  // marked only by a warning. Known from the config alone, so refused before any pass.
+  describe("an ordering comparison against a non-numeric value", () => {
+    it.each(["greater_than", "greater_or_equal", "less_than", "less_or_equal"] as const)(
+      "%s refuses the loop before running it",
+      async (conditionOperator) => {
+        const workflow = new Workflow();
+        workflow
+          .while({
+            maxIterations: 20,
+            chainIterations: true,
+            conditionField: "quality",
+            conditionOperator,
+            conditionValue: "ninety",
+          })
+          .addTask(RefineTask)
+          .endWhile();
+
+        const run = workflow.run({ value: 0 });
+        await expect(run).rejects.toThrow(TaskConfigurationError);
+        await expect(run).rejects.toThrow(/"ninety"/);
+      }
+    );
+
+    it("still compares strings with equals", async () => {
+      const workflow = new Workflow();
+      workflow
+        .while({
+          maxIterations: 3,
+          chainIterations: true,
+          conditionField: "quality",
+          conditionOperator: "not_equals",
+          conditionValue: "done",
+        })
+        .addTask(RefineTask)
+        .endWhile();
+
+      const result = await workflow.run({ value: 0 });
+      expect(result.value).toBe(3);
     });
   });
 });
