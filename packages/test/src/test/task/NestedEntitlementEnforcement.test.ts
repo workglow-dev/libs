@@ -182,6 +182,18 @@ describe("entitlement enforcement reaches nested work", () => {
     expect(fetched).toEqual([]);
   });
 
+  it("enforces only for the run that asked: a later run without it is not checked", async () => {
+    fetched = [];
+    const group = graphWithInnerComputedUrl(METADATA_URL).getTask("group")!;
+    await expect(
+      group.run({}, { registry: denyMetadataRegistry(), enforceEntitlements: true })
+    ).rejects.toThrow(TaskEntitlementError);
+
+    // No enforcer registered and enforcement off: the subgraph must not demand one.
+    await expect(group.run({}, { enforceEntitlements: false })).resolves.toBeDefined();
+    expect(fetched).toEqual([METADATA_URL]);
+  });
+
   it("allows a public url produced inside the subgraph", async () => {
     fetched = [];
     const graph = graphWithInnerComputedUrl("https://example.com/data.json");

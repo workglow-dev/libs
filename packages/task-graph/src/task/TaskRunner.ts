@@ -378,6 +378,7 @@ export class TaskRunner<
     // listener during an interleaved abort). Declared outside the try so the
     // finally block can run scope cleanup even if handleStart itself throws.
     let ctx: TaskRunContext | undefined;
+    let priorEnforcement: { readonly value: boolean | undefined } | undefined;
     try {
       ctx = await this.handleStart(effectiveConfig);
 
@@ -425,8 +426,13 @@ export class TaskRunner<
         // A subgraph this task runs (GraphAsTask, the iterators) reads the flag from
         // runConfig, which a graph run stamps on each task it schedules. A direct run
         // was handed it here and never passed it on, so its subgraph ran unchecked.
-        if (effectiveConfig.enforceEntitlements === true) {
-          this.task.runConfig = { ...this.task.runConfig, enforceEntitlements: true };
+        // Stamped for this run only: `finally` puts back what was there.
+        if (effectiveConfig.enforceEntitlements !== undefined) {
+          priorEnforcement = { value: this.task.runConfig?.enforceEntitlements };
+          this.task.runConfig = {
+            ...this.task.runConfig,
+            enforceEntitlements: effectiveConfig.enforceEntitlements,
+          };
         }
 
         const isStreamable = isTaskStreamable(this.task) || isStreamConsumer(this.task);
@@ -718,6 +724,12 @@ export class TaskRunner<
       }
       throw err;
     } finally {
+      if (priorEnforcement !== undefined) {
+        this.task.runConfig = {
+          ...this.task.runConfig,
+          enforceEntitlements: priorEnforcement.value,
+        };
+      }
       for (const off of this.ownedUsageUnsubs.values()) off();
       this.ownedUsageUnsubs.clear();
       for (const [target, prior] of this.ownedSinkStamps) Object.assign(target.runConfig, prior);
