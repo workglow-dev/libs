@@ -5,6 +5,7 @@
  */
 
 import { ChunkingStrategy, textChunker } from "@workglow/ai";
+import { TaskInvalidInputError } from "@workglow/task-graph";
 import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
 import { describe, expect, test } from "vitest";
@@ -178,17 +179,22 @@ describe("TextChunkerTask", () => {
     report("text-chunk: large-size", s);
   });
 
-  test("should handle overlap equal to chunkSize (edge case)", async () => {
-    const s = snap();
-    const result = await textChunker({ text: testText, chunkSize: 50, chunkOverlap: 50 });
-    expect(result.chunks.length).toBeGreaterThan(0);
-    report("text-chunk: overlap-equal", s);
+  // An overlap as large as the chunk never advances: the fixed strategy crawled one
+  // character at a time, emitting a chunk per character.
+  test.each([
+    [50, 50],
+    [30, 50],
+  ])("refuses chunkSize %i with chunkOverlap %i, naming both", async (chunkSize, chunkOverlap) => {
+    const err = await textChunker({ text: testText, chunkSize, chunkOverlap }).catch(
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(TaskInvalidInputError);
+    expect(String((err as Error).message)).toContain(`chunkOverlap (${chunkOverlap})`);
+    expect(String((err as Error).message)).toContain(`chunkSize (${chunkSize})`);
   });
 
-  test("should handle overlap greater than chunkSize (edge case)", async () => {
-    const s = snap();
-    const result = await textChunker({ text: testText, chunkSize: 30, chunkOverlap: 50 });
+  test("a small chunkSize with the overlap left unset is not refused for the default", async () => {
+    const result = await textChunker({ text: testText, chunkSize: 30 });
     expect(result.chunks.length).toBeGreaterThan(0);
-    report("text-chunk: overlap-exceeds", s);
   });
 });
