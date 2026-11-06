@@ -422,6 +422,12 @@ export class TaskRunner<
         // the request. Checked here rather than at `own()` time because the
         // child's input is only settled now, after hydration and validation.
         await this.enforceEntitlementsForRun(effectiveConfig);
+        // A subgraph this task runs (GraphAsTask, the iterators) reads the flag from
+        // runConfig, which a graph run stamps on each task it schedules. A direct run
+        // was handed it here and never passed it on, so its subgraph ran unchecked.
+        if (effectiveConfig.enforceEntitlements === true) {
+          this.task.runConfig = { ...this.task.runConfig, enforceEntitlements: true };
+        }
 
         const isStreamable = isTaskStreamable(this.task) || isStreamConsumer(this.task);
 

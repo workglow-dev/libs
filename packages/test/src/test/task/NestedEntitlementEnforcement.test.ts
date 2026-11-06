@@ -170,6 +170,18 @@ describe("entitlement enforcement reaches nested work", () => {
     expect(fetched).toEqual([]);
   });
 
+  // A graph run stamps enforcement onto each task it schedules; a task run directly
+  // was handed the option but never told its subgraph, which then ran unchecked.
+  it("denies it as well when the group is run directly with enforcement on", async () => {
+    fetched = [];
+    const group = graphWithInnerComputedUrl(METADATA_URL).getTask("group")!;
+
+    await expect(
+      group.run({}, { registry: denyMetadataRegistry(), enforceEntitlements: true })
+    ).rejects.toThrow(TaskEntitlementError);
+    expect(fetched).toEqual([]);
+  });
+
   it("allows a public url produced inside the subgraph", async () => {
     fetched = [];
     const graph = graphWithInnerComputedUrl("https://example.com/data.json");
