@@ -443,4 +443,10 @@ describe("JavaScriptTask", () => {
     });
     expect(Date.now() - started).toBeLessThan(1000);
   });
+
+  test("the javaScript() helper takes maxSteps", async () => {
+    await expect(
+      javaScript({ javascript_code: "while (true) {}" }, { maxSteps: 1000 })
+    ).rejects.toThrow(/1000 steps/);
+  });
 });
