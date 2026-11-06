@@ -210,7 +210,8 @@ export class WebSearchTask extends Task<WebSearchTaskInput, WebSearchTaskOutput>
 
   /**
    * Not cached: results (and a grounded provider's answer) change over time, and the
-   * cache key is only the query — as `FetchUrlTask` reading the same web is not cached.
+   * cache key is only the query. The fetch an HTTP provider owns runs uncached for the
+   * same reason.
    */
   public static override cachePolicy: CachePolicy = { kind: "none" };
 

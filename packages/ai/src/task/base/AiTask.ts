@@ -341,10 +341,6 @@ export class AiTask<
   }
 
   /**
-   * Get the input to submit to the job queue (or direct execution).
-   * Transforms the task input to AiJobInput format.
-   */
-  /**
    * Hands the release of the in-memory model to the run's resource scope. Wired via
    * the "model.dispose" capability — distinct from "model.download-remove", which
    * deletes the on-disk copy. Providers opt in by registering a run-fn whose `serves`
@@ -370,6 +366,10 @@ export class AiTask<
     resourceScope.touch(resourceKey);
   }
 
+  /**
+   * Get the input to submit to the job queue (or direct execution).
+   * Transforms the task input to AiJobInput format.
+   */
   protected async getJobInput(input: Input): Promise<AiJobInput<Input>> {
     const model = input.model as ModelConfig;
 
