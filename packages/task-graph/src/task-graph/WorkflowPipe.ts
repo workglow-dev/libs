@@ -117,9 +117,15 @@ export function parallel<I extends DataPorts = DataPorts, O extends DataPorts = 
   const config = {
     compoundMerge: mergeFn,
   };
-  const name = `‖${args.map((_arg) => "𝑓").join("‖")}‖`;
+  // Named for what each branch is: a function step is `𝑓 name`, a task or
+  // workflow its own type.
+  const name = `‖${tasks.map((task) => task.type).join("‖")}‖`;
   class ParallelTask extends GraphAsTask<I, O> {
     public static override type = name;
+    /** Minted per call and registered nowhere, so its JSON could never load. */
+    public override canSerializeConfig(): boolean {
+      return false;
+    }
   }
   const mergeTask = new ParallelTask(config);
   mergeTask.subGraph!.addTasks(tasks);

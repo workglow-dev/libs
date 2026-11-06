@@ -59,6 +59,15 @@ function createPipeFunctionTask<I extends DataPorts, O extends DataPorts>(
       } as const satisfies DataPortSchema;
     };
     public static override cachePolicy: CachePolicy = { kind: "none" };
+    /**
+     * The function this wraps cannot be written to JSON, and the per-call type it
+     * gets is registered nowhere, so a saved graph naming it could never load.
+     * Refused at save time -- as WhileTask and ConditionalTask holding functions are
+     * -- rather than at the next load.
+     */
+    public override canSerializeConfig(): boolean {
+      return false;
+    }
     public override async execute(input: I, context: IExecuteContext) {
       return fn(input, context);
     }
