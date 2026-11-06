@@ -5,6 +5,7 @@
  */
 
 import type { Task } from "@workglow/task-graph";
+import { TaskInvalidInputError } from "@workglow/task-graph";
 import {
   ScalarAbsTask,
   ScalarAddTask,
@@ -84,5 +85,47 @@ describe("math tasks", () => {
     expect((await new ScalarMinTask().run({ values: [1, Number.NaN, 3] })).result).toBeNaN();
     expect(Object.is((await new ScalarMaxTask().run({ values: [-0, 0] })).result, 0)).toBe(true);
     expect(Object.is((await new ScalarMinTask().run({ values: [0, -0] })).result, -0)).toBe(true);
+  });
+
+  // An impossible input is refused rather than answered with a value the port cannot
+  // carry (±Infinity travels as null) or an answer to a different question.
+  test.each([
+    ["ScalarMaxTask", ScalarMaxTask],
+    ["ScalarMinTask", ScalarMinTask],
+  ] as const)("%s declares and refuses an empty list", async (_n, T) => {
+    const values = (T.inputSchema() as { properties: { values: { minItems?: number } } }).properties
+      .values;
+    expect(values.minItems).toBe(1);
+    await expect(new T().run({ values: [] })).rejects.toThrow();
+    await expect(new T().execute({ values: [] }, {} as never)).rejects.toBeInstanceOf(
+      TaskInvalidInputError
+    );
+  });
+
+  test("VectorDistanceTask takes exactly two vectors", async () => {
+    const vectors = (
+      VectorDistanceTask.inputSchema() as {
+        properties: { vectors: { minItems?: number; maxItems?: number } };
+      }
+    ).properties.vectors;
+    expect([vectors.minItems, vectors.maxItems]).toEqual([2, 2]);
+    const three = { vectors: [f32(0, 0), f32(3, 4), f32(100, 100)] };
+    await expect(new VectorDistanceTask().run(three)).rejects.toThrow();
+    await expect(new VectorDistanceTask().execute(three, {} as never)).rejects.toBeInstanceOf(
+      TaskInvalidInputError
+    );
+  });
+
+  test("VectorDivideTask refuses a zero divisor element, naming where it is", async () => {
+    await expect(new VectorDivideTask().run({ vectors: [f32(6, 8), f32(2, 0)] })).rejects.toThrow(
+      /vectors\[1\]\[1\]/
+    );
+    await expect(
+      new VectorDivideTask().execute({ vectors: [f32(6, 8), f32(2, 0)] }, {} as never)
+    ).rejects.toBeInstanceOf(TaskInvalidInputError);
+    // A zero dividend is fine.
+    expect(
+      Array.from((await new VectorDivideTask().run({ vectors: [f32(0, 8), f32(2, 4)] })).result)
+    ).toEqual([0, 2]);
   });
 });

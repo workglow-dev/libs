@@ -5,7 +5,7 @@
  */
 
 import type { IExecuteContext, IExecutePreviewContext, TaskConfig } from "@workglow/task-graph";
-import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
+import { CreateWorkflow, Task, Workflow, TaskInvalidInputError } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 
 const inputSchema = {
@@ -14,6 +14,7 @@ const inputSchema = {
     values: {
       type: "array",
       items: { type: "number" },
+      minItems: 1,
       title: "Values",
       description: "Array of numbers",
     },
@@ -60,6 +61,9 @@ export class ScalarMaxTask<
     // Folded rather than spread: `Math.max(...values)` passes every element as an
     // argument, and engines cap argument counts — a million values threw a RangeError.
     // Folding with Math.max itself keeps its NaN and signed-zero rules.
+    if (input.values.length === 0) {
+      throw new TaskInvalidInputError("max of an empty list is undefined");
+    }
     let result = -Infinity;
     for (const value of input.values) result = Math.max(result, value);
     return { result } as Output;

@@ -79,7 +79,11 @@ export class VectorDivideTask<
     const values = Array.from({ length: len }, (_, i) => {
       let acc = Number(vectors[0][i]);
       for (let j = 1; j < vectors.length; j++) {
-        acc /= Number(vectors[j][i]);
+        const divisor = Number(vectors[j][i]);
+        if (divisor === 0) {
+          throw new TaskInvalidInputError(`Division by zero at vectors[${j}][${i}]`);
+        }
+        acc /= divisor;
       }
       return acc;
     });
