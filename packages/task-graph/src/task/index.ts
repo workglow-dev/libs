@@ -27,6 +27,7 @@ export * from "./Task";
 // so they are exported rather than reached through `(task as any)`.
 export * from "./TaskCloneOps";
 export * from "./TaskEntitlements";
+export * from "./UrlClassifier";
 export * from "./TaskError";
 export * from "./TaskEvents";
 export * from "./TaskJSON";

@@ -18,6 +18,7 @@ import {
   TaskInvalidInputError,
 } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import { assertNavigableUrl, navigationEntitlements } from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
 const browserLoginTaskConfigSchema = {
@@ -107,15 +108,14 @@ export class BrowserLoginTask extends Task<
   }
 
   public static override entitlements(): TaskEntitlements {
-    return {
-      entitlements: [
-        { id: Entitlements.BROWSER_CONTROL_NAVIGATE, reason: "Navigates to the login page URL" },
-      ],
-    };
+    return navigationEntitlements(undefined, "Navigates to the login page URL");
   }
 
   public override entitlements(): TaskEntitlements {
-    const base = BrowserLoginTask.entitlements();
+    const base = navigationEntitlements(
+      this.runInputData?.url ?? this.defaults.url,
+      "Navigates to the login page URL"
+    );
     if (this.config.mode === "credential") {
       return mergeEntitlements(base, {
         entitlements: [
@@ -134,10 +134,7 @@ export class BrowserLoginTask extends Task<
     executeContext: IExecuteContext
   ): Promise<BrowserLoginTaskOutput> {
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
-    const parsed = new URL(input.url, "https://placeholder");
-    if (parsed.protocol === "javascript:") {
-      throw new TaskInvalidInputError("BrowserLoginTask: javascript: URLs are not allowed");
-    }
+    assertNavigableUrl(input.url, "BrowserLoginTask");
     const ctx = BrowserSessionRegistry.get(input.sessionId);
     const mode = this.config.mode ?? "manual";
 

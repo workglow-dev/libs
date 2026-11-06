@@ -19,7 +19,10 @@ import {
   registerBrowserDeps,
 } from "@workglow/browser-control/task";
 import { DisposeStrategy, ResourceScope } from "@workglow/util";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import type { Server } from "node:http";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Accessibility tree helpers
@@ -58,8 +61,6 @@ const TEST_PAGE_HTML = [
   "</body></html>",
 ].join("");
 
-const TEST_PAGE_URL = `data:text/html,${encodeURIComponent(TEST_PAGE_HTML)}`;
-
 export interface GenericBrowserTaskTestOptions {
   /** When set, passed to Vitest hook APIs so slow backends (e.g. Playwright) stay stable. */
   readonly hookTimeout?: number;
@@ -74,6 +75,23 @@ export function runGenericBrowserTaskTests(
   options?: GenericBrowserTaskTestOptions
 ): void {
   const hookTimeout = options?.hookTimeout;
+
+  // Served over http rather than as a `data:` url: browser navigation refuses every
+  // scheme but http(s) and about:blank, so a fixture has to arrive the way a page does.
+  let server: Server | undefined;
+  let TEST_PAGE_URL = "";
+  beforeAll(async () => {
+    server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(TEST_PAGE_HTML);
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    TEST_PAGE_URL = `http://127.0.0.1:${port}/`;
+  });
+  afterAll(async () => {
+    await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
+  });
 
   function scopedAfterEach(fn: () => void | Promise<void>): void {
     if (hookTimeout !== undefined) {

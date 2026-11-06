@@ -10,19 +10,37 @@ import type {
   TaskConfig,
   TaskEntitlements,
 } from "@workglow/task-graph";
-import { Entitlements, Task, TaskConfigSchema } from "@workglow/task-graph";
+import { Task, TaskConfigSchema } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import { containUploadPaths, uploadEntitlements } from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
 const browserUploadTaskConfigSchema = {
   type: "object",
   properties: {
     ...TaskConfigSchema["properties"],
+    roots: {
+      type: "array",
+      items: { type: "string" },
+      title: "Roots",
+      description:
+        "Directories an upload path must resolve inside (after symlink resolution). Defaults to the process working directory",
+      "x-ui-hidden": true,
+    },
+    allowAnyRoot: {
+      type: "boolean",
+      title: "Allow Any Root",
+      description: "Skip root containment entirely and upload any file the process can open",
+      "x-ui-hidden": true,
+    },
   },
   additionalProperties: false,
 } as const satisfies DataPortSchema;
 
-export type BrowserUploadTaskConfig = TaskConfig;
+export type BrowserUploadTaskConfig = TaskConfig & {
+  roots?: string[];
+  allowAnyRoot?: boolean;
+};
 
 const inputSchema = {
   type: "object",
@@ -78,12 +96,15 @@ export class BrowserUploadTask extends Task<
     "Uploads one or more files to a file input element in the browser";
   public static override cachePolicy: CachePolicy = { kind: "none" };
 
+  public static override hasDynamicEntitlements: boolean = true;
+
   public static override entitlements(): TaskEntitlements {
-    return {
-      entitlements: [
-        { id: Entitlements.FILESYSTEM_READ, reason: "Reads local files for upload to browser" },
-      ],
-    };
+    return uploadEntitlements(undefined);
+  }
+
+  /** `filesystem:read` scoped to each path once the paths are known. */
+  public override entitlements(): TaskEntitlements {
+    return uploadEntitlements(this.runInputData?.filePaths ?? this.defaults.filePaths);
   }
 
   public static override configSchema(): DataPortSchema {
@@ -104,7 +125,13 @@ export class BrowserUploadTask extends Task<
   ): Promise<BrowserUploadTaskOutput> {
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
     const ctx = BrowserSessionRegistry.get(input.sessionId);
-    await ctx.uploadFile(input.ref, input.filePaths);
+    // Contained like FileLoaderTask: a graph can name any path, and whatever is
+    // uploaded is handed to the page.
+    const filePaths = await containUploadPaths(input.filePaths, {
+      roots: this.config.roots,
+      allowAnyRoot: this.config.allowAnyRoot,
+    });
+    await ctx.uploadFile(input.ref, filePaths);
     return { sessionId: input.sessionId };
   }
 }
