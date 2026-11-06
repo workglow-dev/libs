@@ -381,4 +381,27 @@ describe("JavaScriptTask", () => {
     expect(result.output).toBe(44999850000);
     expect(ticks).toBeGreaterThan(0);
   });
+
+  test("a script past its step budget is stopped, naming the budget", async () => {
+    const task = new JavaScriptTask({ maxSteps: 10_000 } as never);
+    await expect(task.run({ javascript_code: "while (true) {}" })).rejects.toThrow(/10000 steps/);
+  });
+
+  test("a preview of a script that never ends stops on its own", async () => {
+    // A preview has no abort signal; without a bound it would spin until the page closed.
+    const started = Date.now();
+    // The runner reports a failed preview without rejecting; what matters is that it ends.
+    await new JavaScriptTask()
+      .runPreview({ javascript_code: "while (true) {}" })
+      .catch(() => undefined);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  test("a script inside its budget is unaffected", async () => {
+    const task = new JavaScriptTask({ maxSteps: 10_000_000 } as never);
+    const result = await task.run({
+      javascript_code: "var s = 0; for (var i = 0; i < 1000; i++) { s += i; } s",
+    });
+    expect(result.output).toBe(499500);
+  });
 });

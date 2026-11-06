@@ -24,6 +24,13 @@ const isValidIdentifier = (key: string) => /^[a-z_$][\w$]*$/i.test(key);
 const SLICE_MS = 50;
 /** Steps between clock reads; one step is far below a microsecond. */
 const STEPS_PER_CLOCK_CHECK = 10_000;
+/**
+ * Default step budgets. A step count rather than a time limit, so a script stops at
+ * the same point on every machine. ~9M steps run per second, so a run gets ~5 s and a
+ * preview — which must be fast and has no abort signal — ~0.1 s.
+ */
+const DEFAULT_MAX_STEPS = 50_000_000;
+const PREVIEW_MAX_STEPS = 1_000_000;
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -38,11 +45,15 @@ function yieldToEventLoop(): Promise<void> {
  */
 async function runInSlices(
   interpreter: Interpreter,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  maxSteps: number
 ): Promise<void> {
   let sliceEnd = performance.now() + SLICE_MS;
   let steps = 0;
   while (interpreter.step()) {
+    if (steps >= maxSteps) {
+      throw new Error(`script did not finish within ${maxSteps} steps`);
+    }
     if (++steps % STEPS_PER_CLOCK_CHECK !== 0 || performance.now() < sliceEnd) continue;
     await yieldToEventLoop();
     if (signal?.aborted) throw new TaskAbortedError("JavaScript execution aborted");
@@ -53,7 +64,8 @@ async function runInSlices(
 async function runJavaScript(
   input: JavaScriptTaskInput,
   configuredCode: string | undefined,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  maxSteps: number
 ): Promise<JavaScriptTaskOutput> {
   const output = {} as JavaScriptTaskOutput;
   const code = input.javascript_code || configuredCode;
@@ -66,7 +78,7 @@ async function runJavaScript(
         .map((key) => `var ${key} = ${JSON.stringify(input[key])};`)
         .join("\n");
       const myInterpreter = new Interpreter(`${inputVariablesString} ${code}`);
-      await runInSlices(myInterpreter, signal);
+      await runInSlices(myInterpreter, signal, maxSteps);
       // The interpreter's value is a sandboxed pseudo-object for arrays/objects; callers
       // expect plain JS, so unwrap it. Primitives pass through untouched.
       output.output = myInterpreter.pseudoToNative(myInterpreter.value);
@@ -90,6 +102,12 @@ const configSchema = {
       minLength: 1,
       description: "JavaScript code to execute",
       format: "code:javascript",
+    },
+    maxSteps: {
+      type: "integer",
+      minimum: 1,
+      title: "Max Steps",
+      description: `Interpreter steps a run may take before it is stopped (default ${DEFAULT_MAX_STEPS}); a preview takes at most ${PREVIEW_MAX_STEPS}`,
     },
   },
   additionalProperties: false,
@@ -126,6 +144,7 @@ export type JavaScriptTaskInput = FromSchema<typeof inputSchema>;
 export type JavaScriptTaskOutput = FromSchema<typeof outputSchema>;
 export type JavaScriptTaskConfig = TaskConfig & {
   javascript_code?: string;
+  maxSteps?: number;
 };
 
 export class JavaScriptTask extends Task<
@@ -179,11 +198,21 @@ export class JavaScriptTask extends Task<
   }
 
   override async execute(input: JavaScriptTaskInput, context: IExecuteContext) {
-    return runJavaScript(input, this.config.javascript_code, context.signal);
+    return runJavaScript(
+      input,
+      this.config.javascript_code,
+      context.signal,
+      this.config.maxSteps ?? DEFAULT_MAX_STEPS
+    );
   }
 
   override async executePreview(input: JavaScriptTaskInput) {
-    return runJavaScript(input, this.config.javascript_code, undefined);
+    return runJavaScript(
+      input,
+      this.config.javascript_code,
+      undefined,
+      Math.min(this.config.maxSteps ?? PREVIEW_MAX_STEPS, PREVIEW_MAX_STEPS)
+    );
   }
 }
 
