@@ -25,7 +25,7 @@ describe("StreamingAiTask registers the model's disposal with the run's scope", 
     };
     const disposed: string[] = [];
     const dispose: AiProviderRunFn = async (_input, model, _signal, emit) => {
-      disposed.push(model.model_id);
+      disposed.push(String(model?.model_id));
       emit({ type: "finish", data: {} });
     };
     registry.registerRunFn(PROVIDER, { serves: ["text.generation"], runFn: generate });

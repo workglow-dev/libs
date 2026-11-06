@@ -251,7 +251,10 @@ describe("MCP", () => {
     });
 
     test("discovery stores the tool's output schema as ports, under structured", async () => {
-      const toolSchema = { type: "object", properties: { temperature: { type: "number" } } };
+      const toolSchema = {
+        type: "object",
+        properties: { temperature: { type: "number" } },
+      } as const;
       const mockClient = createMockClient({
         listTools: fn().mockResolvedValue({
           tools: [

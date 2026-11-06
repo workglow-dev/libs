@@ -51,7 +51,7 @@ describe("validateInput with a dynamic input schema", () => {
     const DynamicSchemaTask = dynamicSchemaTaskClass();
     const task = new DynamicSchemaTask();
     await expect(task.validateInput({ a: "x" })).resolves.toBe(true);
-    (task.schema as { required: string[] }).required.push("b");
+    (task.schema as unknown as { required: string[] }).required.push("b");
     await expect(task.validateInput({ a: "x" })).rejects.toBeInstanceOf(TaskInvalidInputError);
     await expect(task.validateInput({ a: "x", b: 1 })).resolves.toBe(true);
   });
