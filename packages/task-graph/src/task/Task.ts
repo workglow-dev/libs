@@ -40,6 +40,23 @@ import { TaskConfigSchema, TaskStatus } from "./TaskTypes";
  * 2. Providing the execution logic (via execute and executePreview)
  * 3. Delegating the running logic to a TaskRunner
  */
+const admitsArrayCache = new WeakMap<object, boolean>();
+
+/** Whether a port schema accepts an array: its type, a type list, or an anyOf/oneOf member. */
+function schemaAdmitsArray(schema: unknown): boolean {
+  if (schema === null || typeof schema !== "object") return false;
+  const cached = admitsArrayCache.get(schema);
+  if (cached !== undefined) return cached;
+  const s = schema as { type?: unknown; anyOf?: unknown; oneOf?: unknown };
+  const admits =
+    s.type === "array" ||
+    (Array.isArray(s.type) && s.type.includes("array")) ||
+    (Array.isArray(s.anyOf) && s.anyOf.some(schemaAdmitsArray)) ||
+    (Array.isArray(s.oneOf) && s.oneOf.some(schemaAdmitsArray));
+  admitsArrayCache.set(schema, admits);
+  return admits;
+}
+
 export class Task<
   Input extends TaskInput = TaskInput,
   Output extends TaskOutput = TaskOutput,
@@ -569,7 +586,14 @@ export class Task<
 
   public resetInputData(): void {
     this.runInputData = smartClone(this.defaults) as Record<string, any>;
+    this.deliveredPorts = undefined;
   }
+
+  /**
+   * Ports that have received a value through {@link addInput} since the last
+   * {@link resetInputData}: a second delivery to a port admitting an array is fan-in.
+   */
+  private deliveredPorts: Set<string> | undefined;
 
   public setDefaults(defaults: Partial<Input>): void {
     // Strip symbol properties (like [$JSONSchema]) before storing defaults
@@ -658,8 +682,14 @@ export class Task<
           (prop as any)?.type === "array" ||
           ((prop as any)?.type === "any" &&
             (Array.isArray(overrides[inputId]) || Array.isArray(this.runInputData[inputId])));
+        // A port that admits an array among other shapes (`T[] | null`, `T | T[]`)
+        // collects fan-in too, but only from its second delivery: one value stays as it
+        // came, and a delivery replaces a default rather than joining it.
+        const delivered = (this.deliveredPorts ??= new Set()).has(inputId);
+        this.deliveredPorts.add(inputId);
+        const collects = isArray || (delivered && schemaAdmitsArray(prop));
 
-        if (isArray) {
+        if (collects) {
           const existingItems = Array.isArray(this.runInputData[inputId])
             ? this.runInputData[inputId]
             : this.runInputData[inputId] !== undefined
