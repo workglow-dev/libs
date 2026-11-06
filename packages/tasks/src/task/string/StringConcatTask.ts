@@ -52,7 +52,7 @@ export class StringConcatTask<
   static override readonly category = "String";
   public static override title = "Concat";
   public static override description =
-    "Concatenates all input strings, in the order the ports are declared";
+    "Concatenates all input strings, in the order their ports are declared (by port name when none are)";
 
   static override inputSchema() {
     return inputSchema;
