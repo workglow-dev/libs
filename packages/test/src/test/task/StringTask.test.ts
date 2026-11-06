@@ -12,10 +12,10 @@ import {
   StringLowerCaseTask,
   StringReplaceTask,
   StringSliceTask,
-  StringTemplateTask,
   StringTrimTask,
   StringUpperCaseTask,
 } from "@workglow/tasks";
+import * as tasks from "@workglow/tasks";
 import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
 import { describe, expect, test } from "vitest";
@@ -25,6 +25,22 @@ describe("StringTask", () => {
   setLogger(logger);
 
   describe("StringConcatTask", () => {
+    test("joins in the order the ports are declared, not the order values arrived", async () => {
+      const inputSchema = {
+        type: "object",
+        properties: { greeting: { type: "string" }, name: { type: "string" } },
+        additionalProperties: { type: "string" },
+      } as const;
+      const task = new StringConcatTask({ inputSchema } as never);
+      const result = await task.run({ name: "World", greeting: "Hello, " });
+      expect(result.text).toBe("Hello, World");
+    });
+
+    test("orders undeclared ports by name", async () => {
+      const result = await new StringConcatTask().run({ b: "2", c: "3", a: "1" });
+      expect(result.text).toBe("123");
+    });
+
     test("concatenates two strings", async () => {
       const task = new StringConcatTask();
       const result = await task.run({ a: "hello", b: " world" });
@@ -130,6 +146,19 @@ describe("StringTask", () => {
   });
 
   describe("StringLengthTask", () => {
+    test.each([
+      [undefined, 7],
+      ["code-units", 7],
+      ["code-points", 6],
+      ["graphemes", 5],
+    ] as const)("counts %s", async (unit, want) => {
+      // "e" + combining acute is one grapheme of two code points; the emoji is one
+      // code point of two code units.
+      const text = "ae\u0301b\u{1F600}x";
+      const task = new StringLengthTask(unit ? ({ unit } as never) : undefined);
+      expect((await task.run({ text })).length).toBe(want);
+    });
+
     test("returns string length", async () => {
       const task = new StringLengthTask();
       const result = await task.run({ text: "hello" });
@@ -157,52 +186,8 @@ describe("StringTask", () => {
     });
   });
 
-  describe("StringTemplateTask", () => {
-    test("substitutes once: a value holding a placeholder is not expanded again", async () => {
-      // Replacing key by key re-scanned earlier substitutions, so a value such as
-      // "{{secret}}" pulled another key into the output -- or not, by key order.
-      const values = { note: "{{secret}}", name: "Ann", secret: "s3cr3t" };
-      const reordered = { secret: "s3cr3t", name: "Ann", note: "{{secret}}" };
-      const template = "Hello {{name}}! Note: {{note}}";
-      const a = await new StringTemplateTask().run({ template, values });
-      const b = await new StringTemplateTask().run({ template, values: reordered });
-      expect(a.text).toBe("Hello Ann! Note: {{secret}}");
-      expect(b.text).toBe(a.text);
-    });
-
-    test("leaves a placeholder with no value as written", async () => {
-      const result = await new StringTemplateTask().run({
-        template: "{{known}} and {{unknown}}",
-        values: { known: "x" },
-      });
-      expect(result.text).toBe("x and {{unknown}}");
-    });
-
-    test("replaces placeholders", async () => {
-      const task = new StringTemplateTask();
-      const result = await task.run({
-        template: "Hello, {{name}}!",
-        values: { name: "World" },
-      });
-      expect(result.text).toBe("Hello, World!");
-    });
-
-    test("replaces multiple placeholders", async () => {
-      const task = new StringTemplateTask();
-      const result = await task.run({
-        template: "{{greeting}}, {{name}}!",
-        values: { greeting: "Hi", name: "Alice" },
-      });
-      expect(result.text).toBe("Hi, Alice!");
-    });
-
-    test("handles missing values", async () => {
-      const task = new StringTemplateTask();
-      const result = await task.run({
-        template: "Hello, {{name}}!",
-        values: {},
-      });
-      expect(result.text).toBe("Hello, {{name}}!");
-    });
+  test("StringTemplateTask is gone in favour of TemplateTask", () => {
+    expect("StringTemplateTask" in tasks).toBe(false);
+    expect("TemplateTask" in tasks).toBe(true);
   });
 });

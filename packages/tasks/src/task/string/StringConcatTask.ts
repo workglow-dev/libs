@@ -8,8 +8,17 @@ import type { IExecuteContext, IExecutePreviewContext, TaskConfig } from "@workg
 import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 
-function concatStrings(input: Record<string, unknown>): string {
-  return Object.values(input).join("");
+/**
+ * Joins the values in the order the ports are declared (what a builder draws), then
+ * any undeclared port by name. Arrival order depends on which upstream task finished
+ * first, so it could change the answer from one run to the next.
+ */
+function concatStrings(input: Record<string, unknown>, declared: readonly string[]): string {
+  const known = new Set(declared);
+  const rest = Object.keys(input)
+    .filter((key) => !known.has(key))
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return [...declared.filter((key) => key in input), ...rest].map((key) => input[key]).join("");
 }
 
 const inputSchema = {
@@ -42,7 +51,8 @@ export class StringConcatTask<
   static override readonly type = "StringConcatTask";
   static override readonly category = "String";
   public static override title = "Concat";
-  public static override description = "Concatenates all input strings";
+  public static override description =
+    "Concatenates all input strings, in the order the ports are declared";
 
   static override inputSchema() {
     return inputSchema;
@@ -52,15 +62,21 @@ export class StringConcatTask<
     return outputSchema;
   }
 
+  private declaredPorts(): readonly string[] {
+    const properties = (this.config?.inputSchema as { properties?: unknown } | undefined)
+      ?.properties;
+    return properties && typeof properties === "object" ? Object.keys(properties) : [];
+  }
+
   override async execute(input: Input, _context: IExecuteContext): Promise<Output | undefined> {
-    return { text: concatStrings(input) } as Output;
+    return { text: concatStrings(input, this.declaredPorts()) } as Output;
   }
 
   override async executePreview(
     input: Input,
     _context: IExecutePreviewContext
   ): Promise<Output | undefined> {
-    return { text: concatStrings(input) } as Output;
+    return { text: concatStrings(input, this.declaredPorts()) } as Output;
   }
 }
 
