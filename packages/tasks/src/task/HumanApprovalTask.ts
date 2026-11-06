@@ -69,21 +69,14 @@ const inputSchema = {
   additionalProperties: false,
 } as const satisfies DataPortSchema;
 
-const approvalRequestedSchema = {
+/**
+ * Describes what is being approved: the input `context`, shown to the person as
+ * read-only details. A confirm carries no answer content, so this is not a form.
+ */
+const approvalDetailsSchema = {
   type: "object",
-  properties: {
-    approved: {
-      type: "boolean",
-      title: "Approved",
-      description: "Whether the request is approved",
-    },
-    reason: {
-      type: "string",
-      title: "Reason",
-      description: "Optional explanation for the decision",
-    },
-  },
-  required: ["approved"],
+  properties: {},
+  additionalProperties: true,
 } as const satisfies DataPortSchema;
 
 const approvalOutputSchema = {
@@ -167,10 +160,14 @@ export class HumanApprovalTask extends Task<
     const request: IHumanRequest = {
       requestId,
       targetHumanId: this.config.targetHumanId ?? "default",
-      kind: "elicit",
+      // A confirm, which every host draws as an approval -- Accept, Decline, Cancel.
+      // Sent as an elicit with an "approved" checkbox it was drawn as a form, where
+      // Accept with the box unticked was a denial and a host treating Accept as yes
+      // (as tool approvals do) reported every approval as one.
+      kind: "confirm",
       message,
-      contentSchema: approvalRequestedSchema,
-      contentData: undefined,
+      contentSchema: approvalDetailsSchema,
+      contentData: input.context,
       expectsResponse: true,
       mode: "single",
       metadata: input.context
@@ -192,22 +189,16 @@ export class HumanApprovalTask extends Task<
       throw err;
     }
 
-    // Map MCP actions to approval semantics: "accept" with approved field from
-    // content; "decline" or "cancel" → approved = false.
-    if (response.action === "accept" && response.content) {
-      return {
-        action: response.action,
-        approved: response.content.approved === true,
-        reason: response.content.reason as string | undefined,
-      };
-    }
-
+    // Accept is the approval. An explicit `approved: false` in the content -- a host
+    // still drawing the old checkbox form -- is honoured as a denial, so a change of
+    // request kind can never turn that host's "no" into a yes. Decline refuses;
+    // Cancel walks away undecided. A reason rides along when the host sends one.
+    const reason =
+      typeof response.content?.reason === "string" ? response.content.reason : undefined;
     return {
       action: response.action,
-      approved: false,
-      ...(response.content?.reason !== undefined
-        ? { reason: response.content.reason as string }
-        : {}),
+      approved: response.action === "accept" && response.content?.approved !== false,
+      ...(reason !== undefined ? { reason } : {}),
     };
   }
 }
