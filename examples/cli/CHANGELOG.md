@@ -1,5 +1,15 @@
 # @workglow/cli
 
+## 0.6.16
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `preact`: ^11.2.0
+
 ## 0.6.15
 
 ### Features

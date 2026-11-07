@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.16
+
+### Bug Fixes
+
+#### postgres
+
+- cap compound-key getBulk IN lists at 500 tuples
+
 ## 0.6.15
 
 ### Bug Fixes

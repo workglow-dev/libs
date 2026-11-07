@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.16
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `hyparquet-compressors`: ^1.1.3
+
 ## 0.6.15
 
 ### Features

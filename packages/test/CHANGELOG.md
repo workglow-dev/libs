@@ -1,5 +1,31 @@
 # @workglow/test
 
+## 0.6.16
+
+### Bug Fixes
+
+#### task-graph
+
+- refuse a while condition that can never hold
+
+#### tasks
+
+- let a filesystem root contain the files beneath it
+
+#### browser-control
+
+- hold BrowserNewTabTask to the navigation reach policy
+
+#### postgres
+
+- cap compound-key getBulk IN lists at 500 tuples
+
+### Tests
+
+- keep a timed-out FsFolder contract attempt out of its retry's directory
+- a FallbackTask run directly is checked in both modes
+- type FunctionGraphSerialization's steps up front
+
 ## 0.6.15
 
 ### Features

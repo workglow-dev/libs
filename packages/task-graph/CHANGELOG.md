@@ -1,5 +1,18 @@
 # @workglow/task-graph
 
+## 0.6.16
+
+### Bug Fixes
+
+#### task-graph
+
+- refuse a while condition that can never hold
+- run FallbackTask alternatives inside the run
+
+### Tests
+
+- fix type errors typecheck:tests reports in three co-located tests
+
 ## 0.6.15
 
 ### Features

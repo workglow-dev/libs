@@ -1,5 +1,21 @@
 # @workglow/tasks
 
+## 0.6.16
+
+### Bug Fixes
+
+#### tasks
+
+- let a filesystem root contain the files beneath it
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `undici`: ^8.12.4
+
 ## 0.6.15
 
 ### Features

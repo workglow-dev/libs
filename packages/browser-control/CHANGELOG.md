@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.16
+
+### Bug Fixes
+
+#### browser-control
+
+- hold BrowserNewTabTask to the navigation reach policy
+
 ## 0.6.15
 
 _No changes in this package._

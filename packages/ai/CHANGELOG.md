@@ -1,5 +1,21 @@
 # @workglow/ai
 
+## 0.6.16
+
+### Bug Fixes
+
+#### ai
+
+- hand a freed enricher slot straight to its waiter
+
+### Tests
+
+- fix type errors typecheck:tests reports in three co-located tests
+
+### Documentation
+
+- restore getJobInput's JSDoc and correct WebSearchTask's cache note
+
 ## 0.6.15
 
 ### Features

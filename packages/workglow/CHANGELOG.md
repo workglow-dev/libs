@@ -1,5 +1,9 @@
 # workglow
 
+## 0.6.16
+
+_No changes in this package._
+
 ## 0.6.15
 
 _No changes in this package._

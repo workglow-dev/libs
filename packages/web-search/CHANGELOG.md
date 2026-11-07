@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.16
+
+### Documentation
+
+- restore getJobInput's JSDoc and correct WebSearchTask's cache note
+
 ## 0.6.15
 
 _No changes in this package._

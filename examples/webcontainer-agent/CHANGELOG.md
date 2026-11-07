@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.16
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `vite`: ^8.3.6
+
 ## 0.6.15
 
 _No changes in this package._

@@ -1,5 +1,21 @@
 # @workglow/web
 
+## 0.6.16
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `@xyflow/react`: =12.12.1
+- `react-resizable-panels`: ^4.19.1
+- `@vitejs/plugin-react`: ^6.2.1
+- `@tailwindcss/vite`: ^4.3.5
+- `tailwindcss`: ^4.3.5
+- `rollup-plugin-visualizer`: ^7.1.2
+- `vite`: ^8.3.6
+
 ## 0.6.15
 
 ### Features

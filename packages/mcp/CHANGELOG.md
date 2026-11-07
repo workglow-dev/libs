@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.16
+
+### Tests
+
+- fix type errors typecheck:tests reports in three co-located tests
+
 ## 0.6.15
 
 _No changes in this package._
