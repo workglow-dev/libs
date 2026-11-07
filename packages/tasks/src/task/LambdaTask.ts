@@ -5,8 +5,10 @@
  */
 
 import type {
+  CachePolicy,
   IExecuteContext,
   IExecutePreviewContext,
+  IRunConfig,
   TaskConfig,
   TaskInput,
   TaskOutput,
@@ -72,7 +74,13 @@ export class LambdaTask<
   public static override title = "Lambda Task";
   public static override description = "A task that wraps a provided function and its input";
   public static override category = "Hidden";
-  public static override cacheable = true;
+  /**
+   * Never cached. The output cache keys on task type and input, and the function a
+   * lambda runs is not part of that key, so two lambdas sharing a cache would answer
+   * for each other. `QuickTask` (a function passed to `pipe()`) is uncached for the
+   * same reason.
+   */
+  public static override cachePolicy: CachePolicy = { kind: "none" };
   public static override configSchema(): DataPortSchema {
     return lambdaTaskConfigSchema;
   }
@@ -87,13 +95,13 @@ export class LambdaTask<
     return false;
   }
 
-  constructor(config: Partial<Config> = {}) {
+  constructor(config: Partial<Config> = {}, runConfig: Partial<IRunConfig> = {}) {
     if (!config.execute && !config.executePreview) {
       throw new TaskConfigurationError(
         "LambdaTask must have either execute or executePreview function in config"
       );
     }
-    super(config);
+    super(config, runConfig);
   }
 
   override async execute(input: Input, context: IExecuteContext): Promise<Output> {

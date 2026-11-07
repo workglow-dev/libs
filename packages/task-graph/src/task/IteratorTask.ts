@@ -419,23 +419,33 @@ export abstract class IteratorTask<
     return {} as Output;
   }
 
-  /** Collects and merges results from all iterations. */
-  public collectResults(results: TaskOutput[]): Output {
+  /**
+   * Collects iteration results into one array per output port, **one slot per
+   * iteration**: a port an iteration did not produce, or an iteration that produced
+   * nothing, is `null` in its slot. Compacting instead would pair each later value
+   * with the wrong input.
+   */
+  public collectResults(results: ReadonlyArray<TaskOutput | undefined>): Output {
     if (results.length === 0) {
       return {} as Output;
     }
 
-    const merged: Record<string, unknown[]> = {};
-
+    const keys = new Set<string>();
     for (const result of results) {
-      if (!result || typeof result !== "object") continue;
-
-      for (const [key, value] of Object.entries(result as Record<string, unknown>)) {
-        if (!merged[key]) {
-          merged[key] = [];
-        }
-        merged[key].push(value);
+      if (result && typeof result === "object") {
+        for (const key of Object.keys(result)) keys.add(key);
       }
+    }
+
+    const merged: Record<string, unknown[]> = {};
+    for (const key of keys) {
+      merged[key] = results.map((result) => {
+        const value =
+          result && typeof result === "object"
+            ? (result as Record<string, unknown>)[key]
+            : undefined;
+        return value === undefined ? null : value;
+      });
     }
 
     return merged as Output;

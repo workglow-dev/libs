@@ -500,29 +500,23 @@ A compound task that processes arrays by either executing directly for non-array
 
 - Automatically handles single values or arrays
 - Parallel execution for array inputs
-- Generates all combinations when multiple inputs are arrays
+- Generates all combinations when multiple inputs are arrays, refusing more than `maxIterations`
 - Uses `x-replicate` annotation to mark array-capable inputs
 
 **Examples:**
 
 ```typescript
-import { ArrayTask, DataPortSchema } from "@workglow/tasks";
+import { ArrayTask, TypeReplicateArray } from "@workglow/tasks";
+import type { DataPortSchema } from "@workglow/util/schema";
 
-class ArrayProcessorTask extends ArrayTask<{ items: string[] }, { results: string[] }> {
-  static readonly type = "ArrayProcessorTask";
+class UpperCaseTask extends ArrayTask<{ text: string | string[] }, { result: string }> {
+  static readonly type = "UpperCaseTask";
 
   static inputSchema() {
     return {
       type: "object",
-      properties: {
-        items: {
-          type: "array",
-          items: {
-            type: "string",
-          },
-        },
-      },
-      required: ["items"],
+      properties: { text: TypeReplicateArray({ type: "string" }) },
+      required: ["text"],
       additionalProperties: false,
     } as const satisfies DataPortSchema;
   }
@@ -530,31 +524,27 @@ class ArrayProcessorTask extends ArrayTask<{ items: string[] }, { results: strin
   static outputSchema() {
     return {
       type: "object",
-      properties: {
-        results: {
-          type: "array",
-          items: {
-            type: "string",
-          },
-        },
-      },
-      required: ["results"],
+      properties: { result: { type: "string" } },
+      required: ["result"],
       additionalProperties: false,
     } as const satisfies DataPortSchema;
   }
 
-  async execute(input: { items: string[] }) {
-    return { results: input.items.map((item) => item.toUpperCase()) };
+  // Runs once per value: `text` is always a single string here.
+  async execute(input: { text: string }) {
+    return { result: input.text.toUpperCase() };
   }
 }
 
-// Process array items in parallel
-const task = new ArrayProcessorTask({
-  items: ["hello", "world", "foo", "bar"],
+// One task per value. maxIterations is required: the most combinations to run,
+// or "unbounded" to opt out of the limit.
+const task = new UpperCaseTask({
+  maxIterations: 100,
+  defaults: { text: ["hello", "world", "foo", "bar"] },
 });
 
 const result = await task.run();
-// { results: ["HELLO", "WORLD", "FOO", "BAR"] }
+// { result: ["HELLO", "WORLD", "FOO", "BAR"] }
 ```
 
 **Features:**

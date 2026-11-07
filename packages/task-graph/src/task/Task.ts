@@ -40,6 +40,23 @@ import { TaskConfigSchema, TaskStatus } from "./TaskTypes";
  * 2. Providing the execution logic (via execute and executePreview)
  * 3. Delegating the running logic to a TaskRunner
  */
+const admitsArrayCache = new WeakMap<object, boolean>();
+
+/** Whether a port schema accepts an array: its type, a type list, or an anyOf/oneOf member. */
+function schemaAdmitsArray(schema: unknown): boolean {
+  if (schema === null || typeof schema !== "object") return false;
+  const cached = admitsArrayCache.get(schema);
+  if (cached !== undefined) return cached;
+  const s = schema as { type?: unknown; anyOf?: unknown; oneOf?: unknown };
+  const admits =
+    s.type === "array" ||
+    (Array.isArray(s.type) && s.type.includes("array")) ||
+    (Array.isArray(s.anyOf) && s.anyOf.some(schemaAdmitsArray)) ||
+    (Array.isArray(s.oneOf) && s.oneOf.some(schemaAdmitsArray));
+  admitsArrayCache.set(schema, admits);
+  return admits;
+}
+
 export class Task<
   Input extends TaskInput = TaskInput,
   Output extends TaskOutput = TaskOutput,
@@ -569,7 +586,14 @@ export class Task<
 
   public resetInputData(): void {
     this.runInputData = smartClone(this.defaults) as Record<string, any>;
+    this.deliveredPorts = undefined;
   }
+
+  /**
+   * Ports that have received a value through {@link addInput} since the last
+   * {@link resetInputData}: a second delivery to a port admitting an array is fan-in.
+   */
+  private deliveredPorts: Set<string> | undefined;
 
   public setDefaults(defaults: Partial<Input>): void {
     // Strip symbol properties (like [$JSONSchema]) before storing defaults
@@ -658,8 +682,14 @@ export class Task<
           (prop as any)?.type === "array" ||
           ((prop as any)?.type === "any" &&
             (Array.isArray(overrides[inputId]) || Array.isArray(this.runInputData[inputId])));
+        // A port that admits an array among other shapes (`T[] | null`, `T | T[]`)
+        // collects fan-in too, but only from its second delivery: one value stays as it
+        // came, and a delivery replaces a default rather than joining it.
+        const delivered = (this.deliveredPorts ??= new Set()).has(inputId);
+        this.deliveredPorts.add(inputId);
+        const collects = isArray || (delivered && schemaAdmitsArray(prop));
 
-        if (isArray) {
+        if (collects) {
           const existingItems = Array.isArray(this.runInputData[inputId])
             ? this.runInputData[inputId]
             : this.runInputData[inputId] !== undefined
@@ -793,8 +823,11 @@ export class Task<
           enumerable: false,
         });
       } catch (error) {
-        getLogger().warn(`Failed to compile config schema for ${this.type}:`, { error });
-        return undefined;
+        throw new TaskConfigurationError(
+          `${this.type}: the config schema could not be compiled, so config cannot be validated: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       }
     }
     return (this as any).__compiledConfigSchema as SchemaNode;
@@ -857,35 +890,35 @@ export class Task<
   }
 
   /**
+   * Compiles an input schema, refusing one that will not compile: a task whose
+   * inputs cannot be validated does not run unvalidated.
+   */
+  protected static compileInputSchemaNode(schema: DataPortSchema, taskType: string): SchemaNode {
+    try {
+      return this.generateInputSchemaNode(schema);
+    } catch (error) {
+      throw new TaskConfigurationError(
+        `${taskType}: the input schema could not be compiled, so inputs cannot be validated: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  /**
    * Gets the compiled input schema, cached per class (not in a shared inherited Map).
    * Uses Object.hasOwn so each subclass stores its own compiled schema and never
    * picks up a stale entry cached by a different class with the same type name.
    */
   protected static getInputSchemaNode(): SchemaNode {
     if (!Object.hasOwn(this, "__compiledInputSchema")) {
-      const dataPortSchema = this.inputSchema();
-      const schemaNode = this.generateInputSchemaNode(dataPortSchema);
-      try {
-        Object.defineProperty(this, "__compiledInputSchema", {
-          value: schemaNode,
-          writable: true,
-          configurable: true,
-          enumerable: false,
-        });
-      } catch (error) {
-        // If compilation fails, fall back to accepting any object structure
-        // This is a safety net for schemas that json-schema-library can't compile
-        getLogger().warn(
-          `Failed to compile input schema for ${this.type}, falling back to permissive validation:`,
-          { error }
-        );
-        Object.defineProperty(this, "__compiledInputSchema", {
-          value: compileSchema({}),
-          writable: true,
-          configurable: true,
-          enumerable: false,
-        });
-      }
+      const schemaNode = this.compileInputSchemaNode(this.inputSchema(), this.type);
+      Object.defineProperty(this, "__compiledInputSchema", {
+        value: schemaNode,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
     }
     return (this as any).__compiledInputSchema as SchemaNode;
   }
@@ -893,6 +926,47 @@ export class Task<
   protected getInputSchemaNode(): SchemaNode {
     return (this.constructor as typeof Task).getInputSchemaNode();
   }
+
+  /**
+   * Compiled input schemas that are not the static one — an instance's dynamic schema, or
+   * either kind with stream-wired ports removed — cached per class and keyed by the
+   * schema's JSON text. Compiling costs ~25× a validation, and these are rebuilt on every
+   * run; keying by content rather than identity keeps a schema edited in place from
+   * validating against its old shape.
+   */
+  protected static getDerivedInputSchemaNode(schema: DataPortSchema): SchemaNode {
+    let key: string | undefined;
+    try {
+      key = JSON.stringify(schema);
+    } catch {
+      key = undefined;
+    }
+    if (key === undefined) return this.compileInputSchemaNode(schema, this.type);
+    if (!Object.hasOwn(this, "__derivedInputSchemaNodes")) {
+      Object.defineProperty(this, "__derivedInputSchemaNodes", {
+        value: new Map<string, SchemaNode>(),
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+    }
+    const cache = (this as any).__derivedInputSchemaNodes as Map<string, SchemaNode>;
+    const hit = cache.get(key);
+    if (hit) {
+      // Re-insert so eviction drops the least recently used schema.
+      cache.delete(key);
+      cache.set(key, hit);
+      return hit;
+    }
+    const node = this.compileInputSchemaNode(schema, this.type);
+    cache.set(key, node);
+    if (cache.size > Task.MAX_DERIVED_INPUT_SCHEMA_NODES) {
+      cache.delete(cache.keys().next().value as string);
+    }
+    return node;
+  }
+
+  private static readonly MAX_DERIVED_INPUT_SCHEMA_NODES = 32;
 
   /**
    * Validates an input data object against the task's input schema.
@@ -919,14 +993,13 @@ export class Task<
       // removed; drop their keys from the object so `additionalProperties:false`
       // does not then reject them as unknown.
       const base = ctor.hasDynamicSchemas ? this.inputSchema() : ctor.inputSchema();
-      schemaNode = ctor.generateInputSchemaNode(Task.schemaWithoutPorts(base, skip));
+      schemaNode = ctor.getDerivedInputSchemaNode(Task.schemaWithoutPorts(base, skip));
       validated = { ...(input as Record<string, unknown>) };
       for (const port of skip) delete validated[port];
     } else if (ctor.hasDynamicSchemas) {
       // Dynamic-schema tasks use instance inputSchema() (e.g. config.inputSchema), not the static fallback.
       // The cached getInputSchemaNode uses static inputSchema() which would reject valid instance-specific inputs.
-      const instanceSchema = this.inputSchema();
-      schemaNode = ctor.generateInputSchemaNode(instanceSchema);
+      schemaNode = ctor.getDerivedInputSchemaNode(this.inputSchema());
     } else {
       schemaNode = this.getInputSchemaNode();
     }

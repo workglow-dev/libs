@@ -74,5 +74,8 @@
     "@workglow/job-queue": "workspace:*",
     "@workglow/storage": "workspace:*",
     "@workglow/util": "workspace:*"
+  },
+  "dependencies": {
+    "ipaddr.js": "^2.5.0"
   }
 }

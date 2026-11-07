@@ -338,6 +338,9 @@
     "packages/task-graph": {
       "name": "@workglow/task-graph",
       "version": "0.6.15",
+      "dependencies": {
+        "ipaddr.js": "^2.5.0",
+      },
       "devDependencies": {
         "@workglow/job-queue": "workspace:*",
         "@workglow/storage": "workspace:*",

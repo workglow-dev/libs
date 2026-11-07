@@ -5,7 +5,7 @@
  */
 
 import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
-import { Task, TaskConfigSchema } from "@workglow/task-graph";
+import { Task, TaskConfigSchema, TaskConfigurationError } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
@@ -84,7 +84,7 @@ export class BrowserCloseTabTask extends Task<
   ): Promise<BrowserCloseTabTaskOutput> {
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
     if (!this.config.tabId) {
-      throw new Error("BrowserCloseTabTask requires config.tabId");
+      throw new TaskConfigurationError("BrowserCloseTabTask requires config.tabId");
     }
     const ctx = BrowserSessionRegistry.get(input.sessionId);
     await ctx.closeTab(this.config.tabId);

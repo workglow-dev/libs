@@ -6,7 +6,7 @@
 
 import type { ChunkRecord } from "@workglow/knowledge-base";
 import { ChunkRecordArraySchema } from "@workglow/knowledge-base";
-import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
+import { CreateWorkflow, Task, TaskInvalidInputError, Workflow } from "@workglow/task-graph";
 
 import type { IExecuteContext, IRunConfig, TaskConfig } from "@workglow/task-graph";
 import type { DataPortSchema } from "@workglow/util/schema";
@@ -45,9 +45,9 @@ const inputSchema = {
     chunkOverlap: {
       type: "number",
       title: "Chunk Overlap",
-      description: "Number of characters to overlap between chunks",
+      description:
+        "Number of characters to overlap between chunks; must be smaller than the chunk size. Defaults to 50, or one less than the chunk size when that is smaller",
       minimum: 0,
-      default: 50,
     },
     strategy: {
       type: "string",
@@ -198,13 +198,16 @@ export class TextChunkerTask extends Task<
     input: TextChunkerTaskInput,
     context: IExecuteContext
   ): Promise<TextChunkerTaskOutput> {
-    const {
-      text,
-      doc_id,
-      chunkSize = 512,
-      chunkOverlap = 50,
-      strategy = ChunkingStrategy.FIXED,
-    } = input;
+    const { text, doc_id, chunkSize = 512, strategy = ChunkingStrategy.FIXED } = input;
+    // Unset, the overlap is held below the chunk so a small chunk size alone is not
+    // refused for a default the caller never chose.
+    const chunkOverlap = input.chunkOverlap ?? Math.max(0, Math.min(50, chunkSize - 1));
+    if (chunkOverlap >= chunkSize) {
+      throw new TaskInvalidInputError(
+        `${this.type}: chunkOverlap (${chunkOverlap}) must be smaller than chunkSize (${chunkSize}), ` +
+          `or no chunk would advance past the one before it`
+      );
+    }
 
     let rawChunks: RawChunk[];
     switch (strategy) {

@@ -9,16 +9,26 @@ import type { DataPortSchema } from "@workglow/util/schema";
 import { ImageFilterTask, type ImageFilterInput, type ImageFilterOutput } from "../ImageFilterTask";
 import type { ResizeParams } from "./resize.cpu";
 
+/** Per-side ceiling a builder can flag before a run; the pixel budget still applies. */
+const MAX_IMAGE_SIDE = 16384;
+
 const inputSchema = {
   type: "object",
   properties: {
     image: ImageValueSchema({ title: "Image", description: "Source image" }),
-    width: { type: "integer", title: "Width", description: "Target width in pixels", minimum: 1 },
+    width: {
+      type: "integer",
+      title: "Width",
+      description: "Target width in pixels",
+      minimum: 1,
+      maximum: MAX_IMAGE_SIDE,
+    },
     height: {
       type: "integer",
       title: "Height",
       description: "Target height in pixels",
       minimum: 1,
+      maximum: MAX_IMAGE_SIDE,
     },
     fit: {
       type: "string",
@@ -76,6 +86,22 @@ export class ImageResizeTask extends ImageFilterTask<
       height: input.height as number,
       fit: input.fit as string | undefined,
       kernel: input.kernel as string | undefined,
+    };
+  }
+
+  /**
+   * `outside` keeps the aspect ratio and covers both targets, so it can grow past
+   * width x height; every other fit stays within it.
+   */
+  protected override outputSize(
+    { width, height, fit }: ResizeParams,
+    source: { readonly width: number; readonly height: number }
+  ): { readonly width: number; readonly height: number } {
+    if (fit !== "outside") return { width, height };
+    const scale = Math.max(width / source.width, height / source.height);
+    return {
+      width: Math.max(width, Math.round(source.width * scale)),
+      height: Math.max(height, Math.round(source.height * scale)),
     };
   }
 

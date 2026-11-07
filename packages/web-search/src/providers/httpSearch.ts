@@ -40,8 +40,9 @@ export async function fetchSearchJson(
   options: SearchFetchOptions,
   context: IExecuteContext
 ): Promise<unknown> {
+  // Uncached like WebSearchTask itself: a search answers what the web says now.
   const fetchTask = context.own(
-    new FetchUrlTask({ queue: false, title: `${options.provider} search` })
+    new FetchUrlTask({ queue: false, title: `${options.provider} search` }, { cacheable: false })
   );
   const response = await fetchTask.run({
     url: options.url,

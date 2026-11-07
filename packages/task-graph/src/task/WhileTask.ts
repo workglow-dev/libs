@@ -8,7 +8,8 @@ import type { DataPortSchema } from "@workglow/util/schema";
 import { bridgeSubGraphTaskEvents } from "../task-graph/SubGraphEventBridge";
 import { Workflow } from "../task-graph/Workflow";
 import { CreateEndLoopWorkflow, CreateLoopWorkflow } from "../task-graph/WorkflowFactories";
-import { evaluateCondition, getNestedValue } from "./ConditionUtils";
+import type { ComparisonOperator } from "./ConditionUtils";
+import { conditionCompareValueError, evaluateCondition, getNestedValue } from "./ConditionUtils";
 import type { GraphAsTaskConfig } from "./GraphAsTask";
 import { GraphAsTask, graphAsTaskConfigSchema } from "./GraphAsTask";
 import type { IExecuteContext, IRunConfig } from "./ITask";
@@ -206,6 +207,16 @@ export class WhileTask<
 
     if (!conditionOperator) {
       return undefined;
+    }
+
+    // A condition that can never be true ends the loop after its first pass, and the
+    // run succeeds with that pass's output; refuse it before any pass runs.
+    const invalid = conditionCompareValueError(
+      conditionOperator as ComparisonOperator,
+      conditionValue ?? ""
+    );
+    if (invalid) {
+      throw new TaskConfigurationError(`${this.type}: loop condition can never hold: ${invalid}`);
     }
 
     return (output: Output) => {
@@ -429,6 +440,10 @@ export class WhileTask<
         // Run the subgraph (it resets itself on each run)
         const results = await this.subGraph.run<Output>(iterationInput, {
           parentSignal: context.signal,
+          // Each pass is a graph run of its own; it needs the run's registry and
+          // enforcement flag, or every task inside is scheduled unchecked.
+          ...this.runner.subGraphRunContext,
+          enforceEntitlements: this.runConfig?.enforceEntitlements,
           ...this.runner.streamRunOptions,
         });
 
@@ -550,6 +565,10 @@ export class WhileTask<
         // run non-streaming first, then decide after the condition check.
         const results = await this.subGraph.run<Output>(iterationInput, {
           parentSignal: context.signal,
+          // Each pass is a graph run of its own; it needs the run's registry and
+          // enforcement flag, or every task inside is scheduled unchecked.
+          ...this.runner.subGraphRunContext,
+          enforceEntitlements: this.runConfig?.enforceEntitlements,
           ...this.runner.streamRunOptions,
         });
 

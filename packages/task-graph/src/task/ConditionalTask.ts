@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { getLogger } from "@workglow/util";
 import type { DataPortSchema } from "@workglow/util/schema";
 import type { CachePolicy } from "../cache/CachePolicy";
 import type { UIConditionConfig } from "./ConditionUtils";
@@ -12,6 +11,7 @@ import { evaluateCondition, getNestedValue } from "./ConditionUtils";
 import type { IExecuteContext } from "./ITask";
 import { Task } from "./Task";
 import type { TaskConfig, TaskInput, TaskOutput, TaskTypeName } from "./TaskTypes";
+import { TaskFailedError } from "./TaskError";
 import { TaskConfigSchema } from "./TaskTypes";
 
 /**
@@ -245,18 +245,30 @@ export class ConditionalTask<
 
     // Evaluate each branch condition
     for (const branch of branches) {
+      // A condition that throws fails the task, as it does in WhileTask. Treating the
+      // throw as "not taken" routed the data down the next branch or the default --
+      // a bug in a condition, or a branch with no condition function, became a
+      // silently wrong route on a run reported as a success.
+      let isActive: boolean;
       try {
-        const isActive = branch.condition(input);
-        if (isActive) {
-          this.activeBranches.add(branch.id);
-          if (isExclusive) {
-            // In exclusive mode, stop at first match
-            break;
-          }
-        }
+        isActive = branch.condition(input);
       } catch (error) {
-        // If condition throws, treat it as false (branch not taken)
-        getLogger().error(`Condition evaluation failed for branch "${branch.id}":`, { error });
+        const failure = new TaskFailedError(
+          `${this.type}: condition for branch "${branch.id}" threw: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        if (error instanceof Error && error.stack) {
+          failure.stack = `${failure.stack ?? ""}\nCaused by original error:\n${error.stack}`;
+        }
+        throw failure;
+      }
+      if (isActive) {
+        this.activeBranches.add(branch.id);
+        if (isExclusive) {
+          // In exclusive mode, stop at first match
+          break;
+        }
       }
     }
 

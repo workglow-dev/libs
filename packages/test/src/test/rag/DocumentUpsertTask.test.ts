@@ -6,6 +6,7 @@
 
 import "@workglow/ai"; // Trigger Workflow prototype extensions
 import { documentUpsert } from "@workglow/ai";
+import { TaskInvalidInputError } from "@workglow/task-graph";
 import type { DocumentMetadata, KnowledgeBase } from "@workglow/knowledge-base";
 import { createKnowledgeBase, StructuralParser } from "@workglow/knowledge-base";
 import { setLogger, uuid4 } from "@workglow/util";
@@ -91,6 +92,13 @@ describe("DocumentUpsertTask", () => {
 
   it("throws when neither title nor metadata.title is provided", async () => {
     const { doc_id, root } = await makeTree("placeholder");
+    const refusal = documentUpsert({
+      knowledgeBase: kb,
+      doc_id,
+      documentTree: root,
+      metadata: { sourceUri: "/x.mdx" } as unknown as DocumentMetadata,
+    });
+    await expect(refusal).rejects.toBeInstanceOf(TaskInvalidInputError);
     await expect(
       documentUpsert({
         knowledgeBase: kb,

@@ -379,22 +379,35 @@ describe("HumanApprovalTask", () => {
     registry = new ServiceRegistry(new Container());
   });
 
-  test("returns approved=true when human accepts", async () => {
+  test("an Accept is an approval: a confirm answer carries no content", async () => {
     const connector = createMockConnector((req) => ({
       requestId: req.requestId,
       action: "accept",
-      content: { approved: true, reason: "Looks good" },
+      content: undefined,
       done: true,
     }));
 
     registry.registerInstance(HUMAN_CONNECTOR, connector);
     const task = new HumanApprovalTask({ message: "Deploy?" });
     const result = await task.run({}, { registry });
-    expect(result).toEqual({ action: "accept", approved: true, reason: "Looks good" });
+    expect(result).toEqual({ action: "accept", approved: true });
     expect(task.status).toBe(TaskStatus.COMPLETED);
   });
 
-  test("returns approved=false when human accepts with approved=false", async () => {
+  test("passes on a reason when the host sends one with the answer", async () => {
+    const connector = createMockConnector((req) => ({
+      requestId: req.requestId,
+      action: "accept",
+      content: { reason: "Looks good" },
+      done: true,
+    }));
+
+    registry.registerInstance(HUMAN_CONNECTOR, connector);
+    const result = await new HumanApprovalTask({}).run({}, { registry });
+    expect(result).toEqual({ action: "accept", approved: true, reason: "Looks good" });
+  });
+
+  test("an explicit approved=false from the host is never read as a yes", async () => {
     const connector = createMockConnector((req) => ({
       requestId: req.requestId,
       action: "accept",
@@ -437,23 +450,16 @@ describe("HumanApprovalTask", () => {
     expect(result.reason).toBeUndefined();
   });
 
-  test("sends as elicit kind with approval schema", async () => {
+  test("asks as a confirm, which every host draws as an approval", async () => {
     const connector = createMockConnector((req) => {
-      expect(req.kind).toBe("elicit");
+      expect(req.kind).toBe("confirm");
       expect(req.mode).toBe("single");
-      expect(
-        (req.contentSchema as { properties: Record<string, unknown> }).properties
-      ).toHaveProperty("approved");
-      return {
-        requestId: req.requestId,
-        action: "accept",
-        content: { approved: true },
-        done: true,
-      };
+      expect(req.contentData).toEqual({ change: "v2" });
+      return { requestId: req.requestId, action: "accept", content: undefined, done: true };
     });
 
     registry.registerInstance(HUMAN_CONNECTOR, connector);
-    await new HumanApprovalTask({}).run({}, { registry });
+    await new HumanApprovalTask({}).run({ context: { change: "v2" } }, { registry });
   });
 
   test("static type and category", () => {

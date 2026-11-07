@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { TaskConfigurationError } from "@workglow/task-graph";
 import { createServiceToken, globalServiceRegistry } from "@workglow/util";
 import type { BrowserBackendType, BrowserConnectOptions, IBrowserContext } from "./IBrowserContext";
 
@@ -30,7 +31,7 @@ export function registerBrowserDeps(deps: BrowserTaskDeps): void {
 
 export function getBrowserDeps(): BrowserTaskDeps {
   if (!globalServiceRegistry.has(BROWSER_CONTROL_TASK_DEPS)) {
-    throw new Error(
+    throw new TaskConfigurationError(
       "Browser task dependencies not registered. Import @workglow/browser-control/task-server (Node/Bun) or @workglow/browser-control/task-electron before using browser-control tasks."
     );
   }

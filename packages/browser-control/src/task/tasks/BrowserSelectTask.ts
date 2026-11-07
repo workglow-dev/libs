@@ -5,7 +5,7 @@
  */
 
 import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
-import { Task, TaskConfigSchema } from "@workglow/task-graph";
+import { Task, TaskConfigSchema, TaskInvalidInputError } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
@@ -85,7 +85,7 @@ export class BrowserSelectTask extends Task<
     if (input.ref) {
       await ctx.selectOption(input.ref, input.value);
     } else {
-      throw new Error("BrowserSelectTask: ref must be provided");
+      throw new TaskInvalidInputError("BrowserSelectTask: ref must be provided");
     }
     return { sessionId: input.sessionId };
   }

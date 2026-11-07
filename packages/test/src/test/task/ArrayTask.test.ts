@@ -4,14 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {
-  IExecuteContext,
-  ITask,
-  TaskConfig,
-  TaskInput,
-  TaskOutput,
+import type { IExecuteContext, ITask, TaskInput, TaskOutput } from "@workglow/task-graph";
+import {
+  Dataflow,
+  PROPERTY_ARRAY,
+  Task,
+  TaskConfigurationError,
+  TaskGraph,
+  TaskInvalidInputError,
+  TaskStatus,
 } from "@workglow/task-graph";
-import { Dataflow, PROPERTY_ARRAY, Task, TaskGraph, TaskStatus } from "@workglow/task-graph";
 import { ArrayTask } from "@workglow/tasks";
 import type { ConvertAllToOptionalArray } from "@workglow/util";
 import { setLogger } from "@workglow/util";
@@ -37,8 +39,7 @@ interface MultiplyOutput extends TaskOutput {
  */
 class MultiplyRunTask extends ArrayTask<
   ConvertAllToOptionalArray<MultiplyInput>,
-  ConvertAllToOptionalArray<MultiplyOutput>,
-  TaskConfig
+  ConvertAllToOptionalArray<MultiplyOutput>
 > {
   public static override inputSchema(): DataPortSchema {
     return {
@@ -322,8 +323,7 @@ interface QueryTestOutput extends TaskOutput {
  */
 class QueryAppendTask extends ArrayTask<
   ConvertAllToOptionalArray<QueryTestInput>,
-  ConvertAllToOptionalArray<QueryTestOutput>,
-  TaskConfig
+  ConvertAllToOptionalArray<QueryTestOutput>
 > {
   public static override inputSchema(): DataPortSchema {
     return {
@@ -389,6 +389,7 @@ describe("ArrayTask", () => {
   setLogger(logger);
   test("MultiplyRunTask in task mode run plain", async () => {
     const task = new MultiplyRunTask({
+      maxIterations: 100,
       defaults: { a: 4, b: 5 },
     });
     // `executeTaskChildren` is protected; Vitest 5's `spyOn` overloads reach it
@@ -403,6 +404,7 @@ describe("ArrayTask", () => {
 
   test("MultiplyRunTask in task mode run array", async () => {
     const task = new MultiplyRunTask({
+      maxIterations: 100,
       defaults: { a: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], b: 1 },
     });
     const results = await task.run();
@@ -411,6 +413,7 @@ describe("ArrayTask", () => {
 
   test("MultiplyRunTask in task mode run array x array", async () => {
     const task = new MultiplyRunTask({
+      maxIterations: 100,
       defaults: { a: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], b: [1, 2] },
     });
     const results = await task.run();
@@ -421,6 +424,7 @@ describe("ArrayTask", () => {
 
   test("MultiplyRunTask in task mode preview run", async () => {
     const task = new MultiplyRunTask({
+      maxIterations: 100,
       id: "test",
       defaults: {
         a: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
@@ -440,6 +444,7 @@ describe("ArrayTask", () => {
 
   test("MultiplyRunPreviewTask in task mode preview run", async () => {
     const task = new MultiplyRunPreviewTask({
+      maxIterations: 100,
       defaults: { a: 2, b: 10 },
     });
     const results = await task.runPreview();
@@ -448,6 +453,7 @@ describe("ArrayTask", () => {
 
   test("MultiplyRunPreviewTask in task mode preview runPreview", async () => {
     const task = new MultiplyRunPreviewTask({
+      maxIterations: 100,
       defaults: { a: 2, b: 10 },
     });
     const results = await task.runPreview();
@@ -456,6 +462,7 @@ describe("ArrayTask", () => {
 
   test("MultiplyRunPreviewTask in task mode preview runPreview array", async () => {
     const task = new MultiplyRunPreviewTask({
+      maxIterations: 100,
       defaults: { a: [2], b: [10] },
     });
     const results = await task.runPreview();
@@ -464,6 +471,7 @@ describe("ArrayTask", () => {
 
   test("MultiplyRunPreviewTask in task mode preview runPreview", async () => {
     const task = new MultiplyRunPreviewTask({
+      maxIterations: 100,
       defaults: { a: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], b: 10 },
     });
     const results = await task.runPreview();
@@ -471,34 +479,49 @@ describe("ArrayTask", () => {
   });
 
   test("SquareRunTask in task mode run with single", async () => {
-    const task = new SquareRunTask({ defaults: { a: 5 } });
+    const task = new SquareRunTask({
+      maxIterations: 100,
+      defaults: { a: 5 },
+    });
     await task.run();
     const results = await task.runPreview();
     expect(results).toEqual({ result: 25 });
   });
 
   test("SquareRunTask in task mode preview run with single", async () => {
-    const task = new SquareRunTask({ defaults: { a: 5 } });
+    const task = new SquareRunTask({
+      maxIterations: 100,
+      defaults: { a: 5 },
+    });
     const results = await task.runPreview();
     expect(results).toEqual({} as SquareOutput);
   });
 
   test("SquareRunPreviewTask in task mode run with single", async () => {
-    const task = new SquareRunPreviewTask({ defaults: { a: 5 } });
+    const task = new SquareRunPreviewTask({
+      maxIterations: 100,
+      defaults: { a: 5 },
+    });
     await task.run();
     const results = await task.runPreview();
     expect(results).toEqual({ result: 25 });
   });
 
   test("SquareRunPreviewTask in task mode preview run with single", async () => {
-    const task = new SquareRunPreviewTask({ defaults: { a: 5 } });
+    const task = new SquareRunPreviewTask({
+      maxIterations: 100,
+      defaults: { a: 5 },
+    });
     const results = await task.runPreview();
     expect(results).toEqual({ result: 25 } as SquareOutput);
   });
 
   test("ArrayTask runPreview calls executePreview in single task mode (no children)", async () => {
     // Create a task with non-array input - this puts it in single task mode (no subtasks)
-    const task = new SquareRunPreviewTask({ defaults: { a: 7 } });
+    const task = new SquareRunPreviewTask({
+      maxIterations: 100,
+      defaults: { a: 7 },
+    });
 
     // Verify it has no children (single task mode)
     expect(task.hasChildren()).toBe(false);
@@ -523,6 +546,7 @@ describe("ArrayTask", () => {
   test("ArrayTask runPreview works in single task mode without prior run() call", async () => {
     // This test ensures runPreview works even when run() hasn't been called first
     const task = new MultiplyRunPreviewTask({
+      maxIterations: 100,
       defaults: { a: 3, b: 4 },
     });
 
@@ -539,6 +563,7 @@ describe("ArrayTask", () => {
 
   test("in task mode non-preview run", async () => {
     const task = new SquareRunTask({
+      maxIterations: 100,
       defaults: { a: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
     });
     const results = await task.run();
@@ -547,6 +572,7 @@ describe("ArrayTask", () => {
 
   test("in task mode non-preview runPreview", async () => {
     const task = new SquareRunPreviewTask({
+      maxIterations: 100,
       defaults: { a: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
     });
     const results = await task.runPreview();
@@ -557,6 +583,7 @@ describe("ArrayTask", () => {
     const graph = new TaskGraph();
     graph.addTask(
       new MultiplyRunTask({
+        maxIterations: 100,
         defaults: { a: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], b: 11 },
       })
     );
@@ -571,6 +598,7 @@ describe("ArrayTask", () => {
   test("emits events correctly", async () => {
     // Create a task with a smaller array for testing events
     const task = new SquareRunTask({
+      maxIterations: 100,
       defaults: { a: [1, 2, 3] },
     });
 
@@ -615,6 +643,7 @@ describe("ArrayTask", () => {
   test("child tasks emit events that bubble up to parent", async () => {
     // Create a task with a smaller array for testing events
     const task = new SquareRunTask({
+      maxIterations: 100,
       defaults: { a: [1, 2] },
     });
 
@@ -731,6 +760,7 @@ describe("ArrayTask", () => {
 
   test("QueryAppendTask with single string input run preview", async () => {
     const task = new QueryAppendTask({
+      maxIterations: 100,
       defaults: { query: "test", val: 1 },
     });
     const results = await task.runPreview();
@@ -739,6 +769,7 @@ describe("ArrayTask", () => {
 
   test("QueryAppendTask with array string input run preview", async () => {
     const task = new QueryAppendTask({
+      maxIterations: 100,
       defaults: { query: ["test1", "test2"], val: 2 },
     });
     const results = await task.runPreview();
@@ -749,6 +780,7 @@ describe("ArrayTask", () => {
     // After the run/runPreview split, run() returns execute() output verbatim
     // (no longer overlays executePreview on top).
     const task = new QueryAppendTask({
+      maxIterations: 100,
       defaults: { query: "test", val: 1 },
     });
     const results = await task.run();
@@ -757,9 +789,65 @@ describe("ArrayTask", () => {
 
   test("QueryAppendTask with array string input", async () => {
     const task = new QueryAppendTask({
+      maxIterations: 100,
       defaults: { query: ["test1", "test2"], val: 2 },
     });
     const results = await task.run();
     expect(results).toEqual({ result: ["test1-output", "test2-output"], val: 2 });
+  });
+
+  // Every combination of every replicated input becomes a task, built up front; a
+  // fan-out states its bound, as the iterator family's does.
+  test("maxIterations is required", () => {
+    expect(() => new MultiplyRunTask({ defaults: { a: 1, b: 2 } } as never)).toThrow(
+      TaskConfigurationError
+    );
+    expect(MultiplyRunTask.configSchema()).toMatchObject({ required: ["maxIterations"] });
+  });
+
+  test("refuses a product over the bound before building any task", async () => {
+    // Literal defaults build the graph in the constructor, so it refuses there.
+    expect(
+      () =>
+        new MultiplyRunTask({
+          maxIterations: 5,
+          defaults: { a: [1, 2, 3], b: [4, 5] },
+        } as never)
+    ).toThrow(/6 combinations.*maxIterations 5/);
+
+    // Values arriving through a graph are refused when the run builds the subgraph.
+    class EmitArraysTask extends Task<Record<string, never>, { a: number[]; b: number[] }> {
+      public static override type = "ArrayTaskTest_EmitArrays";
+      public static override outputSchema(): DataPortSchema {
+        return {
+          type: "object",
+          properties: {
+            a: { type: "array", items: { type: "number" } },
+            b: { type: "array", items: { type: "number" } },
+          },
+        } as const;
+      }
+      public override async execute() {
+        return { a: [1, 2, 3], b: [4, 5] };
+      }
+    }
+    const graph = new TaskGraph();
+    const task = new MultiplyRunTask({ id: "m", maxIterations: 5 } as never);
+    graph.addTasks([new EmitArraysTask({ id: "src" }), task]);
+    graph.addDataflow(new Dataflow("src", "a", "m", "a"));
+    graph.addDataflow(new Dataflow("src", "b", "m", "b"));
+    const err = await graph.run().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TaskInvalidInputError);
+    expect(task.subGraph?.getTasks().length ?? 0).toBe(0);
+  });
+
+  test('runs a product within the bound, and "unbounded" opts out', async () => {
+    for (const maxIterations of [6, "unbounded"] as const) {
+      const task = new MultiplyRunTask({
+        maxIterations,
+        defaults: { a: [1, 2, 3], b: [4, 5] },
+      } as never);
+      expect(((await task.run()) as { result: number[] }).result).toHaveLength(6);
+    }
   });
 });

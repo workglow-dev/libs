@@ -4,11 +4,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { TaskConfig, TaskEntitlements } from "@workglow/task-graph";
+import type {
+  CachePolicy,
+  IExecuteContext,
+  TaskConfig,
+  TaskEntitlements,
+} from "@workglow/task-graph";
 import {
   CreateWorkflow,
   Entitlements,
   Task,
+  TaskAbortedError,
   TaskConfigSchema,
   TaskInvalidInputError,
   TaskRegistry,
@@ -19,10 +25,88 @@ import { Interpreter } from "./interpreter";
 
 const isValidIdentifier = (key: string) => /^[a-z_$][\w$]*$/i.test(key);
 
-function runJavaScript(
+/** How long the interpreter runs before letting the event loop take a turn. */
+const SLICE_MS = 50;
+/** Steps between clock reads; one step is far below a microsecond. */
+const STEPS_PER_CLOCK_CHECK = 10_000;
+/**
+ * Default step budgets. A step count rather than a time limit, so a script stops at
+ * the same point on every machine. ~9M steps run per second, so a run gets ~5 s and a
+ * preview — which must be fast and has no abort signal — ~0.1 s.
+ */
+const DEFAULT_MAX_STEPS = 50_000_000;
+const PREVIEW_MAX_STEPS = 1_000_000;
+
+/** `Status.DONE`, `TASK` and `ASYNC` from the interpreter; its enum is a `const enum` with no value module. */
+const DONE_STATUS = 0;
+const TASK_STATUS = 2;
+const ASYNC_STATUS = 3;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * Runs the interpreter in time slices rather than with `Interpreter.run()`,
+ * which is one synchronous loop: a script that never ended held the event loop
+ * for good, so no timer, abort or UI update could run again. `run()` is itself
+ * `while (step()) {}`, so slicing changes no result — only that other work, and
+ * an abort, get a turn every {@link SLICE_MS}.
+ */
+async function runInSlices(
+  interpreter: Interpreter,
+  signal: AbortSignal | undefined,
+  maxSteps: number,
+  waitForTimers: boolean
+): Promise<void> {
+  let sliceEnd = performance.now() + SLICE_MS;
+  let steps = 0;
+  for (;;) {
+    // Paused on an async native (a regex the interpreter runs in a Worker where it has
+    // no `vm`): step() would report progress without making any, and the wait would be
+    // charged to the budget. Let the event loop deliver the answer instead.
+    // A queued timer not yet due is the same: nothing runs until it is, so a run sleeps
+    // until then (in slices, so an abort is still noticed) rather than spin.
+    let status = interpreter.getStatus();
+    for (; ; status = interpreter.getStatus()) {
+      if (status === ASYNC_STATUS) {
+        await yieldToEventLoop();
+      } else if (status === TASK_STATUS) {
+        // A preview must be quick and cannot be aborted: it shows what the script
+        // has computed by the time only timers are left.
+        if (!waitForTimers) return;
+        const due = interpreter.tasks[0]?.time ?? Date.now();
+        await sleep(Math.min(Math.max(due - Date.now(), 0), SLICE_MS));
+      } else {
+        break;
+      }
+      if (signal?.aborted) throw new TaskAbortedError("JavaScript execution aborted");
+      sliceEnd = performance.now() + SLICE_MS;
+    }
+    // Checked before stepping, so a budget of N runs N steps, not N + 1.
+    if (status === DONE_STATUS) break;
+    if (steps >= maxSteps) {
+      throw new Error(`script did not finish within ${maxSteps} steps`);
+    }
+    interpreter.step();
+    if (++steps % STEPS_PER_CLOCK_CHECK !== 0 || performance.now() < sliceEnd) continue;
+    await yieldToEventLoop();
+    if (signal?.aborted) throw new TaskAbortedError("JavaScript execution aborted");
+    sliceEnd = performance.now() + SLICE_MS;
+  }
+}
+
+async function runJavaScript(
   input: JavaScriptTaskInput,
-  configuredCode: string | undefined
-): JavaScriptTaskOutput {
+  configuredCode: string | undefined,
+  signal: AbortSignal | undefined,
+  maxSteps: number,
+  waitForTimers: boolean
+): Promise<JavaScriptTaskOutput> {
   const output = {} as JavaScriptTaskOutput;
   const code = input.javascript_code || configuredCode;
   if (code) {
@@ -34,11 +118,12 @@ function runJavaScript(
         .map((key) => `var ${key} = ${JSON.stringify(input[key])};`)
         .join("\n");
       const myInterpreter = new Interpreter(`${inputVariablesString} ${code}`);
-      myInterpreter.run();
+      await runInSlices(myInterpreter, signal, maxSteps, waitForTimers);
       // The interpreter's value is a sandboxed pseudo-object for arrays/objects; callers
       // expect plain JS, so unwrap it. Primitives pass through untouched.
       output.output = myInterpreter.pseudoToNative(myInterpreter.value);
     } catch (e) {
+      if (e instanceof TaskAbortedError) throw e;
       throw new TaskInvalidInputError(
         `JavaScript execution failed: ${e instanceof Error ? e.message : String(e)}`
       );
@@ -57,6 +142,12 @@ const configSchema = {
       minLength: 1,
       description: "JavaScript code to execute",
       format: "code:javascript",
+    },
+    maxSteps: {
+      type: "integer",
+      minimum: 1,
+      title: "Max Steps",
+      description: `Interpreter steps a run may take before it is stopped (default ${DEFAULT_MAX_STEPS}); a preview takes at most ${PREVIEW_MAX_STEPS}`,
     },
   },
   additionalProperties: false,
@@ -93,6 +184,7 @@ export type JavaScriptTaskInput = FromSchema<typeof inputSchema>;
 export type JavaScriptTaskOutput = FromSchema<typeof outputSchema>;
 export type JavaScriptTaskConfig = TaskConfig & {
   javascript_code?: string;
+  maxSteps?: number;
 };
 
 export class JavaScriptTask extends Task<
@@ -106,6 +198,20 @@ export class JavaScriptTask extends Task<
   public static override description =
     "Executes JavaScript code in a sandboxed interpreter environment";
   public static override customizable = true;
+
+  /**
+   * Not cached by default: the interpreter provides `Math.random()` and `Date.now()`,
+   * so a script's output need not be a function of its input. A graph whose script is
+   * pure opts in with `config.cacheable: true`; a run's `cacheable: false` still wins.
+   */
+  public static override cachePolicy: CachePolicy = { kind: "none" };
+
+  public override getCachePolicy(input: JavaScriptTaskInput): CachePolicy {
+    if (this.config?.cacheable === true && this.runConfig?.cacheable !== false) {
+      return { kind: "deterministic" };
+    }
+    return super.getCachePolicy(input);
+  }
   public static override hasDynamicSchemas = true;
 
   public static override entitlements(): TaskEntitlements {
@@ -145,22 +251,34 @@ export class JavaScriptTask extends Task<
     return inputSchema;
   }
 
-  override async execute(input: JavaScriptTaskInput) {
-    return runJavaScript(input, this.config.javascript_code);
+  override async execute(input: JavaScriptTaskInput, context: IExecuteContext) {
+    return runJavaScript(
+      input,
+      this.config.javascript_code,
+      context.signal,
+      this.config.maxSteps ?? DEFAULT_MAX_STEPS,
+      true
+    );
   }
 
   override async executePreview(input: JavaScriptTaskInput) {
-    return runJavaScript(input, this.config.javascript_code);
+    return runJavaScript(
+      input,
+      this.config.javascript_code,
+      undefined,
+      Math.min(this.config.maxSteps ?? PREVIEW_MAX_STEPS, PREVIEW_MAX_STEPS),
+      false
+    );
   }
 }
 
-export const javaScript = (input: JavaScriptTaskInput, config: TaskConfig = {}) => {
+export const javaScript = (input: JavaScriptTaskInput, config: JavaScriptTaskConfig = {}) => {
   return new JavaScriptTask(config).run(input);
 };
 
 declare module "@workglow/task-graph" {
   interface Workflow {
-    javaScript: CreateWorkflow<JavaScriptTaskInput, JavaScriptTaskOutput, TaskConfig>;
+    javaScript: CreateWorkflow<JavaScriptTaskInput, JavaScriptTaskOutput, JavaScriptTaskConfig>;
   }
 }
 

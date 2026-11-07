@@ -5,7 +5,7 @@
  */
 
 import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
-import { Task, TaskConfigSchema } from "@workglow/task-graph";
+import { Task, TaskConfigSchema, TaskInvalidInputError } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
@@ -110,7 +110,7 @@ export class BrowserClickTask extends Task<
     } else if (input.role && input.name) {
       await ctx.clickByRole(input.role, input.name, opts);
     } else {
-      throw new Error("BrowserClickTask: either ref or role+name must be provided");
+      throw new TaskInvalidInputError("BrowserClickTask: either ref or role+name must be provided");
     }
     return { sessionId: input.sessionId };
   }

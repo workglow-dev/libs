@@ -10,8 +10,13 @@ import type {
   TaskConfig,
   TaskEntitlements,
 } from "@workglow/task-graph";
-import { Entitlements, Task, TaskConfigSchema } from "@workglow/task-graph";
+import { Task, TaskConfigSchema } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import {
+  assertLandedWithinReach,
+  assertNavigableUrl,
+  navigationEntitlements,
+} from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
 const browserNavigateTaskConfigSchema = {
@@ -102,12 +107,18 @@ export class BrowserNavigateTask extends Task<
     return outputSchema;
   }
 
+  public static override hasDynamicEntitlements: boolean = true;
+
   public static override entitlements(): TaskEntitlements {
-    return {
-      entitlements: [
-        { id: Entitlements.BROWSER_CONTROL_NAVIGATE, reason: "Navigates to a URL in the browser" },
-      ],
-    };
+    return navigationEntitlements(undefined, "Navigates to a URL in the browser");
+  }
+
+  /** Scoped to the destination once it is known; see {@link navigationEntitlements}. */
+  public override entitlements(): TaskEntitlements {
+    return navigationEntitlements(
+      this.runInputData?.url ?? this.defaults.url,
+      "Navigates to a URL in the browser"
+    );
   }
 
   override async execute(
@@ -115,15 +126,20 @@ export class BrowserNavigateTask extends Task<
     executeContext: IExecuteContext
   ): Promise<BrowserNavigateTaskOutput> {
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
-    const parsed = new URL(input.url, "https://placeholder");
-    if (parsed.protocol === "javascript:") {
-      throw new Error("BrowserNavigateTask: javascript: URLs are not allowed");
-    }
+    assertNavigableUrl(input.url, "BrowserNavigateTask");
     const ctx = BrowserSessionRegistry.get(input.sessionId);
     const waitUntil = this.config.waitUntil ?? "load";
     await ctx.navigate(input.url, { waitUntil });
-    const title = await ctx.title();
     const url = await ctx.currentUrl();
+    try {
+      assertLandedWithinReach(input.url, url, "BrowserNavigateTask");
+    } catch (err) {
+      // Leave nothing a later extract or screenshot task could read. A failed reset
+      // must not replace the refusal.
+      await ctx.navigate("about:blank").catch(() => undefined);
+      throw err;
+    }
+    const title = await ctx.title();
     return { sessionId: input.sessionId, title, url };
   }
 }

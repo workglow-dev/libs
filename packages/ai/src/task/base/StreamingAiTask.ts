@@ -177,6 +177,9 @@ export class StreamingAiTask<
       if (usage) {
         recordUsageTelemetry({ [USAGE_OUTPUT_KEY]: usage }, this.type, model.model_id);
       }
+      // A run that streamed loaded the model as surely as one that did not; in
+      // `finally` so a stream stopped early or failed still hands it to the scope.
+      this.registerModelDisposal(model, context.resourceScope);
     }
   }
 }

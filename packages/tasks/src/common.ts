@@ -75,7 +75,6 @@ export * from "./task/string/StringLengthTask";
 export * from "./task/string/StringLowerCaseTask";
 export * from "./task/string/StringReplaceTask";
 export * from "./task/string/StringSliceTask";
-export * from "./task/string/StringTemplateTask";
 export * from "./task/string/StringTrimTask";
 export * from "./task/string/StringUpperCaseTask";
 export * from "./task/TemplateTask";
@@ -147,7 +146,6 @@ import { StringLengthTask } from "./task/string/StringLengthTask";
 import { StringLowerCaseTask } from "./task/string/StringLowerCaseTask";
 import { StringReplaceTask } from "./task/string/StringReplaceTask";
 import { StringSliceTask } from "./task/string/StringSliceTask";
-import { StringTemplateTask } from "./task/string/StringTemplateTask";
 import { StringTrimTask } from "./task/string/StringTrimTask";
 import { StringUpperCaseTask } from "./task/string/StringUpperCaseTask";
 import { TemplateTask } from "./task/TemplateTask";
@@ -202,7 +200,6 @@ export let registerCommonTasks = () => {
     StringLowerCaseTask,
     StringReplaceTask,
     StringSliceTask,
-    StringTemplateTask,
     StringTrimTask,
     StringUpperCaseTask,
     JsonPathTask,

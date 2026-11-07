@@ -11,7 +11,7 @@ import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
 import { existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, parse } from "path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 describe("FileLoaderTask (server - local files)", () => {
@@ -670,6 +670,20 @@ Body.`;
           defaults: { url: link, format: "text" },
         }).run()
       ).rejects.toThrow(TaskEntitlementError);
+    });
+
+    // A filesystem root already ends in its separator; adding another made `//` the
+    // prefix every path was checked against, so a root of `/` contained nothing.
+    test("reads a file under a root configured as the filesystem root", async () => {
+      const filePath = join(testDir, "rooted.txt");
+      writeFileSync(filePath, "under /", "utf-8");
+
+      const result = await new FileLoaderTask({
+        roots: [parse(testDir).root],
+        defaults: { url: filePath, format: "text" },
+      }).run();
+
+      expect(result.text).toBe("under /");
     });
 
     test("allowAnyRoot restores the unrestricted read", async () => {

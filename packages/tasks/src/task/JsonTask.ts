@@ -15,6 +15,8 @@ import {
   createGraphFromGraphJSON,
   CreateWorkflow,
   GraphAsTask,
+  TaskInvalidInputError,
+  taskGraphJsonShapeError,
   Workflow,
 } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
@@ -75,10 +77,14 @@ export class JsonTask<
    */
   public override regenerateGraph() {
     if (!this.runInputData.json) return;
-    const data = JSON.parse(this.runInputData.json) as
-      | TaskGraphJson
-      | JsonTaskItem[]
-      | JsonTaskItem;
+    let data: TaskGraphJson | JsonTaskItem[] | JsonTaskItem;
+    try {
+      data = JSON.parse(this.runInputData.json);
+    } catch (error) {
+      throw new TaskInvalidInputError(
+        `JsonTask: input is not valid JSON: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
 
     if (
       data &&
@@ -88,6 +94,12 @@ export class JsonTask<
       "dataflows" in data &&
       Array.isArray((data as TaskGraphJson).dataflows)
     ) {
+      // Checked before any task is constructed from it, so a malformed graph is
+      // refused with the reason rather than failing somewhere inside construction.
+      const shapeError = taskGraphJsonShapeError(data);
+      if (shapeError !== undefined) {
+        throw new TaskInvalidInputError(`JsonTask: graph JSON is malformed: ${shapeError}`);
+      }
       this.subGraph = createGraphFromGraphJSON(data as TaskGraphJson, this.runConfig?.registry);
       super.regenerateGraph();
       return;

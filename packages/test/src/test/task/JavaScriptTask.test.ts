@@ -5,7 +5,7 @@
  */
 
 import { javaScript, JavaScriptTask } from "@workglow/javascript/task";
-import { TaskGraph, TaskStatus, Workflow } from "@workglow/task-graph";
+import { TaskAbortedError, TaskGraph, TaskStatus, Workflow } from "@workglow/task-graph";
 import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
 import { describe, expect, test } from "vitest";
@@ -356,5 +356,97 @@ describe("JavaScriptTask", () => {
     const outputSchema = JavaScriptTask.outputSchema();
     expect(inputSchema).toBeDefined();
     expect(outputSchema).toBeDefined();
+  });
+
+  // `Interpreter.run()` is a synchronous loop: a script that never ends held the
+  // event loop forever, so no timer — and no abort — could ever run again.
+  test("a script that never ends can still be aborted", async () => {
+    const task = new JavaScriptTask();
+    const timer = setTimeout(() => task.abort(), 100);
+    const started = Date.now();
+    await expect(task.run({ javascript_code: "while (true) {}" })).rejects.toBeInstanceOf(
+      TaskAbortedError
+    );
+    clearTimeout(timer);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  test("timers keep running while a long script executes", async () => {
+    let ticks = 0;
+    const interval = setInterval(() => ticks++, 10);
+    const result = await new JavaScriptTask().run({
+      javascript_code: "var s = 0; for (var i = 0; i < 300000; i++) { s += i; } s",
+    });
+    clearInterval(interval);
+    expect(result.output).toBe(44999850000);
+    expect(ticks).toBeGreaterThan(0);
+  });
+
+  test("a script past its step budget is stopped, naming the budget", async () => {
+    const task = new JavaScriptTask({ maxSteps: 10_000 } as never);
+    await expect(task.run({ javascript_code: "while (true) {}" })).rejects.toThrow(/10000 steps/);
+  });
+
+  test("a preview of a script that never ends stops on its own", async () => {
+    // A preview has no abort signal; without a bound it would spin until the page closed.
+    const started = Date.now();
+    // The runner reports a failed preview without rejecting; what matters is that it ends.
+    await new JavaScriptTask()
+      .runPreview({ javascript_code: "while (true) {}" })
+      .catch(() => undefined);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  test("a script inside its budget is unaffected", async () => {
+    const task = new JavaScriptTask({ maxSteps: 10_000_000 } as never);
+    const result = await task.run({
+      javascript_code: "var s = 0; for (var i = 0; i < 1000; i++) { s += i; } s",
+    });
+    expect(result.output).toBe(499500);
+  });
+
+  test("is not cached unless the graph says the script is pure", () => {
+    // Scripts can call Math.random() and Date.now(); a cached answer would be stale.
+    expect(new JavaScriptTask().getCachePolicy({} as never)).toEqual({ kind: "none" });
+    expect(new JavaScriptTask({ cacheable: true }).getCachePolicy({} as never)).toEqual({
+      kind: "deterministic",
+    });
+    // A run that opts out still wins.
+    const optedOut = new JavaScriptTask({ cacheable: true }, { cacheable: false });
+    expect(optedOut.getCachePolicy({} as never)).toEqual({ kind: "none" });
+  });
+
+  // Where the interpreter has no `vm` (Bun, browsers), a regex runs in a Worker and the
+  // interpreter pauses until it answers. Waiting is not stepping: a pause charged to the
+  // budget failed a three-step split on a 2000-step budget.
+  test("a regex run in a worker does not spend the step budget while it waits", async () => {
+    const task = new JavaScriptTask({ maxSteps: 2000 } as never);
+    const result = await task.run({ javascript_code: "'a1b2c3'.split(/\\d/).join('-')" });
+    expect(result.output).toBe("a-b-c-");
+  });
+
+  // A timer not yet due is waited for, not stepped: step() reports progress while
+  // nothing runs, and charging those spins ran a 2000-step budget out on one setTimeout.
+  test("waiting for a setTimeout does not spend the step budget", async () => {
+    const task = new JavaScriptTask({ maxSteps: 2000 } as never);
+    await expect(
+      task.run({
+        javascript_code: "var done = false; setTimeout(function () { done = true; }, 100);",
+      })
+    ).resolves.toBeDefined();
+  });
+
+  test("a preview does not wait on a timer that never stops", async () => {
+    const started = Date.now();
+    await new JavaScriptTask().runPreview({
+      javascript_code: "var n = 0; setInterval(function () { n++; }, 1000); n",
+    });
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  test("the javaScript() helper takes maxSteps", async () => {
+    await expect(
+      javaScript({ javascript_code: "while (true) {}" }, { maxSteps: 1000 })
+    ).rejects.toThrow(/1000 steps/);
   });
 });

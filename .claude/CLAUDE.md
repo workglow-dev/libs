@@ -414,8 +414,9 @@ one. The CLI never picks a search vendor for the operator; a downstream CLI buil
 `runWorkglowCli()` registers the providers it wants in its `registerTasks` hook.
 
 HTTP adapters (Brave, Tavily, SearXNG) execute by **owning a `FetchUrlTask`**, inheriting
-credential resolution via `credential_key`, SafeFetch's redirect/SSRF checks, retry/backoff,
-per-attempt timeouts and the response cache. They do **not** inherit the queue's rate limiter:
+credential resolution via `credential_key`, SafeFetch's redirect/SSRF checks, retry/backoff
+and per-attempt timeouts — but not the response cache: the owned fetch runs `cacheable: false`,
+since a search answers what the web says now. They do **not** inherit the queue's rate limiter:
 `FetchUrlTask` refuses `credential_key` on the queued path (a queued payload is persisted,
 secret included), so every keyed provider runs inline, and bounding a `MapTask` fan-out against
 a metered quota is the caller's job. The grounded adapters live in their vendor packages and

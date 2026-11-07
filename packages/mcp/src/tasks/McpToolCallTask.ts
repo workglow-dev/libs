@@ -134,6 +134,14 @@ const toolContentSchema = {
   ],
 } as const;
 
+const anyStructuredSchema = {
+  type: "object",
+  additionalProperties: true,
+  title: "Structured",
+  description:
+    "The tool's structured result (its structuredContent, or a JSON object it returned as text)",
+} as const;
+
 const fallbackOutputSchema = {
   type: "object",
   properties: {
@@ -148,10 +156,56 @@ const fallbackOutputSchema = {
       title: "Is Error",
       description: "Whether the tool call resulted in an error",
     },
+    structured: anyStructuredSchema,
   },
   required: ["content", "isError"],
   additionalProperties: false,
 } as const satisfies DataPortSchema;
+
+const ENVELOPE_PORTS: ReadonlySet<string> = new Set(["content", "isError", "structured"]);
+
+/**
+ * Whether a schema is already the port envelope (written by this function, or the
+ * content/isError schema saved before `structured` existed) rather than a tool's own
+ * output schema. A tool schema would have to declare an array `content` and a boolean
+ * `isError` and nothing else to be mistaken for one.
+ */
+function isOutputEnvelope(schema: DataPortSchema): boolean {
+  if (typeof schema !== "object" || !schema.properties) return false;
+  const properties = schema.properties as Record<string, { type?: unknown } | undefined>;
+  return (
+    properties.content?.type === "array" &&
+    properties.isError?.type === "boolean" &&
+    Object.keys(properties).every((key) => ENVELOPE_PORTS.has(key))
+  );
+}
+
+/**
+ * The output ports for a tool: the protocol's `content` and `isError`, and the tool's
+ * own fields under `structured`. Kept apart so a tool field can never collide with —
+ * or be mistaken for — the protocol's, and so a tool that adds a field does not move
+ * the ports a graph is wired to.
+ *
+ * Idempotent: given the envelope it returns it (completing one saved without
+ * `structured`), so `config.outputSchema` can hold the ports a builder draws while a
+ * raw tool schema stored there by an older build is still nested.
+ */
+export function mcpToolOutputPortSchema(schema: DataPortSchema | undefined): DataPortSchema {
+  if (!schema) return fallbackOutputSchema;
+  if (isOutputEnvelope(schema)) {
+    const properties = (schema as { properties: Record<string, unknown> }).properties;
+    return "structured" in properties
+      ? schema
+      : ({
+          ...(schema as Record<string, unknown>),
+          properties: { ...properties, structured: anyStructuredSchema },
+        } as unknown as DataPortSchema);
+  }
+  return {
+    ...fallbackOutputSchema,
+    properties: { ...fallbackOutputSchema.properties, structured: schema },
+  } as DataPortSchema;
+}
 
 const fallbackInputSchema = {
   type: "object",
@@ -236,17 +290,30 @@ export class McpToolCallTask extends Task<
     return this.config?.inputSchema ?? fallbackInputSchema;
   }
 
+  /**
+   * `config.outputSchema` holds the ports (what discovery and a builder write); a raw
+   * tool schema found there is nested under `structured`.
+   */
   public override outputSchema(): DataPortSchema {
-    return this.config?.outputSchema ?? fallbackOutputSchema;
+    return mcpToolOutputPortSchema(this.config?.outputSchema);
   }
 
   private _schemasDiscoveringPromise: Promise<void> | undefined;
+
+  /**
+   * Set once a listing has answered for this tool. Most tools declare no output
+   * schema, so "both schemas known" never becomes true for them — and without
+   * this every call listed the server's tools again: a second connection per
+   * call, which for a stdio server is a second process spawned.
+   */
+  private _schemasDiscovered = false;
 
   async discoverSchemas(
     _signal?: AbortSignal,
     serverConfig?: McpServerConfig,
     registry?: ServiceRegistry
   ): Promise<void> {
+    if (this._schemasDiscovered) return;
     if (this.config.inputSchema && this.config.outputSchema) return;
     if (this._schemasDiscoveringPromise) return this._schemasDiscoveringPromise;
     const resolved = serverConfig ?? getMcpServerConfig(this.config as Record<string, unknown>);
@@ -263,13 +330,16 @@ export class McpToolCallTask extends Task<
           registry ? { registry } : {}
         );
 
+        this._schemasDiscovered = true;
         const tool = result.tools?.find((t) => t.name === this.config.tool_name);
         if (tool) {
           if (!this.config.inputSchema) {
             this.config.inputSchema = tool.inputSchema as DataPortSchemaObject;
           }
           if (!this.config.outputSchema && tool.outputSchema) {
-            this.config.outputSchema = tool.outputSchema as DataPortSchemaObject;
+            this.config.outputSchema = mcpToolOutputPortSchema(
+              tool.outputSchema as DataPortSchemaObject
+            );
           }
           this.emitSchemaChange();
         }
@@ -343,12 +413,8 @@ export class McpToolCallTask extends Task<
         }
       }
 
-      return {
-        content,
-        isError,
-        ...parsedFromText,
-        ...structuredContent,
-      };
+      const structured = structuredContent ?? parsedFromText;
+      return structured === undefined ? { content, isError } : { content, isError, structured };
     } finally {
       await client.close();
     }

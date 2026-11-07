@@ -137,15 +137,20 @@ export class MapTask<
    * `discardResults` is set (via `.forEach()`), returns the empty result
    * without touching the per-iteration outputs.
    */
-  public override collectResults(results: TaskOutput[]): Output {
+  public override collectResults(results: ReadonlyArray<TaskOutput | undefined>): Output {
     if (this.discardResults) {
       return this.getEmptyResult();
     }
 
-    const collected = super.collectResults(results);
+    const collected = super.collectResults(results) as Record<string, unknown[]>;
+    // A declared port no iteration produced still has one slot per item, as the empty
+    // result does for no items.
+    for (const key of Object.keys(this.getEmptyResult() as object)) {
+      if (!(key in collected)) collected[key] = results.map(() => null);
+    }
 
-    if (!this.flatten || typeof collected !== "object" || collected === null) {
-      return collected;
+    if (!this.flatten) {
+      return collected as Output;
     }
 
     const flattened: Record<string, unknown[]> = {};

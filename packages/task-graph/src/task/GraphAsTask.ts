@@ -4,10 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { getLogger } from "@workglow/util";
 import { CycleError } from "@workglow/util/graph";
 import type { DataPortSchema, SchemaNode } from "@workglow/util/schema";
-import { compileSchema } from "@workglow/util/schema";
 import { registerGraphWrapperFactory } from "../task-graph/Conversions";
 import {
   computeGraphEntitlements,
@@ -151,20 +149,7 @@ export class GraphAsTask<
   protected override getInputSchemaNode(): SchemaNode {
     // every graph as task is different, so we need to compile the schema for each one
     if (!this._inputSchemaNode) {
-      try {
-        const dataPortSchema = this.inputSchema();
-        const schemaNode = Task.generateInputSchemaNode(dataPortSchema);
-        this._inputSchemaNode = schemaNode;
-      } catch (error) {
-        // If compilation fails, fall back to accepting any object structure.
-        // This is a safety net for schemas that json-schema-library can't compile.
-        getLogger().warn(
-          `GraphAsTask "${this.type}" (${String(this.id)}): Failed to compile input schema, ` +
-            `falling back to permissive validation. Inputs will NOT be validated.`,
-          { error, taskType: this.type, taskId: this.id }
-        );
-        this._inputSchemaNode = compileSchema({});
-      }
+      this._inputSchemaNode = Task.compileInputSchemaNode(this.inputSchema(), this.type);
     }
     return this._inputSchemaNode!;
   }
@@ -302,9 +287,16 @@ export class GraphAsTask<
         ? bridgeSubGraphTaskEvents(this.subGraph, parentGraph)
         : () => {};
 
+      // The subgraph listens to this signal rather than the caller's directly, so a
+      // consumer that stops reading early can stop the run it no longer awaits.
+      const runAbort = new AbortController();
+      const forwardAbort = (): void => runAbort.abort(context.signal?.reason);
+      if (context.signal?.aborted) forwardAbort();
+      else context.signal?.addEventListener("abort", forwardAbort, { once: true });
+
       const runPromise = this.subGraph
         .run<Output>(input, {
-          parentSignal: context.signal,
+          parentSignal: runAbort.signal,
           accumulateLeafOutputs: false,
           ...this.runner.subGraphRunContext,
           enforceEntitlements: this.runConfig?.enforceEntitlements,
@@ -349,6 +341,14 @@ export class GraphAsTask<
       } finally {
         unsub();
         bridgeUnsub();
+        context.signal?.removeEventListener("abort", forwardAbort);
+        if (!subgraphDone) {
+          // The consumer left before the subgraph settled — it failed mid-stream
+          // or closed this generator. Nothing awaits the run any more: stop it,
+          // and keep its eventual rejection from surfacing as unhandled.
+          runPromise.catch(() => {});
+          runAbort.abort();
+        }
       }
 
       const results = await runPromise;

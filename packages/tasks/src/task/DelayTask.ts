@@ -15,6 +15,24 @@ import {
 import { sleep } from "@workglow/util";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 
+/**
+ * Sleeps `ms`, or until `signal` aborts if that is sooner. The delay is slept in
+ * chunks only to report progress; waking on the abort itself is what keeps a long
+ * delay from noticing it a whole chunk (delay / 100) late.
+ */
+function sleepUntilAborted(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
 const delayTaskConfigSchema = {
   type: "object",
   properties: {
@@ -82,7 +100,10 @@ export class DelayTask<
         if (executeContext.signal.aborted) {
           throw new TaskAbortedError("Task aborted");
         }
-        await sleep(chunkSize);
+        await sleepUntilAborted(chunkSize, executeContext.signal);
+        if (executeContext.signal.aborted) {
+          throw new TaskAbortedError("Task aborted");
+        }
         await executeContext.updateProgress((100 * i) / iterations, `Delaying for ${delay}ms`);
       }
     } else {

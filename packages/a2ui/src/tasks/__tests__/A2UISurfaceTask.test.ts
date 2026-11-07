@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { TaskRegistry } from "@workglow/task-graph";
+import { TaskConfigurationError, TaskRegistry } from "@workglow/task-graph";
 import type { IExecuteContext } from "@workglow/task-graph";
 import { Container, ServiceRegistry } from "@workglow/util";
 import { describe, expect, it } from "vitest";
@@ -146,7 +146,11 @@ describe("A2UISurfaceTask", () => {
   });
 
   it("refuses rather than degrading the surface when no host can draw one", async () => {
-    await expect(run(undefined, { messages: ok })).rejects.toThrow(/A2UI_CONNECTOR/);
+    const refusal = run(undefined, { messages: ok });
+    await expect(refusal).rejects.toThrow(/A2UI_CONNECTOR/);
+    // A host that registered no connector is a configuration problem the operator fixes,
+    // and is reported as one rather than as a generic failure.
+    await expect(refusal).rejects.toBeInstanceOf(TaskConfigurationError);
   });
 });
 

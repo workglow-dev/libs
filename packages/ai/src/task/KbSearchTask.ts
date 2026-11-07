@@ -7,6 +7,7 @@
 import type { ChunkSearchResult, KnowledgeBase } from "@workglow/knowledge-base";
 import { chunkText, TypeKnowledgeBase } from "@workglow/knowledge-base";
 import type {
+  CachePolicy,
   IExecuteContext,
   IRunConfig,
   TaskConfig,
@@ -127,7 +128,11 @@ export class KbSearchTask extends Task<KbSearchTaskInput, KbSearchTaskOutput, Kb
   public static override title = "KB Search";
   public static override description =
     "Search a knowledge base. The KB owns its embedding/reranker models and search mode internally.";
-  public static override cacheable = true;
+  /**
+   * Not cached: the result reflects the knowledge base as it is now, and the cache key
+   * is only the input — an upsert or delete between runs would be answered as it was.
+   */
+  public static override cachePolicy: CachePolicy = { kind: "none" };
 
   /** Declared so a host can ask what this reaches before running it. */
   public static override entitlements(): TaskEntitlements {

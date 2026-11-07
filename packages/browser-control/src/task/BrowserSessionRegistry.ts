@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { TaskInvalidInputError } from "@workglow/task-graph";
 import { uuid4 } from "@workglow/util";
 import type { IBrowserContext } from "./IBrowserContext";
 
@@ -20,11 +21,15 @@ export const BrowserSessionRegistry = {
   get(sessionId: string): IBrowserContext {
     const context = sessions.get(sessionId);
     if (!context) {
-      throw new Error(`BrowserSessionRegistry: no session found for id "${sessionId}"`);
+      throw new TaskInvalidInputError(
+        `BrowserSessionRegistry: no session found for id "${sessionId}"`
+      );
     }
     if (!context.isConnected()) {
       sessions.delete(sessionId);
-      throw new Error(`BrowserSessionRegistry: session "${sessionId}" is no longer connected`);
+      throw new TaskInvalidInputError(
+        `BrowserSessionRegistry: session "${sessionId}" is no longer connected`
+      );
     }
     return context;
   },

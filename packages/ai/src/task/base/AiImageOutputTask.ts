@@ -59,6 +59,10 @@ export class AiImageOutputTask<
   protected _latestPartial: ImageValue | undefined = undefined;
 
   public override getCachePolicy(inputs: Input): CachePolicy {
+    // The base resolution first, so a caller's `cacheable: false` still wins: a seed
+    // makes the output reproducible, it does not override the caller opting out.
+    const base = super.getCachePolicy(inputs);
+    if (base.kind === "none") return base;
     const seed = (inputs as { seed?: number | null } | undefined)?.seed;
     if (seed === undefined || seed === null) return { kind: "private" };
     return { kind: "deterministic" };

@@ -218,9 +218,9 @@ Calls a tool on an MCP server and returns the result.
 | `server`    | `string \| McpServerConfig` | MCP server reference (ID or inline config)                 |
 | `tool_name` | `string`                    | Name of the tool to call (format: `"string:mcp-toolname"`) |
 
-**Dynamic Schema Discovery:** When the task has a server and tool name configured but no explicit input/output schemas, `discoverSchemas()` connects to the server, lists available tools, and adopts the matching tool's `inputSchema` and `outputSchema`. This allows the UI to display appropriate input fields for any MCP tool without hardcoding schemas.
+**Dynamic Schema Discovery:** When the task has a server and tool name configured but no explicit input/output schemas, `discoverSchemas()` connects to the server, lists available tools, and adopts the matching tool's `inputSchema` and `outputSchema` into `config`. This allows the UI to display appropriate input fields for any MCP tool without hardcoding schemas. Discovery stores the output ports in `config.outputSchema`: the tool's own schema nested under `structured` (`mcpToolOutputPortSchema`). That function is idempotent, so a host writing the ports there is not wrapped twice, and a raw tool schema an older build stored is still nested.
 
-**Execution:** Connects to the MCP server, calls the named tool with the task input as arguments, and returns the result. The output includes `content` (array of text, image, audio, resource, or resource_link items) and `isError`. When `structuredContent` is present in the MCP response, it is spread into the output. Single-item text responses that contain valid JSON are automatically parsed and merged.
+**Execution:** Connects to the MCP server, calls the named tool with the task input as arguments, and returns the result. The output includes `content` (array of text, image, audio, resource, or resource_link items) and `isError`. The tool's own result goes on `structured`: its `structuredContent` when the response carries one, otherwise a single text item holding a JSON object, parsed. It is kept apart so a tool field can never shadow `content` or `isError`, and so a tool adding a field does not move the ports a graph is wired to. Wiring reads a tool field as `structured.<field>`.
 
 **Workflow Integration:**
 
@@ -446,7 +446,7 @@ Attempting to use MCP tasks without registering dependencies throws a descriptiv
 
 | Class                 | Type String             | Category | Inputs                          | Outputs                                |
 | --------------------- | ----------------------- | -------- | ------------------------------- | -------------------------------------- |
-| `McpToolCallTask`     | `"McpToolCallTask"`     | MCP      | Dynamic (from tool schema)      | `{ content, isError, ...structured }`  |
+| `McpToolCallTask`     | `"McpToolCallTask"`     | MCP      | Dynamic (from tool schema)      | `{ content, isError, structured }`  |
 | `McpPromptGetTask`    | `"McpPromptGetTask"`    | MCP      | Dynamic (from prompt arguments) | `{ messages, description? }`           |
 | `McpResourceReadTask` | `"McpResourceReadTask"` | MCP      | (none)                          | `{ contents }`                         |
 | `McpListTask`         | `"McpListTask"`         | MCP      | `{ server, list_type }`         | `{ tools? \| resources? \| prompts? }` |

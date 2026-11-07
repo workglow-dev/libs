@@ -7,6 +7,7 @@
 import type { ChunkRecord, ChunkSearchResult, KnowledgeBase } from "@workglow/knowledge-base";
 import { TypeKnowledgeBase } from "@workglow/knowledge-base";
 import type {
+  CachePolicy,
   IExecuteContext,
   IRunConfig,
   TaskConfig,
@@ -237,7 +238,11 @@ export class ChunkRetrievalTask extends Task<
   public static override title = "Chunk Retrieval";
   public static override description =
     "End-to-end retrieval: embed query (if string) and search the knowledge base. Supports similarity and hybrid methods.";
-  public static override cacheable = true;
+  /**
+   * Not cached: the result reflects the knowledge base as it is now, and the cache key
+   * is only the input — an upsert or delete between runs would be answered as it was.
+   */
+  public static override cachePolicy: CachePolicy = { kind: "none" };
 
   /** Declared so a host can ask what this reaches before running it. */
   public static override entitlements(): TaskEntitlements {

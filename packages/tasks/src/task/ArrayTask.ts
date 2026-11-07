@@ -15,13 +15,24 @@ import type {
 import type {
   GraphAsTaskConfig,
   GraphResultArray,
+  IRunConfig,
+  IterationBound,
   JsonTaskItem,
   TaskGraphItemJson,
   TaskInput,
   TaskOutput,
   TaskRunContext,
 } from "@workglow/task-graph";
-import { GraphAsTask, GraphAsTaskRunner, PROPERTY_ARRAY, TaskGraph } from "@workglow/task-graph";
+import {
+  GraphAsTask,
+  graphAsTaskConfigSchema,
+  GraphAsTaskRunner,
+  PROPERTY_ARRAY,
+  resolveIterationBound,
+  TaskConfigurationError,
+  TaskGraph,
+  TaskInvalidInputError,
+} from "@workglow/task-graph";
 
 export function TypeReplicateArray<const T extends DataPortSchemaNonBoolean>(
   type: T,
@@ -64,6 +75,33 @@ export type DeReplicateFromSchema<S extends { properties: Record<string, any> }>
     : VectorFromSchema<S["properties"][K]>;
 };
 
+export const arrayTaskConfigSchema = {
+  type: "object",
+  properties: {
+    ...graphAsTaskConfigSchema["properties"],
+    maxIterations: {
+      oneOf: [
+        { type: "integer", minimum: 1 },
+        { type: "string", const: "unbounded" },
+      ],
+      title: "Max Iterations",
+      description:
+        'Most combinations of the array inputs to run; "unbounded" opts out of the limit',
+    },
+  },
+  required: ["maxIterations"],
+  additionalProperties: false,
+} as const satisfies DataPortSchema;
+
+export type ArrayTaskConfig<Input extends TaskInput = TaskInput> = GraphAsTaskConfig<Input> & {
+  /**
+   * Upper bound on the combinations run — one task per combination of every
+   * replicated array input, built before any runs. Required: a positive integer,
+   * or `"unbounded"` to opt out explicitly.
+   */
+  readonly maxIterations: IterationBound;
+};
+
 /**
  * ArrayTask is a compound task that either:
  * 1. Executes directly if all inputs are non-arrays
@@ -73,9 +111,23 @@ export type DeReplicateFromSchema<S extends { properties: Record<string, any> }>
 export abstract class ArrayTask<
   Input extends TaskInput = TaskInput,
   Output extends TaskOutput = TaskOutput,
-  Config extends GraphAsTaskConfig<Input> = GraphAsTaskConfig<Input>,
+  Config extends ArrayTaskConfig<Input> = ArrayTaskConfig<Input>,
 > extends GraphAsTask<Input, Output, Config> {
   public static override type = "ArrayTask";
+
+  public static override configSchema(): DataPortSchema {
+    return arrayTaskConfigSchema;
+  }
+
+  constructor(config: Partial<Config> = {}, runConfig: Partial<IRunConfig> = {}) {
+    if ((config as Partial<ArrayTaskConfig>).maxIterations === undefined) {
+      throw new TaskConfigurationError(
+        `${(new.target as typeof ArrayTask).type ?? "ArrayTask"}: maxIterations is required. ` +
+          `Pass a positive integer to cap the combinations run, or "unbounded" to opt out explicitly.`
+      );
+    }
+    super(config, runConfig);
+  }
 
   /** Make this task have results that look like an array */
   public static override readonly compoundMerge = PROPERTY_ARRAY;
@@ -122,6 +174,17 @@ export abstract class ArrayTask<
     if (!hasArrayInputs) {
       super.regenerateGraph();
       return;
+    }
+
+    const combinationCount = Array.from(arrayInputs.values()).reduce(
+      (product, values) => product * values.length,
+      1
+    );
+    const bound = resolveIterationBound(this.config.maxIterations);
+    if (combinationCount > bound) {
+      throw new TaskInvalidInputError(
+        `${this.type}: the array inputs make ${combinationCount} combinations, over maxIterations ${bound}`
+      );
     }
 
     const inputIds = Array.from(arrayInputs.keys());
@@ -215,7 +278,7 @@ export abstract class ArrayTask<
 class ArrayTaskRunner<
   Input extends TaskInput = TaskInput,
   Output extends TaskOutput = TaskOutput,
-  Config extends GraphAsTaskConfig<Input> = GraphAsTaskConfig<Input>,
+  Config extends ArrayTaskConfig<Input> = ArrayTaskConfig<Input>,
 > extends GraphAsTaskRunner<Input, Output, Config> {
   declare task: ArrayTask<Input, Output, Config>;
 

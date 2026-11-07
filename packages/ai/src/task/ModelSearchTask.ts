@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
+import { CreateWorkflow, Task, TaskConfigurationError, Workflow } from "@workglow/task-graph";
 
 import type { CachePolicy, IExecuteContext, IRunConfig, TaskConfig } from "@workglow/task-graph";
 import type { DataPortSchema } from "@workglow/util/schema";
@@ -156,7 +156,9 @@ export class ModelSearchTask extends Task<
       ["model.search"]
     );
     if (!runFn) {
-      throw new Error(`Provider "${input.provider}" has no run function serving "model.search".`);
+      throw new TaskConfigurationError(
+        `Provider "${input.provider}" has no run function serving "model.search".`
+      );
     }
     const { emit, result } = accumulatingEmit<ModelSearchTaskOutput>();
     await runFn(input, undefined, context.signal, emit);

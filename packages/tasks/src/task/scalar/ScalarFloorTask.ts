@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { IExecuteContext, TaskConfig } from "@workglow/task-graph";
+import type { IExecuteContext, IExecutePreviewContext, TaskConfig } from "@workglow/task-graph";
 import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 
@@ -55,8 +55,16 @@ export class ScalarFloorTask<
     return outputSchema;
   }
 
-  override async execute(input: Input, _context: IExecuteContext): Promise<Output> {
+  override async execute(input: Input, _context?: IExecuteContext): Promise<Output> {
     return { result: Math.floor(input.value) } as Output;
+  }
+
+  /** Pure and instant, so a preview shows the value a run would produce. */
+  override async executePreview(
+    input: Input,
+    _context: IExecutePreviewContext
+  ): Promise<Output | undefined> {
+    return this.execute(input);
   }
 }
 

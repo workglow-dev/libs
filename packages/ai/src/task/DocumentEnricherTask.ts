@@ -13,10 +13,12 @@ import type {
   NodeEnrichment,
 } from "@workglow/knowledge-base";
 import type { IExecuteContext, IRunConfig, TaskConfig } from "@workglow/task-graph";
-import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
+import { CreateWorkflow, Task, TaskConfigSchema, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema } from "@workglow/util/schema";
 import type { Capability } from "../capability/Capabilities";
 import type { ModelConfig } from "../model/ModelSchema";
+import type { Slots } from "./ConcurrencySlots";
+import { createSlots } from "./ConcurrencySlots";
 import { TextNamedEntityRecognitionTask } from "./TextNamedEntityRecognitionTask";
 import { TextSummaryTask } from "./TextSummaryTask";
 import { TypeModel } from "./base/AiTaskSchemas";
@@ -111,7 +113,27 @@ export type DocumentEnricherTaskOutput = {
   summaryCount: number;
   entityCount: number;
 };
-export type DocumentEnricherTaskConfig = TaskConfig<DocumentEnricherTaskInput>;
+export type DocumentEnricherTaskConfig = TaskConfig<DocumentEnricherTaskInput> & {
+  /** Model calls (summaries and entity extraction) in flight at once. Default 4. */
+  readonly concurrency?: number | undefined;
+};
+
+const DEFAULT_CONCURRENCY = 4;
+
+const configSchema = {
+  type: "object",
+  properties: {
+    ...TaskConfigSchema["properties"],
+    concurrency: {
+      type: "integer",
+      minimum: 1,
+      default: DEFAULT_CONCURRENCY,
+      title: "Concurrency",
+      description: "Model calls (summaries and entity extraction) in flight at once",
+    },
+  },
+  additionalProperties: false,
+} as const satisfies DataPortSchema;
 
 /**
  * Task for enriching document nodes with summaries and entities
@@ -138,6 +160,17 @@ export class DocumentEnricherTask extends Task<
     return outputSchema as DataPortSchema;
   }
 
+  public static override configSchema(): DataPortSchema {
+    return configSchema;
+  }
+
+  /**
+   * Bounds the model calls of one execution. The tree is walked all at once (a parent
+   * waits on its children), so the calls are what is bounded, not the walk: a slot held
+   * by a parent waiting on its children could never be given back.
+   */
+  private slots: Slots = createSlots(DEFAULT_CONCURRENCY);
+
   override async execute(
     input: DocumentEnricherTaskInput,
     context: IExecuteContext
@@ -152,6 +185,8 @@ export class DocumentEnricherTask extends Task<
       nerModel: nerModelConfig,
     } = input;
 
+    this.slots = createSlots(this.config?.concurrency ?? DEFAULT_CONCURRENCY);
+    const slots = this.slots;
     const root: DocumentNode = documentTree;
     const summaryModel = summaryModelConfig ? (summaryModelConfig as ModelConfig) : undefined;
     const nerModel = nerModelConfig ? (nerModelConfig as ModelConfig) : undefined;
@@ -161,9 +196,9 @@ export class DocumentEnricherTask extends Task<
     const extract =
       extractEntities && nerModel
         ? async (text: string) => {
-            const result = await context
-              .own(new TextNamedEntityRecognitionTask())
-              .run({ text, model: nerModel });
+            const result = await slots(() =>
+              context.own(new TextNamedEntityRecognitionTask()).run({ text, model: nerModel })
+            );
             return (result.entities as Array<{ entity: string; word: string; score: number }>).map(
               (e) => ({
                 type: e.entity,
@@ -277,7 +312,7 @@ export class DocumentEnricherTask extends Task<
   /**
    * Private method to summarize text using the TextSummaryTask
    */
-  private async summarize(
+  protected async summarize(
     text: string,
     context: IExecuteContext,
     model: ModelConfig
@@ -333,7 +368,7 @@ export class DocumentEnricherTask extends Task<
 
     // Summarize the node's own text first
     if (nodeText) {
-      const nodeSummary = await this.summarize(nodeText, context, model);
+      const nodeSummary = await this.slots(() => this.summarize(nodeText, context, model));
       if (nodeSummary) {
         summaryParts.push(nodeSummary);
       }
@@ -349,7 +384,7 @@ export class DocumentEnricherTask extends Task<
       return undefined;
     }
 
-    const result = await this.summarize(combinedSummaries, context, model);
+    const result = await this.slots(() => this.summarize(combinedSummaries, context, model));
     return result;
   }
 
@@ -372,7 +407,7 @@ export class DocumentEnricherTask extends Task<
       return undefined;
     }
 
-    const result = await this.summarize(trimmedText, context, model);
+    const result = await this.slots(() => this.summarize(trimmedText, context, model));
     return result;
   }
 

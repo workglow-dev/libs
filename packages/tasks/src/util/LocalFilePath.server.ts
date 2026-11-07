@@ -119,8 +119,11 @@ export function resolveLocalFilePath(url: string, options: LocalFilePathOptions 
         );
       }
     });
+    // A filesystem root already ends in its separator (`/`, `C:\`); adding another
+    // made `//` the prefix, which no path has, so such a root contained nothing.
     const allowed = realRoots.some(
-      (realRoot) => real === realRoot || real.startsWith(realRoot + sep)
+      (realRoot) =>
+        real === realRoot || real.startsWith(realRoot.endsWith(sep) ? realRoot : realRoot + sep)
     );
     if (!allowed) {
       throw new TaskEntitlementError(

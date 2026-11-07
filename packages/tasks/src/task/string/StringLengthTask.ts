@@ -5,12 +5,49 @@
  */
 
 import type { IExecuteContext, IExecutePreviewContext, TaskConfig } from "@workglow/task-graph";
-import { CreateWorkflow, Task, Workflow } from "@workglow/task-graph";
+import { CreateWorkflow, Task, TaskConfigSchema, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 
-function stringLength(text: string): number {
-  return text.length;
+const LENGTH_UNITS = ["code-units", "code-points", "graphemes"] as const;
+export type StringLengthUnit = (typeof LENGTH_UNITS)[number];
+
+let graphemeSegmenter: Intl.Segmenter | undefined;
+
+function stringLength(text: string, unit: StringLengthUnit | undefined): number {
+  switch (unit) {
+    case "code-points": {
+      let count = 0;
+      for (const _ of text) count++;
+      return count;
+    }
+    case "graphemes": {
+      graphemeSegmenter ??= new Intl.Segmenter(undefined, { granularity: "grapheme" });
+      let count = 0;
+      for (const _ of graphemeSegmenter.segment(text)) count++;
+      return count;
+    }
+    default:
+      return text.length;
+  }
 }
+
+const configSchema = {
+  type: "object",
+  properties: {
+    ...TaskConfigSchema["properties"],
+    unit: {
+      type: "string",
+      enum: LENGTH_UNITS,
+      default: "code-units",
+      title: "Unit",
+      description:
+        "What to count: UTF-16 code units (JavaScript's length), Unicode code points, or user-perceived characters (graphemes)",
+    },
+  },
+  additionalProperties: false,
+} as const satisfies DataPortSchema;
+
+export type StringLengthTaskConfig = TaskConfig & { readonly unit?: StringLengthUnit | undefined };
 
 const inputSchema = {
   type: "object",
@@ -44,7 +81,7 @@ export type StringLengthTaskOutput = FromSchema<typeof outputSchema>;
 export class StringLengthTask<
   Input extends StringLengthTaskInput = StringLengthTaskInput,
   Output extends StringLengthTaskOutput = StringLengthTaskOutput,
-  Config extends TaskConfig = TaskConfig,
+  Config extends StringLengthTaskConfig = StringLengthTaskConfig,
 > extends Task<Input, Output, Config> {
   static override readonly type = "StringLengthTask";
   static override readonly category = "String";
@@ -59,21 +96,29 @@ export class StringLengthTask<
     return outputSchema;
   }
 
+  static override configSchema(): DataPortSchema {
+    return configSchema;
+  }
+
   override async execute(input: Input, _context: IExecuteContext): Promise<Output | undefined> {
-    return { length: stringLength(input.text) } as Output;
+    return { length: stringLength(input.text, this.config?.unit) } as Output;
   }
 
   override async executePreview(
     input: Input,
     _context: IExecutePreviewContext
   ): Promise<Output | undefined> {
-    return { length: stringLength(input.text) } as Output;
+    return { length: stringLength(input.text, this.config?.unit) } as Output;
   }
 }
 
 declare module "@workglow/task-graph" {
   interface Workflow {
-    stringLength: CreateWorkflow<StringLengthTaskInput, StringLengthTaskOutput, TaskConfig>;
+    stringLength: CreateWorkflow<
+      StringLengthTaskInput,
+      StringLengthTaskOutput,
+      StringLengthTaskConfig
+    >;
   }
 }
 

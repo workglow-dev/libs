@@ -23,6 +23,7 @@ import {
   ImageTintTask,
   ImageTransparencyTask,
 } from "@workglow/tasks";
+import { TaskInvalidInputError } from "@workglow/task-graph";
 import { setLogger } from "@workglow/util";
 import {
   CpuImage,
@@ -864,6 +865,49 @@ describe("ImageTask", () => {
       expect(out.height).toBe(64);
       expect(out.channels).toBe(4);
       expect(getPixel(out, 0, 0)).toEqual([40, 80, 120, 255]);
+    });
+  });
+
+  // Decoding is held to the pixel budget; an image a task builds is held to the same
+  // one, or a 1x1 image resized to 100000 wide asks for a 40 GB buffer.
+  describe("output pixel budget", () => {
+    const tiny = () => toImageValue(createTestImage(1, 1, 3, [1, 2, 3]));
+    const side = (T: { inputSchema(): unknown }, port: string) =>
+      (T.inputSchema() as { properties: Record<string, { maximum?: number }> }).properties[port]
+        ?.maximum;
+
+    test("resize states a per-side maximum and refuses past it", async () => {
+      expect(side(ImageResizeTask, "width")).toBe(16384);
+      expect(side(ImageResizeTask, "height")).toBe(16384);
+      await expect(
+        new ImageResizeTask().run({ image: tiny(), width: 16385, height: 1 })
+      ).rejects.toThrow();
+    });
+
+    test("resize refuses an output over the pixel budget before building it", async () => {
+      const err = await new ImageResizeTask()
+        .run({ image: tiny(), width: 16384, height: 16384 })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(TaskInvalidInputError);
+      expect(String((err as Error).message)).toMatch(/16384x16384/);
+    });
+
+    test("resize with fit outside is held to the size it can grow to", async () => {
+      // "outside" keeps the aspect ratio and covers both targets: 1x100 to 10000x1
+      // grows to 10000x1000000.
+      const tall = toImageValue(createTestImage(1, 100, 3, [1, 2, 3]));
+      await expect(
+        new ImageResizeTask().run({ image: tall, width: 10000, height: 1, fit: "outside" })
+      ).rejects.toBeInstanceOf(TaskInvalidInputError);
+    });
+
+    test("border states a maximum and refuses an output over the budget", async () => {
+      expect(side(ImageBorderTask, "borderWidth")).toBe(8192);
+      const err = await new ImageBorderTask()
+        .run({ image: tiny(), borderWidth: 8000 })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(TaskInvalidInputError);
+      expect(String((err as Error).message)).toMatch(/16001x16001/);
     });
   });
 });

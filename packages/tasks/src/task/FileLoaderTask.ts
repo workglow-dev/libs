@@ -4,7 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { IExecuteContext, TaskConfig, TaskEntitlements } from "@workglow/task-graph";
+import type {
+  CachePolicy,
+  IExecuteContext,
+  TaskConfig,
+  TaskEntitlements,
+} from "@workglow/task-graph";
 import { CreateWorkflow, Task, TaskAbortedError, Workflow } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import type { FetchUrlResponseType, FetchUrlTaskOutput } from "./FetchUrlTask";
@@ -116,7 +121,13 @@ export class FileLoaderTask<Config extends TaskConfig = TaskConfig> extends Task
   public static override category = "Document";
   public static override title = "File Loader";
   public static override description = "Load documents from URLs (http://, https://)";
-  public static override cacheable = true;
+  /**
+   * Not cached: the result is the document as it is now, and the cache key is only the
+   * url — a file or resource changed between runs would be answered as it was.
+   * `cachePolicy` rather than `cacheable = false`: the server variants extend this class,
+   * and the resolver honours `cacheable` only where a class declares it itself.
+   */
+  public static override cachePolicy: CachePolicy = { kind: "none" };
   public static override hasDynamicEntitlements: boolean = true;
 
   /**
@@ -160,7 +171,8 @@ export class FileLoaderTask<Config extends TaskConfig = TaskConfig> extends Task
     }
     await context.updateProgress(10, `Fetching ${detectedFormat} file from ${url}`);
 
-    const fetchTask = context.own(new FetchUrlTask({ queue: false }));
+    // Uncached like this task: the file is read afresh each run, not from the fetch cache.
+    const fetchTask = context.own(new FetchUrlTask({ queue: false }, { cacheable: false }));
     const response = await fetchTask.run({
       url,
       response_type: responseType,

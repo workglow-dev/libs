@@ -5,7 +5,7 @@
  */
 
 import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
-import { Task, TaskConfigSchema } from "@workglow/task-graph";
+import { Task, TaskConfigSchema, TaskConfigurationError } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
@@ -110,7 +110,9 @@ export class BrowserWaitTask extends Task<
       case "selector": {
         const selector = this.config.selector;
         if (!selector) {
-          throw new Error("BrowserWaitTask: selector is required when waitFor is 'selector'");
+          throw new TaskConfigurationError(
+            "BrowserWaitTask: selector is required when waitFor is 'selector'"
+          );
         }
         await ctx.waitForSelector(selector, { timeout });
         break;

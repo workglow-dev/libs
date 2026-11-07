@@ -10,8 +10,19 @@ import type {
   TaskConfig,
   TaskEntitlements,
 } from "@workglow/task-graph";
-import { Entitlements, mergeEntitlements, Task, TaskConfigSchema } from "@workglow/task-graph";
+import {
+  Task,
+  TaskConfigSchema,
+  TaskConfigurationError,
+  TaskFailedError,
+} from "@workglow/task-graph";
+import { HUMAN_CONNECTOR, resolveHumanConnector, uuid4 } from "@workglow/util";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import {
+  assertLandedWithinReach,
+  assertNavigableUrl,
+  navigationEntitlements,
+} from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
 const browserLoginTaskConfigSchema = {
@@ -20,23 +31,18 @@ const browserLoginTaskConfigSchema = {
     ...TaskConfigSchema["properties"],
     mode: {
       type: "string",
-      enum: ["manual", "credential", "ai"],
+      enum: ["manual"],
       title: "Login Mode",
-      description: "The login strategy to use",
+      description:
+        "The login strategy to use. Manual: the page is opened and a person is asked to log in, then continue",
       default: "manual",
-    },
-    credentialName: {
-      type: "string",
-      title: "Credential Name",
-      description: "Name of the stored credential to use (required when mode is 'credential')",
     },
   },
   additionalProperties: false,
 } as const satisfies DataPortSchema;
 
 export type BrowserLoginTaskConfig = TaskConfig & {
-  mode?: "manual" | "credential" | "ai";
-  credentialName?: string;
+  mode?: "manual";
 };
 
 const inputSchema = {
@@ -101,26 +107,14 @@ export class BrowserLoginTask extends Task<
   }
 
   public static override entitlements(): TaskEntitlements {
-    return {
-      entitlements: [
-        { id: Entitlements.BROWSER_CONTROL_NAVIGATE, reason: "Navigates to the login page URL" },
-      ],
-    };
+    return navigationEntitlements(undefined, "Navigates to the login page URL");
   }
 
   public override entitlements(): TaskEntitlements {
-    const base = BrowserLoginTask.entitlements();
-    if (this.config.mode === "credential") {
-      return mergeEntitlements(base, {
-        entitlements: [
-          {
-            id: Entitlements.BROWSER_CONTROL_CREDENTIAL,
-            reason: "Accesses stored credentials for login",
-          },
-        ],
-      });
-    }
-    return base;
+    return navigationEntitlements(
+      this.runInputData?.url ?? this.defaults.url,
+      "Navigates to the login page URL"
+    );
   }
 
   override async execute(
@@ -128,25 +122,46 @@ export class BrowserLoginTask extends Task<
     executeContext: IExecuteContext
   ): Promise<BrowserLoginTaskOutput> {
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
-    const parsed = new URL(input.url, "https://placeholder");
-    if (parsed.protocol === "javascript:") {
-      throw new Error("BrowserLoginTask: javascript: URLs are not allowed");
-    }
+    assertNavigableUrl(input.url, "BrowserLoginTask");
     const ctx = BrowserSessionRegistry.get(input.sessionId);
-    const mode = this.config.mode ?? "manual";
+    // Checked before navigating, so a host that cannot ask a person refuses with the
+    // page untouched.
+    if (!executeContext.registry.has(HUMAN_CONNECTOR)) {
+      throw new TaskConfigurationError(
+        "BrowserLoginTask needs a person to log in: register a HUMAN_CONNECTOR in a host that can ask one"
+      );
+    }
+    const connector = resolveHumanConnector(executeContext);
 
     await ctx.navigate(input.url);
+    try {
+      assertLandedWithinReach(input.url, await ctx.currentUrl(), "BrowserLoginTask");
+    } catch (err) {
+      // As BrowserNavigateTask: clear the page, and keep the refusal if that fails.
+      await ctx.navigate("about:blank").catch(() => undefined);
+      throw err;
+    }
     await executeContext.updateProgress(20, "Navigated to login page");
+    await executeContext.updateProgress(50, "Waiting for manual login...");
 
-    switch (mode) {
-      case "manual":
-        await executeContext.updateProgress(50, "Waiting for manual login...");
-        // Placeholder for future HumanInputTask integration
-        break;
-      case "credential":
-        throw new Error("Credential-based login mode is not yet implemented");
-      case "ai":
-        throw new Error("AI-driven login mode is not yet implemented");
+    // The task waits here until the person says they are done, so the next task
+    // runs logged in -- reporting "waiting" and returning at once ran it logged out.
+    const response = await connector.send(
+      {
+        requestId: uuid4(),
+        targetHumanId: "default",
+        kind: "confirm",
+        message: `Log in at ${input.url} in the browser, then continue.`,
+        contentSchema: { type: "object", properties: {}, additionalProperties: true },
+        contentData: undefined,
+        expectsResponse: true,
+        mode: "single",
+        metadata: { url: input.url },
+      },
+      executeContext.signal
+    );
+    if (response.action !== "accept") {
+      throw new TaskFailedError(`BrowserLoginTask: login was not completed (${response.action})`);
     }
 
     return { sessionId: input.sessionId };

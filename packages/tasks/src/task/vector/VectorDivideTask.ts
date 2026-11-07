@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { IExecuteContext, TaskConfig } from "@workglow/task-graph";
+import type { IExecuteContext, IExecutePreviewContext, TaskConfig } from "@workglow/task-graph";
 import { CreateWorkflow, Task, TaskInvalidInputError, Workflow } from "@workglow/task-graph";
 import type {
   DataPortSchema,
@@ -65,7 +65,7 @@ export class VectorDivideTask<
     return outputSchema;
   }
 
-  override async execute(input: Input, _context: IExecuteContext): Promise<Output> {
+  override async execute(input: Input, _context?: IExecuteContext): Promise<Output> {
     const { vectors } = input as { vectors: TypedArray[] };
     if (vectors.length < 2) {
       throw new TaskInvalidInputError("At least two vectors are required");
@@ -79,11 +79,23 @@ export class VectorDivideTask<
     const values = Array.from({ length: len }, (_, i) => {
       let acc = Number(vectors[0][i]);
       for (let j = 1; j < vectors.length; j++) {
-        acc /= Number(vectors[j][i]);
+        const divisor = Number(vectors[j][i]);
+        if (divisor === 0) {
+          throw new TaskInvalidInputError(`Division by zero at vectors[${j}][${i}]`);
+        }
+        acc /= divisor;
       }
       return acc;
     });
     return { result: createTypedArrayFrom(vectors, values) } as Output;
+  }
+
+  /** Pure and instant, so a preview shows the value a run would produce. */
+  override async executePreview(
+    input: Input,
+    _context: IExecutePreviewContext
+  ): Promise<Output | undefined> {
+    return this.execute(input);
   }
 }
 

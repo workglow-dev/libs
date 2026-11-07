@@ -49,10 +49,18 @@ export class IteratorTaskRunner<
    * it does not iterate the subgraph.
    */
 
+  /**
+   * The signal of the run executing the iterations, held for its whole length.
+   * `currentCtx` is cleared once the run is aborted, so reading the signal through it
+   * after an abort found none, and the remaining iterations ran on.
+   */
+  private iterationSignal: AbortSignal | undefined;
+
   protected override async executeTask(
     input: Input,
-    _ctx: TaskRunContext
+    ctx: TaskRunContext
   ): Promise<Output | undefined> {
+    this.iterationSignal = ctx.abortController.signal;
     let analysis = this.task.analyzeIterationInput(input);
 
     // Enforce maxIterations cap. Config is required (construction-time guard),
@@ -102,7 +110,7 @@ export class IteratorTaskRunner<
     const retainResults = this.task.retainsIterationResults();
     const orderedResults: Array<TaskOutput | undefined> =
       retainResults && preserveOrder ? new Array(iterationCount) : [];
-    const completionOrderResults: TaskOutput[] = [];
+    const completionOrderResults: Array<TaskOutput | undefined> = [];
 
     this.task.clearIterationGraphs();
     this.aggregatingParentMapProgress = true;
@@ -113,7 +121,7 @@ export class IteratorTaskRunner<
 
     try {
       for (let batchStart = 0; batchStart < iterationCount; batchStart += batchSize) {
-        if (this.currentCtx?.abortController.signal.aborted) {
+        if (this.iterationSignal?.aborted) {
           // Honor cancellation as a failure: returning the partial map result
           // would report a truncated array as a COMPLETED success.
           throw new TaskAbortedError("Iterator aborted during iteration");
@@ -134,9 +142,9 @@ export class IteratorTaskRunner<
           retainResults
         );
 
+        // An iteration that produced nothing still holds its slot: dropping it would
+        // shift every later item's values onto the wrong input.
         for (const { index, result } of batchResults) {
-          if (result === undefined) continue;
-
           if (preserveOrder) {
             orderedResults[index] = result;
           } else {
@@ -145,9 +153,13 @@ export class IteratorTaskRunner<
         }
       }
 
-      const collected = preserveOrder
-        ? orderedResults.filter((result): result is TaskOutput => result !== undefined)
-        : completionOrderResults;
+      // Workers stop picking up items once aborted, so an abort inside the last batch
+      // leaves slots unfilled; that is not a completed map.
+      if (this.iterationSignal?.aborted) {
+        throw new TaskAbortedError("Iterator aborted during iteration");
+      }
+
+      const collected = preserveOrder ? orderedResults : completionOrderResults;
 
       return this.task.collectResults(collected);
     } finally {
@@ -192,7 +204,7 @@ export class IteratorTaskRunner<
     let accumulator = this.task.getInitialAccumulator();
 
     for (let index = 0; index < iterationCount; index++) {
-      if (this.currentCtx?.abortController.signal.aborted) {
+      if (this.iterationSignal?.aborted) {
         // Honor cancellation as a failure: returning the partial accumulator
         // would report an incomplete reduction as a COMPLETED success.
         throw new TaskAbortedError("Iterator aborted during iteration");
@@ -232,7 +244,7 @@ export class IteratorTaskRunner<
 
     const workers = Array.from({ length: workerCount }, async () => {
       while (true) {
-        if (this.currentCtx?.abortController.signal.aborted) {
+        if (this.iterationSignal?.aborted) {
           return;
         }
 
@@ -292,7 +304,7 @@ export class IteratorTaskRunner<
     index: number,
     iterationCount: number
   ): Promise<TaskOutput | undefined> {
-    if (this.currentCtx?.abortController.signal.aborted) {
+    if (this.iterationSignal?.aborted) {
       return undefined;
     }
 
@@ -334,10 +346,13 @@ export class IteratorTaskRunner<
 
     try {
       const results = await graphClone.run<TaskOutput>(input as TaskInput, {
-        parentSignal: this.currentCtx?.abortController.signal,
+        parentSignal: this.iterationSignal,
         outputCache: this.outputCache,
         registry: this.registry,
         resourceScope: this.resourceScope,
+        // A clone's run is a graph run of its own: without the flag every task in
+        // it is scheduled unchecked, whatever the outer run enforces.
+        enforceEntitlements: this.task.runConfig?.enforceEntitlements,
         ...this.streamRunOptions,
       });
 

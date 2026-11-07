@@ -31,12 +31,12 @@ export class FallbackTaskRunner<
    */
   protected override async executeTask(
     input: Input,
-    _ctx: TaskRunContext
+    ctx: TaskRunContext
   ): Promise<Output | undefined> {
     if (this.task.fallbackMode === "data") {
-      return this.executeDataFallback(input);
+      return this.executeDataFallback(input, ctx.abortController.signal);
     }
-    return this.executeTaskFallback(input);
+    return this.executeTaskFallback(input, ctx.abortController.signal);
   }
 
   /**
@@ -64,8 +64,17 @@ export class FallbackTaskRunner<
    * Consequently inner alternatives' task_progress/task_complete/task_stream_*
    * events do not bubble to the top-level run stream in task mode (data mode does
    * surface them). Coarse attempt progress is forwarded via handleProgress below.
+   *
+   * For the same reason nothing hands an alternative this run's context, so it is
+   * passed here as the subgraph runner passes it: the signal (cancelling the
+   * fallback stops the attempt in flight, not only the next one), the registry and
+   * resource scope (services and cache checkpoints are the run's, not the global
+   * ones), and entitlement enforcement.
    */
-  private async executeTaskFallback(input: Input): Promise<Output | undefined> {
+  private async executeTaskFallback(
+    input: Input,
+    signal: AbortSignal
+  ): Promise<Output | undefined> {
     const tasks = this.task.subGraph.getTasks();
     if (tasks.length === 0) {
       throw new TaskFailedError("FallbackTask has no alternatives to try");
@@ -75,7 +84,7 @@ export class FallbackTaskRunner<
     const totalAttempts = tasks.length;
 
     for (let i = 0; i < tasks.length; i++) {
-      if (this.currentCtx?.abortController.signal.aborted) {
+      if (signal.aborted) {
         throw new TaskAbortedError("Fallback aborted");
       }
 
@@ -94,7 +103,13 @@ export class FallbackTaskRunner<
         // Run the individual task with the parent's input, forwarding the
         // stream-pacing options so a streaming/compound alternative inherits
         // the caller's passthrough opt-in, high-water mark, and watchdog.
-        const result = await alternativeTask.run(input, this.streamRunOptions);
+        const result = await alternativeTask.run(input, {
+          signal,
+          outputCache: this.outputCache,
+          ...this.subGraphRunContext,
+          enforceEntitlements: this.task.runConfig?.enforceEntitlements,
+          ...this.streamRunOptions,
+        });
 
         await this.handleProgress(
           100,
@@ -124,7 +139,10 @@ export class FallbackTaskRunner<
    * Runs the subgraph workflow multiple times, each time with a different
    * set of input overrides merged from `config.alternatives`.
    */
-  private async executeDataFallback(input: Input): Promise<Output | undefined> {
+  private async executeDataFallback(
+    input: Input,
+    signal: AbortSignal
+  ): Promise<Output | undefined> {
     const alternatives = this.task.alternatives;
     if (alternatives.length === 0) {
       throw new TaskFailedError("FallbackTask has no data alternatives to try");
@@ -167,7 +185,7 @@ export class FallbackTaskRunner<
 
     try {
       for (let i = 0; i < alternatives.length; i++) {
-        if (this.currentCtx?.abortController.signal.aborted) {
+        if (signal.aborted) {
           throw new TaskAbortedError("Fallback aborted");
         }
 
@@ -188,10 +206,12 @@ export class FallbackTaskRunner<
           const mergedInput = { ...input, ...alternative } as Input;
 
           // Run the subgraph with merged input
+          // The same run-scoped state GraphAsTaskRunner hands its subgraph.
           const results = await this.task.subGraph.run<Output>(mergedInput, {
-            parentSignal: this.currentCtx?.abortController.signal,
+            parentSignal: signal,
             outputCache: this.outputCache,
-            registry: this.registry,
+            ...this.subGraphRunContext,
+            enforceEntitlements: this.task.runConfig?.enforceEntitlements,
             ...this.streamRunOptions,
           });
 

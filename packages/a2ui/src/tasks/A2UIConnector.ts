@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { TaskConfigurationError } from "@workglow/task-graph";
 import { createServiceToken } from "@workglow/util";
 import type { A2UIServerMessage, A2UIUserAction } from "../protocol/messages";
 
@@ -66,7 +67,7 @@ export function resolveA2UIConnector(context: {
   };
 }): IA2UIConnector {
   if (!context.registry.has(A2UI_CONNECTOR)) {
-    throw new Error(
+    throw new TaskConfigurationError(
       "A2UI_CONNECTOR not registered. Register one via " +
         "registry.registerInstance(A2UI_CONNECTOR, connector) in a host that can render a surface."
     );

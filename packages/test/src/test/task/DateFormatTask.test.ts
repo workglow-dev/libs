@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { TaskStatus } from "@workglow/task-graph";
+import { TaskInvalidInputError, TaskStatus } from "@workglow/task-graph";
 import { DateFormatTask } from "@workglow/tasks";
 import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
@@ -92,5 +92,14 @@ describe("DateFormatTask", () => {
   it("should complete with COMPLETED status on success", async () => {
     await task.run({ value: "2025-01-01" });
     expect(task.status).toBe(TaskStatus.COMPLETED);
+  });
+
+  it("refuses an unknown time zone or locale as invalid input, naming it", async () => {
+    const value = "2024-01-02T03:04:05Z";
+    for (const extra of [{ timeZone: "Mars/Olympus" }, { locale: "not a locale!!" }]) {
+      const run = new DateFormatTask().run({ value, format: "datetime", ...extra });
+      await expect(run).rejects.toBeInstanceOf(TaskInvalidInputError);
+      await expect(run).rejects.toThrow(Object.values(extra)[0]);
+    }
   });
 });
