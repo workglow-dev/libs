@@ -15,6 +15,7 @@ import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import {
   assertLandedWithinReach,
   assertNavigableUrl,
+  assertResolvesPublic,
   navigationEntitlements,
 } from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
@@ -112,12 +113,15 @@ export class BrowserNewTabTask extends Task<
     executeContext: IExecuteContext
   ): Promise<BrowserNewTabTaskOutput> {
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
-    if (input.url) assertNavigableUrl(input.url, "BrowserNewTabTask");
+    if (input.url) {
+      assertNavigableUrl(input.url, "BrowserNewTabTask");
+      await assertResolvesPublic(input.url, "BrowserNewTabTask");
+    }
     const ctx = BrowserSessionRegistry.get(input.sessionId);
     const tabInfo = await ctx.newTab(input.url);
     if (input.url) {
       try {
-        assertLandedWithinReach(input.url, tabInfo.url, "BrowserNewTabTask");
+        await assertLandedWithinReach(ctx, input.url, tabInfo.url, "BrowserNewTabTask");
       } catch (err) {
         // Closed so no later task can read it (a single-page backend ends the session).
         // A failed close must not replace the refusal.

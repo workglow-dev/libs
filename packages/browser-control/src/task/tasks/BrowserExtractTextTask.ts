@@ -7,6 +7,7 @@
 import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
 import { Task, TaskConfigSchema } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import { readWithinReach } from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
 const browserExtractTextTaskConfigSchema = {
@@ -99,7 +100,7 @@ export class BrowserExtractTextTask extends Task<
       }
       ref = bodyRef;
     }
-    const text = await ctx.textContent(ref);
+    const text = await readWithinReach(ctx, "BrowserExtractTextTask", () => ctx.textContent(ref));
     return { sessionId: input.sessionId, text: text ?? "" };
   }
 }

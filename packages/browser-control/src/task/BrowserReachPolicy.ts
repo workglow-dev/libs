@@ -5,7 +5,9 @@
  */
 
 import type { TaskEntitlement, TaskEntitlements } from "@workglow/task-graph";
+import type { IBrowserContext } from "./IBrowserContext";
 import {
+  classifyIpLiteral,
   classifyUrl,
   Entitlements,
   TaskEntitlementError,
@@ -15,10 +17,16 @@ import {
 } from "@workglow/task-graph";
 
 /**
- * What a browser task may reach, held to the same rules `FetchUrlTask` and
+ * What a browser task may reach, held to the rules `FetchUrlTask` and
  * `FileLoaderTask` apply. A browser is the widest reach in the repo — whatever
  * page it opens, the extract and screenshot tasks hand back — so a destination is
  * classified and declared like a fetch, and a local file is contained like a load.
+ *
+ * Where the runtime has `node:dns`, a host is also resolved and refused when any
+ * address is private, as `safeFetch` refuses it. The browser does its own lookup,
+ * so a name that answers differently to it (DNS rebinding) is not stopped, and
+ * neither are subframes or subresources a page loads: only the top-level page is
+ * checked, when a navigation lands and again whenever a task reads the page.
  */
 
 /** Schemes a navigation may target. `about:blank` is how a session is reset. */
@@ -111,21 +119,124 @@ export function navigationEntitlements(url: unknown, reason: string): TaskEntitl
  * answering 302 to a metadata endpoint hands that page to the extract and screenshot
  * tasks. A private destination may land anywhere on its declared origin; a relative or
  * unknown one declared `network:private` unscoped, so a broad grant already covered it.
- * Only the landing page is checked: navigations a page makes later, by script or a
- * click, are outside it.
+ * A landing that passes is admitted for the session, so the reading tasks accept it.
  */
-export function assertLandedWithinReach(requested: string, landed: string, taskType: string): void {
-  if (!isAbsoluteHttpUrl(landed) || classifyUrl(landed).kind !== "private") return;
-  if (!isAbsoluteHttpUrl(requested)) return;
-  if (
-    classifyUrl(requested).kind === "private" &&
-    urlMatchesScope(landed, [urlResourcePattern(requested)])
-  ) {
+export async function assertLandedWithinReach(
+  ctx: IBrowserContext,
+  requested: string,
+  landed: string,
+  taskType: string
+): Promise<void> {
+  if (!isAbsoluteHttpUrl(landed)) return;
+  if (classifyUrl(landed).kind === "private") {
+    if (
+      isAbsoluteHttpUrl(requested) &&
+      !(
+        classifyUrl(requested).kind === "private" &&
+        urlMatchesScope(landed, [urlResourcePattern(requested)])
+      )
+    ) {
+      throw new TaskEntitlementError(
+        `${taskType}: navigating to ${requested} ended at ${landed}, a private host it did not declare`
+      );
+    }
+    admittedPrivateOrigins(ctx).add(urlResourcePattern(landed));
     return;
   }
-  throw new TaskEntitlementError(
-    `${taskType}: navigating to ${requested} ended at ${landed}, a private host it did not declare`
-  );
+  await assertResolvesPublic(landed, taskType);
+}
+
+/**
+ * Refuses an absolute url whose host is public by name but resolves to a private
+ * address. Such a url declares no `network:private`, so a fetch of it is refused
+ * whatever was granted; a browser is held to the same.
+ */
+export async function assertResolvesPublic(url: string, taskType: string): Promise<void> {
+  if (!isAbsoluteHttpUrl(url)) return;
+  const classification = classifyUrl(url);
+  if (classification.kind !== "public" || classification.literalIp !== undefined) return;
+  const lookup = dnsLookupSync();
+  if (!lookup) return;
+  const host = classification.host!;
+  let addresses: readonly { readonly address: string }[];
+  try {
+    addresses = await lookup(host, { all: true, verbatim: true });
+  } catch (err) {
+    throw new TaskEntitlementError(
+      `${taskType}: could not resolve ${host} to check it is public: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+  for (const { address } of addresses) {
+    const ip = classifyIpLiteral(address);
+    if (ip === undefined || ip.kind === "private") {
+      throw new TaskEntitlementError(
+        `${taskType}: ${host} resolves to private address ${address}; ${url} is not reachable`
+      );
+    }
+  }
+}
+
+/**
+ * Refuses to read a page the session has moved to since its navigation was checked —
+ * a meta refresh, a script, a click or history can all leave a private page open. A
+ * private origin is readable only once a navigation task landed on it.
+ */
+export async function assertPageWithinReach(ctx: IBrowserContext, taskType: string): Promise<void> {
+  const url = await ctx.currentUrl();
+  if (!isAbsoluteHttpUrl(url)) return;
+  const classification = classifyUrl(url);
+  if (classification.kind === "invalid") {
+    throw new TaskEntitlementError(
+      `${taskType}: the page is at ${url}, which cannot be classified`
+    );
+  }
+  if (classification.kind === "private") {
+    if (urlMatchesScope(url, [...admittedPrivateOrigins(ctx)])) return;
+    throw new TaskEntitlementError(
+      `${taskType}: the page moved to ${url}, a private host no navigation declared`
+    );
+  }
+  await assertResolvesPublic(url, taskType);
+}
+
+/** Checks the page before and after `read`, so a page that moves mid-read is not returned. */
+export async function readWithinReach<T>(
+  ctx: IBrowserContext,
+  taskType: string,
+  read: () => Promise<T>
+): Promise<T> {
+  await assertPageWithinReach(ctx, taskType);
+  const result = await read();
+  await assertPageWithinReach(ctx, taskType);
+  return result;
+}
+
+const admitted = new WeakMap<IBrowserContext, Set<string>>();
+
+function admittedPrivateOrigins(ctx: IBrowserContext): Set<string> {
+  let origins = admitted.get(ctx);
+  if (!origins) {
+    origins = new Set();
+    admitted.set(ctx, origins);
+  }
+  return origins;
+}
+
+type DnsLookupAll = (
+  host: string,
+  options: { all: true; verbatim: boolean }
+) => Promise<readonly { readonly address: string }[]>;
+
+/** `node:dns`'s lookup, read per call; undefined in a browser, which has no resolver. */
+function dnsLookupSync(): DnsLookupAll | undefined {
+  const getBuiltin = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } })
+    .process?.getBuiltinModule;
+  if (typeof getBuiltin !== "function") return undefined;
+  const dns = getBuiltin(NODE_DNS) as { promises?: { lookup?: DnsLookupAll } } | undefined;
+  const promises = dns?.promises;
+  return typeof promises?.lookup === "function" ? promises.lookup.bind(promises) : undefined;
 }
 
 /**
@@ -196,6 +307,7 @@ function realPathIfResolvable(p: string): string {
 // which bundlers fold) would be followed into a browser build that has no `node:fs`.
 const NODE_FS = ["node", "fs"].join(":");
 const NODE_PATH = ["node", "path"].join(":");
+const NODE_DNS = ["node", "dns"].join(":");
 
 export interface UploadContainment {
   readonly roots?: readonly string[] | undefined;

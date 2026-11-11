@@ -7,6 +7,7 @@
 import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
 import { Task, TaskConfigSchema } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import { readWithinReach } from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
 const browserScreenshotTaskConfigSchema = {
@@ -101,7 +102,9 @@ export class BrowserScreenshotTask extends Task<
     const ctx = BrowserSessionRegistry.get(input.sessionId);
     const format = this.config.format ?? "png";
     const fullPage = this.config.fullPage ?? false;
-    const image = await ctx.screenshot({ format, fullPage });
+    const image = await readWithinReach(ctx, "BrowserScreenshotTask", () =>
+      ctx.screenshot({ format, fullPage })
+    );
     return { sessionId: input.sessionId, image };
   }
 }

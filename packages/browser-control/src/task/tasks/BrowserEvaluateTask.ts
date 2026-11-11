@@ -12,6 +12,7 @@ import type {
 } from "@workglow/task-graph";
 import { Entitlements, Task, TaskConfigSchema } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import { readWithinReach } from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
 const inputSchema = {
@@ -93,7 +94,9 @@ export class BrowserEvaluateTask extends Task<
   ): Promise<BrowserEvaluateTaskOutput> {
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
     const ctx = BrowserSessionRegistry.get(input.sessionId);
-    const result = await ctx.evaluate(input.expression);
+    const result = await readWithinReach(ctx, "BrowserEvaluateTask", () =>
+      ctx.evaluate(input.expression)
+    );
     return { sessionId: input.sessionId, result };
   }
 }
