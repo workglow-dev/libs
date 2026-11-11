@@ -85,8 +85,10 @@ describeModelProfileContract({
     expect(
       resolveThinkingConfig(model(name), 100, undefined, { includeThoughts: true }).thinkingConfig
     ).toEqual(thinks ? { includeThoughts: true } : undefined);
+    // Gemini 3 and later take a level, earlier thinking models a token budget.
+    const takesLevel = /^gemini-(?:[3-9]|\d{2,})/.test(name);
     expect(resolveThinkingConfig(model(name, { effort: "high" }), 100).thinkingConfig).toEqual(
-      thinks ? { thinkingBudget: 2048 } : undefined
+      !thinks ? undefined : takesLevel ? { thinkingLevel: "high" } : { thinkingBudget: 2048 }
     );
 
     // An image model bills per image: only a card the table names outright prices it.

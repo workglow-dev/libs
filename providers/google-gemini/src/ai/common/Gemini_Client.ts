@@ -4,9 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { GoogleGenAI } from "@google/genai";
+import type { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { resolveApiKey } from "@workglow/ai/provider-utils";
 import { resolveEnabledEffort, type ModelEffort } from "@workglow/ai/worker";
+import { GEMINI_API_VERSION } from "./Gemini_Constants";
 import { geminiEffortPolicy } from "./Gemini_EffortPolicy";
 import { resolveGeminiChatProfile } from "./Gemini_ModelProfiles";
 import type { GeminiModelConfig } from "./Gemini_ModelSchema";
@@ -84,7 +85,7 @@ export function createGeminiClient(model: GeminiModelConfig | undefined): Promis
   let clientPromise = _clientByKey.get(apiKey);
   if (!clientPromise) {
     clientPromise = loadGeminiSDK()
-      .then((GoogleGenAICtor) => new GoogleGenAICtor({ apiKey }))
+      .then((GoogleGenAICtor) => new GoogleGenAICtor({ apiKey, apiVersion: GEMINI_API_VERSION }))
       .catch((err) => {
         _clientByKey.delete(apiKey);
         throw err;
@@ -149,6 +150,43 @@ export function getThinkingBudget(model: GeminiModelConfig | undefined): number 
   return undefined;
 }
 
+/** Whether the model takes `thinkingLevel` (Gemini 3 and later); 2.5 answers 400 to one. */
+function takesThinkingLevel(modelName: string | undefined): boolean {
+  return modelName !== undefined && /^gemini-(?:[3-9]|\d{2,})/.test(modelName);
+}
+
+/**
+ * Maps coarse {@link ModelEffort} to Gemini's thinking levels. `none` is
+ * `minimal`: the 3.x models do not switch thinking off.
+ */
+const EFFORT_TO_THINKING_LEVEL: Record<ModelEffort, string> = {
+  none: "minimal",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  extra: "xhigh",
+  ultra: "xhigh",
+};
+
+/**
+ * Thinking level for the models that take one, which Google recommends over a
+ * token budget there. `provider_config.thinking_level` wins; an explicit
+ * `thinking_budget` is the caller's own choice and keeps the budget path;
+ * otherwise `model.effort` maps to a level. Models before Gemini 3 get
+ * `undefined` and use {@link getThinkingBudget}. `xhigh` is accepted by the API
+ * but missing from the SDK's `ThinkingLevel` enum, hence the cast.
+ */
+export function getThinkingLevel(model: GeminiModelConfig | undefined): ThinkingLevel | undefined {
+  if (!takesThinkingLevel(model?.provider_config?.model_name)) return undefined;
+  const configured = model?.provider_config?.thinking_level;
+  if (configured !== undefined) return configured as unknown as ThinkingLevel;
+  if (typeof model?.provider_config?.thinking_budget === "number") return undefined;
+  const effort = resolveEnabledEffort(model, geminiEffortPolicy(model));
+  return effort === undefined
+    ? undefined
+    : (EFFORT_TO_THINKING_LEVEL[effort] as unknown as ThinkingLevel);
+}
+
 /**
  * Sampling seed for reproducible generation, from `provider_config.seed`.
  * Returns `undefined` when unset so the request omits the field entirely and
@@ -180,15 +218,20 @@ export function resolveThinkingConfig(
   defaultBudget?: number,
   options?: { readonly includeThoughts?: boolean | undefined }
 ): {
-  thinkingConfig: { thinkingBudget?: number; includeThoughts?: boolean } | undefined;
+  thinkingConfig:
+    | { thinkingBudget?: number; thinkingLevel?: ThinkingLevel; includeThoughts?: boolean }
+    | undefined;
   maxOutputTokens: number | undefined;
 } {
-  const budget = getThinkingBudget(model) ?? defaultBudget;
+  // A level and a budget are alternatives; the API rejects both together, so a
+  // level wins and no budget is sent or padded onto the output cap.
+  const level = getThinkingLevel(model);
+  const budget = level !== undefined ? undefined : (getThinkingBudget(model) ?? defaultBudget);
   // Thought summaries exist only when the model thinks: a zero budget turns
   // thinking off, and a model the profile says does not think rejects the config.
   const thinks = budget !== 0 && geminiReturnsThoughts(model?.provider_config?.model_name);
   const includeThoughts = options?.includeThoughts === true && thinks;
-  if (budget === undefined && !includeThoughts) {
+  if (budget === undefined && level === undefined && !includeThoughts) {
     return { thinkingConfig: undefined, maxOutputTokens: maxTokens };
   }
   const maxOutputTokens =
@@ -196,6 +239,7 @@ export function resolveThinkingConfig(
   return {
     thinkingConfig: {
       ...(budget !== undefined ? { thinkingBudget: budget } : {}),
+      ...(level !== undefined ? { thinkingLevel: level } : {}),
       ...(includeThoughts ? { includeThoughts: true } : {}),
     },
     maxOutputTokens,

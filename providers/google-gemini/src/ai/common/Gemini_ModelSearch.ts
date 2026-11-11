@@ -13,7 +13,7 @@ import type {
 import { normalizedModelSearchQuery } from "@workglow/ai/provider-utils";
 import type { Capability } from "@workglow/ai/worker";
 import { stampEffortOptions } from "@workglow/ai/worker";
-import { GOOGLE_GEMINI } from "./Gemini_Constants";
+import { GEMINI_API_VERSION, GOOGLE_GEMINI } from "./Gemini_Constants";
 import { geminiEffortPolicy } from "./Gemini_EffortPolicy";
 import { geminiProfileCapabilities, resolveGeminiProfile } from "./Gemini_ModelProfiles";
 
@@ -94,7 +94,7 @@ async function listGeminiModels(
 ): Promise<ModelSearchResultItem[]> {
   const params = new URLSearchParams({ key: credentialKey });
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models?${params}`,
+    `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/models?${params}`,
     {
       signal,
     }

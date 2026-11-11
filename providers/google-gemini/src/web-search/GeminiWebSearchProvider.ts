@@ -5,6 +5,7 @@
  */
 
 import { GoogleGenAI } from "@google/genai";
+import { GEMINI_API_VERSION } from "../ai/common/Gemini_Constants";
 import { resolveApiKey } from "@workglow/ai/provider-utils";
 import type { IExecuteContext } from "@workglow/task-graph";
 import { TaskFailedError } from "@workglow/task-graph";
@@ -99,6 +100,7 @@ export class GeminiWebSearchProvider implements IWebSearchProvider {
         envVar: ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
         providerLabel: "Google",
       }),
+      apiVersion: GEMINI_API_VERSION,
     });
     return this.client;
   }

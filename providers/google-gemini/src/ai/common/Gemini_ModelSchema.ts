@@ -63,6 +63,15 @@ export const GeminiModelSchema = {
             "by this budget to leave room for the answer. 0 disables thinking; -1 lets the " +
             "model choose. Wins over model.effort when set.",
         },
+        thinking_level: {
+          type: "string",
+          enum: ["minimal", "low", "medium", "high", "xhigh"],
+          description:
+            "Thinking depth for Gemini 3 and later, where it is also what model.effort maps " +
+            "to; ignored on earlier models, which only take thinking_budget. Wins over " +
+            "model.effort and thinking_budget. The output cap is not padded: thinking " +
+            "counts against maxTokens, and xhigh can spend a lot of it.",
+        },
       },
       required: ["model_name"],
       additionalProperties: false,

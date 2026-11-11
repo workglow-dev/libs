@@ -9,6 +9,9 @@ import { describe, expect, it } from "vitest";
 
 const { resolveThinkingConfig } = _testOnly;
 
+const legacy = (extra: Record<string, unknown> = {}) =>
+  model({ provider_config: { model_name: "gemini-2.5-flash" }, ...extra });
+
 function model(extra: Record<string, unknown> = {}) {
   return {
     provider: GOOGLE_GEMINI,
@@ -25,8 +28,8 @@ describe("resolveThinkingConfig", () => {
     });
   });
 
-  it("maps model.effort when thinking_budget unset", () => {
-    expect(resolveThinkingConfig(model({ effort: "high" }), 1000)).toEqual({
+  it("maps model.effort to a budget on 2.5 when thinking_budget unset", () => {
+    expect(resolveThinkingConfig(legacy({ effort: "high" }), 1000)).toEqual({
       thinkingConfig: { thinkingBudget: 2048 },
       maxOutputTokens: 1000 + 2048,
     });
@@ -47,7 +50,7 @@ describe("resolveThinkingConfig", () => {
     });
   });
 
-  it("maps none through ultra to the pinned budgets", () => {
+  it("maps none through ultra to the pinned budgets on 2.5", () => {
     const expected: Record<string, number> = {
       none: 0,
       low: 512,
@@ -57,7 +60,7 @@ describe("resolveThinkingConfig", () => {
       ultra: 8192,
     };
     for (const [effort, budget] of Object.entries(expected)) {
-      const result = resolveThinkingConfig(model({ effort }), 100);
+      const result = resolveThinkingConfig(legacy({ effort }), 100);
       expect(result.thinkingConfig).toEqual({ thinkingBudget: budget });
       expect(result.maxOutputTokens).toBe(budget > 0 ? 100 + budget : 100);
     }
@@ -154,6 +157,62 @@ describe("resolveThinkingConfig", () => {
       expect(resolveThinkingConfig(flash({ effort: "high" }), 100, undefined, {})).toEqual({
         thinkingConfig: { thinkingBudget: 2048 },
         maxOutputTokens: 2148,
+      });
+    });
+  });
+
+  describe("effort on models that take a thinking level", () => {
+    it("maps none through ultra to levels and pads nothing", () => {
+      const expected: Record<string, string> = {
+        none: "minimal",
+        low: "low",
+        medium: "medium",
+        high: "high",
+        extra: "xhigh",
+        ultra: "xhigh",
+      };
+      for (const [effort, level] of Object.entries(expected)) {
+        expect(resolveThinkingConfig(model({ effort }), 100)).toEqual({
+          thinkingConfig: { thinkingLevel: level },
+          maxOutputTokens: 100,
+        });
+      }
+    });
+
+    it("keeps an explicit thinking_budget as a budget", () => {
+      expect(
+        resolveThinkingConfig(
+          model({
+            effort: "high",
+            provider_config: { model_name: "gemini-3.8-flash", thinking_budget: 1024 },
+          }),
+          100
+        )
+      ).toEqual({ thinkingConfig: { thinkingBudget: 1024 }, maxOutputTokens: 1124 });
+    });
+  });
+
+  describe("thinking_level", () => {
+    const withLevel = (model_name: string, extra: Record<string, unknown> = {}) =>
+      model({ provider_config: { model_name, thinking_level: "xhigh" }, ...extra });
+
+    it("sends the level on Gemini 3+ and pads nothing", () => {
+      expect(resolveThinkingConfig(withLevel("gemini-3.8-flash"), 100)).toEqual({
+        thinkingConfig: { thinkingLevel: "xhigh" },
+        maxOutputTokens: 100,
+      });
+    });
+
+    it("replaces a budget or effort rather than sending both", () => {
+      expect(
+        resolveThinkingConfig(withLevel("gemini-3.8-flash", { effort: "ultra" }), 100)
+      ).toEqual({ thinkingConfig: { thinkingLevel: "xhigh" }, maxOutputTokens: 100 });
+    });
+
+    it("is ignored on 2.5, which answers 400 to a level", () => {
+      expect(resolveThinkingConfig(withLevel("gemini-2.5-flash"), 100)).toEqual({
+        thinkingConfig: undefined,
+        maxOutputTokens: 100,
       });
     });
   });

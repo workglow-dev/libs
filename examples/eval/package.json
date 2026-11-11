@@ -49,7 +49,7 @@
     "@huggingface/transformers": "catalog:",
     "@huggingface/transformers-structured-output": "catalog:",
     "commander": "catalog:",
-    "hyparquet": "^1.32.0",
+    "hyparquet": "^1.33.0",
     "hyparquet-compressors": "^1.1.3"
   },
   "publishConfig": {
