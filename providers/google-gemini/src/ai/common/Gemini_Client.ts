@@ -9,7 +9,11 @@ import { resolveApiKey } from "@workglow/ai/provider-utils";
 import { resolveEnabledEffort, type ModelEffort } from "@workglow/ai/worker";
 import { GEMINI_API_VERSION } from "./Gemini_Constants";
 import { geminiEffortPolicy } from "./Gemini_EffortPolicy";
-import { resolveGeminiChatProfile } from "./Gemini_ModelProfiles";
+import {
+  GEMINI_THINKING_LEVELS,
+  resolveGeminiChatProfile,
+  type GeminiThinkingLevel,
+} from "./Gemini_ModelProfiles";
 import type { GeminiModelConfig } from "./Gemini_ModelSchema";
 
 /** Maps coarse {@link ModelEffort} to Gemini thinkingBudget tokens. */
@@ -150,16 +154,11 @@ export function getThinkingBudget(model: GeminiModelConfig | undefined): number 
   return undefined;
 }
 
-/** Whether the model takes `thinkingLevel` (Gemini 3 and later); 2.5 answers 400 to one. */
-function takesThinkingLevel(modelName: string | undefined): boolean {
-  return modelName !== undefined && /^gemini-(?:[3-9]|\d{2,})/.test(modelName);
-}
-
 /**
  * Maps coarse {@link ModelEffort} to Gemini's thinking levels. `none` is
  * `minimal`: the 3.x models do not switch thinking off.
  */
-const EFFORT_TO_THINKING_LEVEL: Record<ModelEffort, string> = {
+const EFFORT_TO_THINKING_LEVEL: Record<ModelEffort, GeminiThinkingLevel> = {
   none: "minimal",
   low: "low",
   medium: "medium",
@@ -169,22 +168,40 @@ const EFFORT_TO_THINKING_LEVEL: Record<ModelEffort, string> = {
 };
 
 /**
+ * `wanted`, clamped into the levels the model takes, which are a contiguous
+ * run of {@link GEMINI_THINKING_LEVELS}. Not every model takes every level —
+ * Gemini 4 Argon has neither `minimal` nor `xhigh` — and a level it does not
+ * take is a 400.
+ */
+function clampThinkingLevel(
+  wanted: GeminiThinkingLevel,
+  accepted: readonly GeminiThinkingLevel[]
+): GeminiThinkingLevel {
+  if (accepted.includes(wanted)) return wanted;
+  const lowest = accepted[0]!;
+  const below = GEMINI_THINKING_LEVELS.indexOf(wanted) < GEMINI_THINKING_LEVELS.indexOf(lowest);
+  return below ? lowest : accepted[accepted.length - 1]!;
+}
+
+/**
  * Thinking level for the models that take one, which Google recommends over a
  * token budget there. `provider_config.thinking_level` wins; an explicit
  * `thinking_budget` is the caller's own choice and keeps the budget path;
- * otherwise `model.effort` maps to a level. Models before Gemini 3 get
- * `undefined` and use {@link getThinkingBudget}. `xhigh` is accepted by the API
- * but missing from the SDK's `ThinkingLevel` enum, hence the cast.
+ * otherwise `model.effort` maps to a level, clamped to the ones the model's
+ * profile lists. Models before Gemini 3 list none, get `undefined` and use
+ * {@link getThinkingBudget}. `xhigh` is accepted by the API but missing from the
+ * SDK's `ThinkingLevel` enum, hence the cast.
  */
 export function getThinkingLevel(model: GeminiModelConfig | undefined): ThinkingLevel | undefined {
-  if (!takesThinkingLevel(model?.provider_config?.model_name)) return undefined;
+  const accepted = resolveGeminiChatProfile(model?.provider_config?.model_name)?.thinkingLevels;
+  if (accepted === undefined || accepted.length === 0) return undefined;
   const configured = model?.provider_config?.thinking_level;
   if (configured !== undefined) return configured as unknown as ThinkingLevel;
   if (typeof model?.provider_config?.thinking_budget === "number") return undefined;
   const effort = resolveEnabledEffort(model, geminiEffortPolicy(model));
   return effort === undefined
     ? undefined
-    : (EFFORT_TO_THINKING_LEVEL[effort] as unknown as ThinkingLevel);
+    : (clampThinkingLevel(EFFORT_TO_THINKING_LEVEL[effort], accepted) as unknown as ThinkingLevel);
 }
 
 /**

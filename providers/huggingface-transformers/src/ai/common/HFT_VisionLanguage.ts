@@ -250,6 +250,7 @@ export async function decodeHftImage(
  */
 const IMAGES_FIRST_PROCESSORS = [
   "Lfm2VlProcessor",
+  "Lfm3VlProcessor",
   "LlavaProcessor",
   "PaliGemmaProcessor",
   "PixtralProcessor",

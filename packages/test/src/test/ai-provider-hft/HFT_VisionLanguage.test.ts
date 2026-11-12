@@ -416,17 +416,20 @@ describe("HFT_ToolCalling on a vision-language model", () => {
     });
   });
 
-  it("passes the images first to a processor that takes them first (LFM2-VL)", async () => {
-    fake = fakeVisionModel(sdk.Lfm2VlProcessor);
-    pipelines.set(cacheKey, fake.vlm as never);
-    fake.reply(["Paris."]);
-    await runToolCalling({ messages: imageHistory() });
+  it.each(["Lfm2VlProcessor", "Lfm3VlProcessor"] as const)(
+    "passes the images first to a processor that takes them first (%s)",
+    async (processorClass) => {
+      fake = fakeVisionModel(sdk[processorClass]);
+      pipelines.set(cacheKey, fake.vlm as never);
+      fake.reply(["Paris."]);
+      await runToolCalling({ messages: imageHistory() });
 
-    const call = fake.processorCalls[0]!;
-    expect(Array.isArray(call.args[0])).toBe(true);
-    expect(typeof call.args[1]).toBe("string");
-    expect(call.images.map((i) => i.base64)).toEqual([PHOTO.data, CHART.data]);
-  });
+      const call = fake.processorCalls[0]!;
+      expect(Array.isArray(call.args[0])).toBe(true);
+      expect(typeof call.args[1]).toBe("string");
+      expect(call.images.map((i) => i.base64)).toEqual([PHOTO.data, CHART.data]);
+    }
+  );
 
   // Gemma 3n and 4 take `(text, images, audio, options)`: options passed third
   // are read as audio and handed to the feature extractor.

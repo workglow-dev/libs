@@ -11,12 +11,31 @@ import { normalizeAnthropicModelId } from "./Anthropic_ModelId";
 /**
  * Public list pricing for Anthropic Claude models (USD per 1M tokens).
  *
- * No card carries a long-context tier, and that is not an omission: the
- * 1M-context models (Opus 4.6 and later, Sonnet 4.6 and later, Fable) bill a
- * long prompt at these same rates, and every other model here has a 200K
- * window, so no prompt size could select one.
+ * Only Haiku 5.5 carries a long-context tier: it bills a prompt over 100K
+ * tokens at five times its base rates. The other 1M-context models (Opus 4.6
+ * and later, Sonnet 4.6 and later, Fable) bill a long prompt at their same
+ * rates, and every other model here has a 200K window.
  */
 export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
+  "claude-fable-5-2": {
+    currency: "USD",
+    input: 8,
+    output: 40,
+    cached: 0.2,
+    cacheWrite: {
+      cacheWrite5m: 10,
+      cacheWrite1h: 16,
+    },
+    batch: {
+      input: 4,
+      output: 20,
+      cached: 0.1,
+      cacheWrite: {
+        cacheWrite5m: 5,
+        cacheWrite1h: 8,
+      },
+    },
+  },
   "claude-fable-5-1": {
     currency: "USD",
     input: 10,
@@ -78,7 +97,7 @@ export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
     currency: "USD",
     input: 2,
     output: 10,
-    cached: 0.2,
+    cached: 0.1,
     cacheWrite: {
       cacheWrite5m: 2.5,
       cacheWrite1h: 4,
@@ -86,10 +105,51 @@ export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
     batch: {
       input: 1,
       output: 5,
-      cached: 0.1,
+      cached: 0.05,
       cacheWrite: {
         cacheWrite5m: 1.25,
         cacheWrite1h: 2,
+      },
+    },
+  },
+  // The lower tier restates the base rates so a prompt of exactly 100K stays
+  // on it: tiers resolve in declared order.
+  "claude-haiku-5-5": {
+    currency: "USD",
+    input: 0.1,
+    output: 0.5,
+    cached: 0.01,
+    cacheWrite: {
+      cacheWrite5m: 0.125,
+      cacheWrite1h: 0.2,
+    },
+    usageTiers: [
+      {
+        maxInputTokens: 100_000,
+        pricing: {
+          input: 0.1,
+          output: 0.5,
+          cached: 0.01,
+          cacheWrite: { cacheWrite5m: 0.125, cacheWrite1h: 0.2 },
+        },
+      },
+      {
+        minInputTokens: 100_000,
+        pricing: {
+          input: 0.5,
+          output: 2.5,
+          cached: 0.05,
+          cacheWrite: { cacheWrite5m: 0.625, cacheWrite1h: 1 },
+        },
+      },
+    ],
+    batch: {
+      input: 0.05,
+      output: 0.25,
+      cached: 0.005,
+      cacheWrite: {
+        cacheWrite5m: 0.0625,
+        cacheWrite1h: 0.1,
       },
     },
   },

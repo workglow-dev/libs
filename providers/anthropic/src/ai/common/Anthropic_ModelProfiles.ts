@@ -93,12 +93,16 @@ const UNREADABLE: AnthropicModelProfile = { ...BUDGET, acceptsSamplingParams: fa
  * from what {@link defaultAnthropicProfile} would answer for them.
  */
 export const ANTHROPIC_MODEL_PROFILES: Readonly<Record<string, AnthropicModelProfile>> = {
+  "claude-fable-5-2": NEWEST,
   "claude-fable-5-1": NEWEST,
   "claude-fable-5": GENERATION_5,
+  "claude-mythos-5-2": NEWEST,
   "claude-mythos-5-1": NEWEST,
   "claude-mythos-5": GENERATION_5,
   "claude-opus-5-5": NEWEST,
   "claude-sonnet-5-5": { ...NEWEST, minimalThinking: "between_tools" },
+  // Haiku 5.5 still takes a forced tool choice, like the first generation-5 releases.
+  "claude-haiku-5-5": GENERATION_5,
   "claude-opus-5": GENERATION_5,
   "claude-sonnet-5": GENERATION_5,
   "claude-opus-4-8": { ...ADAPTIVE_4, supportsOutputFormat: true, acceptsSamplingParams: false },
@@ -118,6 +122,7 @@ export const ANTHROPIC_MODEL_PROFILES: Readonly<Record<string, AnthropicModelPro
 
 /** Rows for models `ANTHROPIC_PRICING` has no card for; the contract test allows exactly these. */
 export const ANTHROPIC_UNPRICED_PROFILE_IDS: ReadonlySet<string> = new Set([
+  "claude-mythos-5-2",
   "claude-mythos-5-1",
   "claude-mythos-5",
   "claude-opus-4-5",

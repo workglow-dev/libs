@@ -59,7 +59,7 @@ const chat = (
   ...overrides,
 });
 
-/** The gpt-6 family always reasons. */
+/** The gpt-6 flagships (Astra, Sol) always reason; Terra and Luna take `effort: "none"`. */
 const ALWAYS_REASONING = chat("always");
 const REASONING = chat("optional");
 /** The GPT-5.6 family keeps a pinned temperature when reasoning is turned off. */
@@ -80,8 +80,9 @@ const GPT_IMAGE: OpenAiImageProfile = {
 export const OPENAI_MODEL_PROFILES: Readonly<Record<string, OpenAiModelProfile>> = {
   "gpt-6-astra": ALWAYS_REASONING,
   "gpt-6.1-sol": ALWAYS_REASONING,
+  "gpt-6.1-terra": REASONING,
   "gpt-6-sol": ALWAYS_REASONING,
-  "gpt-6-luna": ALWAYS_REASONING,
+  "gpt-6-luna": REASONING,
   "gpt-5.6": REASONING_WITH_TEMPERATURE,
   "gpt-5.6-sol": REASONING_WITH_TEMPERATURE,
   "gpt-5.6-terra": REASONING_WITH_TEMPERATURE,
@@ -107,6 +108,8 @@ export const OPENAI_MODEL_PROFILES: Readonly<Record<string, OpenAiModelProfile>>
   "o1-mini": chat("optional", { vision: false }),
   "text-embedding-3-small": EMBEDDING,
   "text-embedding-3-large": EMBEDDING,
+  "gpt-image-2.6-sunburst": GPT_IMAGE,
+  "gpt-image-2.6-flare": GPT_IMAGE,
   "gpt-image-2.5-sunburst": GPT_IMAGE,
   "gpt-image-2.5-flare": GPT_IMAGE,
   "gpt-image-2": GPT_IMAGE,
