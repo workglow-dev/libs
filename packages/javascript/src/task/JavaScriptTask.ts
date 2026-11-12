@@ -89,7 +89,9 @@ async function runInSlices(
         if (maxTimerWaitMs === undefined) return;
         const pending = Math.max((interpreter.tasks[0]?.time ?? 0) - Date.now(), 0);
         if (timerWaitMs + pending > maxTimerWaitMs) {
-          throw new Error(`script's timers would wait longer than ${maxTimerWaitMs} ms`);
+          throw new Error(
+            `script's timers would wait longer than ${maxTimerWaitMs} ms (config.maxTimerWaitMs)`
+          );
         }
         const sleptFrom = performance.now();
         await sleep(Math.min(pending, SLICE_MS));
