@@ -7,6 +7,7 @@
 import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
 import { Task, TaskConfigSchema } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import { readWithinReach } from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 import type { AccessibilityTree } from "../IBrowserContext";
 
@@ -74,7 +75,7 @@ export class BrowserSnapshotTask extends Task<
   ): Promise<BrowserSnapshotTaskOutput> {
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
     const ctx = BrowserSessionRegistry.get(input.sessionId);
-    const tree = await ctx.snapshot();
+    const tree = await readWithinReach(ctx, "BrowserSnapshotTask", () => ctx.snapshot());
     return { sessionId: input.sessionId, tree };
   }
 }

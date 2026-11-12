@@ -15,6 +15,7 @@ import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import {
   assertLandedWithinReach,
   assertNavigableUrl,
+  assertResolvesPublic,
   navigationEntitlements,
 } from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
@@ -127,12 +128,13 @@ export class BrowserNavigateTask extends Task<
   ): Promise<BrowserNavigateTaskOutput> {
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
     assertNavigableUrl(input.url, "BrowserNavigateTask");
+    await assertResolvesPublic(input.url, "BrowserNavigateTask");
     const ctx = BrowserSessionRegistry.get(input.sessionId);
     const waitUntil = this.config.waitUntil ?? "load";
     await ctx.navigate(input.url, { waitUntil });
     const url = await ctx.currentUrl();
     try {
-      assertLandedWithinReach(input.url, url, "BrowserNavigateTask");
+      await assertLandedWithinReach(ctx, input.url, url, "BrowserNavigateTask");
     } catch (err) {
       // Leave nothing a later extract or screenshot task could read. A failed reset
       // must not replace the refusal.

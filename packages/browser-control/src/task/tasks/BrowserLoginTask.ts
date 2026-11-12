@@ -21,6 +21,7 @@ import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
 import {
   assertLandedWithinReach,
   assertNavigableUrl,
+  assertResolvesPublic,
   navigationEntitlements,
 } from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
@@ -133,9 +134,10 @@ export class BrowserLoginTask extends Task<
     }
     const connector = resolveHumanConnector(executeContext);
 
+    await assertResolvesPublic(input.url, "BrowserLoginTask");
     await ctx.navigate(input.url);
     try {
-      assertLandedWithinReach(input.url, await ctx.currentUrl(), "BrowserLoginTask");
+      await assertLandedWithinReach(ctx, input.url, await ctx.currentUrl(), "BrowserLoginTask");
     } catch (err) {
       // As BrowserNavigateTask: clear the page, and keep the refusal if that fails.
       await ctx.navigate("about:blank").catch(() => undefined);

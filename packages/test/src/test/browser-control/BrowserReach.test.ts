@@ -5,10 +5,16 @@
  */
 
 import {
+  BrowserAttributeTask,
+  BrowserEvaluateTask,
+  BrowserExtractHtmlTask,
+  BrowserExtractTextTask,
   BrowserLoginTask,
   BrowserNavigateTask,
   BrowserNewTabTask,
+  BrowserScreenshotTask,
   BrowserSessionRegistry,
+  BrowserSnapshotTask,
   BrowserUploadTask,
 } from "@workglow/browser-control/task";
 import type { IExecuteContext, TaskEntitlements } from "@workglow/task-graph";
@@ -22,10 +28,11 @@ import {
   TaskInvalidInputError,
 } from "@workglow/task-graph";
 import { Container, ServiceRegistry } from "@workglow/util";
+import dns from "node:dns";
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MockBrowserContext } from "../browser/MockBrowserContext";
 
@@ -38,6 +45,30 @@ const context = { signal: new AbortController().signal } as unknown as IExecuteC
 function find(ents: TaskEntitlements, id: string) {
   return ents.entitlements.find((e) => e.id === id);
 }
+
+// DNS is mocked: these names answer with a private address, everything else with a
+// public one, and nothing reaches the network.
+const PRIVATE_ANSWERS: Record<string, string> = {
+  "169.254.169.254.nip.io": "169.254.169.254",
+  "rebind.example.com": "10.0.0.7",
+  "mixed.example.com": "127.0.0.1",
+};
+
+let lookup: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  lookup = vi.spyOn(dns.promises, "lookup");
+  lookup.mockImplementation((async (host: string) => {
+    if (host === "mixed.example.com") {
+      return [
+        { address: "93.184.216.34", family: 4 },
+        { address: "127.0.0.1", family: 4 },
+      ];
+    }
+    const priv = PRIVATE_ANSWERS[host];
+    return [{ address: priv ?? "93.184.216.34", family: 4 }];
+  }) as never);
+});
+afterEach(() => vi.restoreAllMocks());
 
 describe("browser navigation reach", () => {
   let ctx: MockBrowserContext;
@@ -150,6 +181,119 @@ describe("browser navigation reach", () => {
     await expect(
       new BrowserNavigateTask().execute({ sessionId, url: "https://example.com/x" }, context)
     ).rejects.toBeInstanceOf(TaskEntitlementError);
+  });
+
+  // classifyUrl reads only the name; a public-looking name answering with a private
+  // address is refused as safeFetch refuses it, with or without network:private.
+  it.each([
+    ["http://169.254.169.254.nip.io/latest/meta-data/"],
+    ["https://rebind.example.com/"],
+    ["https://mixed.example.com/"],
+  ])("refuses %s, a public name resolving to a private address", async (url) => {
+    await expect(
+      new BrowserNavigateTask().execute({ sessionId, url }, context)
+    ).rejects.toBeInstanceOf(TaskEntitlementError);
+    await expect(
+      new BrowserNewTabTask().execute({ sessionId, url }, context)
+    ).rejects.toBeInstanceOf(TaskEntitlementError);
+    expect(ctx.calls.some((c) => c.method === "navigate" || c.method === "newTab")).toBe(false);
+  });
+
+  it("refuses a public navigation redirected to a name resolving privately", async () => {
+    redirectTo("http://169.254.169.254.nip.io/latest/meta-data/");
+    await expect(
+      new BrowserNavigateTask().execute({ sessionId, url: "https://example.com/x" }, context)
+    ).rejects.toBeInstanceOf(TaskEntitlementError);
+    expect(ctx.currentPage.url).toBe("about:blank");
+  });
+
+  it("refuses when the name cannot be resolved", async () => {
+    lookup.mockRejectedValueOnce(new Error("ENOTFOUND"));
+    await expect(
+      new BrowserNavigateTask().execute({ sessionId, url: "https://gone.example.com/" }, context)
+    ).rejects.toBeInstanceOf(TaskEntitlementError);
+  });
+
+  // An empty answer proves nothing about where the browser's own lookup will land.
+  it("refuses when the name resolves to no address", async () => {
+    lookup.mockResolvedValueOnce([] as never);
+    await expect(
+      new BrowserNavigateTask().execute({ sessionId, url: "https://empty.example.com/" }, context)
+    ).rejects.toBeInstanceOf(TaskEntitlementError);
+  });
+
+  // A page can move after its navigation was checked: a meta refresh, a script setting
+  // location, a click. Every task that hands the page back checks where it is first.
+  describe("a page that moved after it loaded", () => {
+    const readers: readonly [string, () => Promise<unknown>][] = [
+      ["text", () => new BrowserExtractTextTask().execute({ sessionId }, context)],
+      [
+        "html",
+        () =>
+          new BrowserExtractHtmlTask({ selector: "body" } as never).execute({ sessionId }, context),
+      ],
+      ["screenshot", () => new BrowserScreenshotTask().execute({ sessionId }, context)],
+      ["snapshot", () => new BrowserSnapshotTask().execute({ sessionId }, context)],
+      [
+        "attribute",
+        () =>
+          new BrowserAttributeTask().execute(
+            { sessionId, ref: "e1", attribute: "href" } as never,
+            context
+          ),
+      ],
+      [
+        "evaluate",
+        () =>
+          new BrowserEvaluateTask().execute({ sessionId, expression: "document.title" }, context),
+      ],
+    ];
+
+    it.each(readers)("%s refuses a private host no navigation declared", async (_name, read) => {
+      await new BrowserNavigateTask().execute({ sessionId, url: "https://example.com/x" }, context);
+      ctx.currentPage.url = "http://169.254.169.254/latest/meta-data/";
+      await expect(read()).rejects.toBeInstanceOf(TaskEntitlementError);
+    });
+
+    it.each(readers)("%s refuses a public name resolving privately", async (_name, read) => {
+      await new BrowserNavigateTask().execute({ sessionId, url: "https://example.com/x" }, context);
+      ctx.currentPage.url = "https://rebind.example.com/";
+      await expect(read()).rejects.toBeInstanceOf(TaskEntitlementError);
+    });
+
+    it("refuses a page that moves while it is being read", async () => {
+      await new BrowserNavigateTask().execute({ sessionId, url: "https://example.com/x" }, context);
+      ctx.textContent = async () => {
+        ctx.currentPage.url = "http://10.0.0.9/";
+        return "secret";
+      };
+      await expect(
+        new BrowserExtractTextTask().execute({ sessionId }, context)
+      ).rejects.toBeInstanceOf(TaskEntitlementError);
+    });
+
+    it("reads a public page, and a private one a navigation declared", async () => {
+      await new BrowserNavigateTask().execute(
+        { sessionId, url: "https://public.example.test/x" },
+        context
+      );
+      await expect(
+        new BrowserExtractTextTask().execute({ sessionId }, context)
+      ).resolves.toBeDefined();
+      await new BrowserNavigateTask().execute(
+        { sessionId, url: "http://10.0.0.5:8080/before" },
+        context
+      );
+      ctx.currentPage.url = "http://10.0.0.5:8080/elsewhere";
+      await expect(
+        new BrowserExtractTextTask().execute({ sessionId }, context)
+      ).resolves.toBeDefined();
+      // Declaring one private origin does not admit another.
+      ctx.currentPage.url = "http://10.0.0.6:8080/";
+      await expect(
+        new BrowserExtractTextTask().execute({ sessionId }, context)
+      ).rejects.toBeInstanceOf(TaskEntitlementError);
+    });
   });
 
   // A new tab given a url navigates as surely as BrowserNavigateTask does.

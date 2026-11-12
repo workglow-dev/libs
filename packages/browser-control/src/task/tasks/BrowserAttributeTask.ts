@@ -7,6 +7,7 @@
 import type { CachePolicy, IExecuteContext, TaskConfig } from "@workglow/task-graph";
 import { Task, TaskConfigSchema } from "@workglow/task-graph";
 import type { DataPortSchema, FromSchema } from "@workglow/util/schema";
+import { readWithinReach } from "../BrowserReachPolicy";
 import { BrowserSessionRegistry } from "../BrowserSessionRegistry";
 
 const inputSchema = {
@@ -82,7 +83,9 @@ export class BrowserAttributeTask extends Task<
   ): Promise<BrowserAttributeTaskOutput> {
     executeContext.resourceScope?.touch(`browser:${input.sessionId}`);
     const ctx = BrowserSessionRegistry.get(input.sessionId);
-    const value = await ctx.attribute(input.ref, input.attribute);
+    const value = await readWithinReach(ctx, "BrowserAttributeTask", () =>
+      ctx.attribute(input.ref, input.attribute)
+    );
     return { sessionId: input.sessionId, value };
   }
 }
