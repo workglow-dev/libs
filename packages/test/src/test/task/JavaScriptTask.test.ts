@@ -436,6 +436,38 @@ describe("JavaScriptTask", () => {
     ).resolves.toBeDefined();
   });
 
+  // Waiting spends no steps, so without a bound of its own a far-off timer or an endless
+  // interval kept a run alive until something aborted it.
+  test("a run whose timer is due past its wait budget fails at once", async () => {
+    const started = Date.now();
+    await expect(
+      new JavaScriptTask({ maxSteps: 1000 }).run({
+        javascript_code: "setTimeout(function () {}, 1e12); 1",
+      })
+    ).rejects.toThrow(/10000 ms/);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  test("an endless interval runs its wait budget out", async () => {
+    const started = Date.now();
+    await expect(
+      new JavaScriptTask({ maxTimerWaitMs: 200 }).run({
+        javascript_code: "var n = 0; setInterval(function () { n++; }, 1);",
+      })
+    ).rejects.toThrow(/200 ms/);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  test("timers inside the wait budget still fire", async () => {
+    // The run's value is the last expression evaluated, here inside the timeout.
+    const result = await new JavaScriptTask({ maxTimerWaitMs: 1000 }).run({
+      javascript_code:
+        "var n = 0; var id = setInterval(function () { if (++n === 3) clearInterval(id); }, 20);" +
+        " setTimeout(function () { n += 10; n; }, 100);",
+    });
+    expect(result.output).toBe(13);
+  });
+
   test("a preview does not wait on a timer that never stops", async () => {
     const started = Date.now();
     await new JavaScriptTask().runPreview({

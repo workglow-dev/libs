@@ -36,6 +36,12 @@ const STEPS_PER_CLOCK_CHECK = 10_000;
  */
 const DEFAULT_MAX_STEPS = 50_000_000;
 const PREVIEW_MAX_STEPS = 1_000_000;
+/**
+ * Default wall-clock time a run may spend waiting for its timers. Waiting takes no
+ * steps, so the step budget alone never ends a run that sleeps on a far-off timer or
+ * an interval.
+ */
+const DEFAULT_MAX_TIMER_WAIT_MS = 10_000;
 
 /** `Status.DONE`, `TASK` and `ASYNC` from the interpreter; its enum is a `const enum` with no value module. */
 const DONE_STATUS = 0;
@@ -61,16 +67,18 @@ async function runInSlices(
   interpreter: Interpreter,
   signal: AbortSignal | undefined,
   maxSteps: number,
-  waitForTimers: boolean
+  maxTimerWaitMs: number | undefined
 ): Promise<void> {
   let sliceEnd = performance.now() + SLICE_MS;
   let steps = 0;
+  let timerWaitMs = 0;
   for (;;) {
     // Paused on an async native (a regex the interpreter runs in a Worker where it has
     // no `vm`): step() would report progress without making any, and the wait would be
     // charged to the budget. Let the event loop deliver the answer instead.
     // A queued timer not yet due is the same: nothing runs until it is, so a run sleeps
-    // until then (in slices, so an abort is still noticed) rather than spin.
+    // until then (in slices, so an abort is still noticed) rather than spin, within
+    // its timer-wait budget.
     let status = interpreter.getStatus();
     for (; ; status = interpreter.getStatus()) {
       if (status === ASYNC_STATUS) {
@@ -78,9 +86,16 @@ async function runInSlices(
       } else if (status === TASK_STATUS) {
         // A preview must be quick and cannot be aborted: it shows what the script
         // has computed by the time only timers are left.
-        if (!waitForTimers) return;
-        const due = interpreter.tasks[0]?.time ?? Date.now();
-        await sleep(Math.min(Math.max(due - Date.now(), 0), SLICE_MS));
+        if (maxTimerWaitMs === undefined) return;
+        const pending = Math.max((interpreter.tasks[0]?.time ?? 0) - Date.now(), 0);
+        if (timerWaitMs + pending > maxTimerWaitMs) {
+          throw new Error(
+            `script's timers would wait longer than ${maxTimerWaitMs} ms (config.maxTimerWaitMs)`
+          );
+        }
+        const sleptFrom = performance.now();
+        await sleep(Math.min(pending, SLICE_MS));
+        timerWaitMs += performance.now() - sleptFrom;
       } else {
         break;
       }
@@ -105,7 +120,7 @@ async function runJavaScript(
   configuredCode: string | undefined,
   signal: AbortSignal | undefined,
   maxSteps: number,
-  waitForTimers: boolean
+  maxTimerWaitMs: number | undefined
 ): Promise<JavaScriptTaskOutput> {
   const output = {} as JavaScriptTaskOutput;
   const code = input.javascript_code || configuredCode;
@@ -118,7 +133,7 @@ async function runJavaScript(
         .map((key) => `var ${key} = ${JSON.stringify(input[key])};`)
         .join("\n");
       const myInterpreter = new Interpreter(`${inputVariablesString} ${code}`);
-      await runInSlices(myInterpreter, signal, maxSteps, waitForTimers);
+      await runInSlices(myInterpreter, signal, maxSteps, maxTimerWaitMs);
       // The interpreter's value is a sandboxed pseudo-object for arrays/objects; callers
       // expect plain JS, so unwrap it. Primitives pass through untouched.
       output.output = myInterpreter.pseudoToNative(myInterpreter.value);
@@ -148,6 +163,12 @@ const configSchema = {
       minimum: 1,
       title: "Max Steps",
       description: `Interpreter steps a run may take before it is stopped (default ${DEFAULT_MAX_STEPS}); a preview takes at most ${PREVIEW_MAX_STEPS}`,
+    },
+    maxTimerWaitMs: {
+      type: "integer",
+      minimum: 0,
+      title: "Max Timer Wait (ms)",
+      description: `Total time a run may wait for setTimeout/setInterval before it is stopped (default ${DEFAULT_MAX_TIMER_WAIT_MS}); a preview never waits`,
     },
   },
   additionalProperties: false,
@@ -185,6 +206,7 @@ export type JavaScriptTaskOutput = FromSchema<typeof outputSchema>;
 export type JavaScriptTaskConfig = TaskConfig & {
   javascript_code?: string;
   maxSteps?: number;
+  maxTimerWaitMs?: number;
 };
 
 export class JavaScriptTask extends Task<
@@ -257,7 +279,7 @@ export class JavaScriptTask extends Task<
       this.config.javascript_code,
       context.signal,
       this.config.maxSteps ?? DEFAULT_MAX_STEPS,
-      true
+      this.config.maxTimerWaitMs ?? DEFAULT_MAX_TIMER_WAIT_MS
     );
   }
 
@@ -267,7 +289,7 @@ export class JavaScriptTask extends Task<
       this.config.javascript_code,
       undefined,
       Math.min(this.config.maxSteps ?? PREVIEW_MAX_STEPS, PREVIEW_MAX_STEPS),
-      false
+      undefined
     );
   }
 }
