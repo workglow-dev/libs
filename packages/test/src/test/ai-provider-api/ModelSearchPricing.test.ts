@@ -114,6 +114,8 @@ const NOT_TOKEN_BILLED = new Set(["image.generation", "audio.speech", "audio.tra
  */
 const TOKEN_BILLED_IMAGE_MODELS = new Set([
   "gpt-image-2",
+  "gpt-image-2.6-sunburst",
+  "gpt-image-2.6-flare",
   "gpt-image-2.5-sunburst",
   "gpt-image-2.5-flare",
 ]);
@@ -248,6 +250,7 @@ describe("a rate card must match the model's billing unit", () => {
   it.each([
     ["gpt-6-astra", 10, 12.5],
     ["gpt-6.1-sol", 2, 2.5],
+    ["gpt-6.1-terra", 1, 1.25],
     ["gpt-5.6-sol", 4, 5],
     ["gpt-5.6-terra", 2, 2.5],
     ["gpt-5.6-luna", 0.2, 0.25],
@@ -256,7 +259,7 @@ describe("a rate card must match the model's billing unit", () => {
     ["gpt-5.4-mini", 0.75, 0.75],
     ["gpt-5", 1.25, 1.25],
     ["gpt-4o", 2.5, 2.5],
-    ["o3", 5, 5],
+    ["o3", 2, 2],
   ] as const)("OpenAI prices a cache write on %s", (id, input, cacheWrite) => {
     const card = getOpenAiModelPricing(id);
     expect(card?.input).toBe(input);

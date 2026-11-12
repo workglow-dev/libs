@@ -148,16 +148,26 @@ describe("OpenAI long-context pricing", () => {
 });
 
 /**
- * Anthropic bills a long prompt at the card's standard rates: the 1M-context
- * models carry no long-context premium, and every other model in the table has
- * a 200K window, so no prompt could select a tier. The absence is deliberate —
- * this fails if one is added without published rates behind it.
+ * Anthropic bills a long prompt at the card's standard rates, with one
+ * exception: Haiku 5.5 bills a prompt over 100K tokens at five times its base
+ * rates. The other 1M-context models carry no long-context premium, and every
+ * other model in the table has a 200K window, so no prompt could select a tier.
+ * The absence is deliberate — this fails if one is added without published
+ * rates behind it.
  */
 describe("Anthropic long-context pricing", () => {
-  it("declares no usage tier on any card", () => {
+  const TIERED = new Set(["claude-haiku-5-5"]);
+
+  it("declares a usage tier only on Haiku 5.5", () => {
     for (const [id, card] of Object.entries(ANTHROPIC_PRICING)) {
-      expect(card.usageTiers, `${id} declares a usage tier`).toBeUndefined();
+      expect(card.usageTiers !== undefined, `${id} usage tier`).toBe(TIERED.has(id));
     }
+  });
+
+  it("prices Haiku 5.5 at five times its rates above 100K, and at the base rate at exactly 100K", () => {
+    const pricing = ANTHROPIC_PRICING["claude-haiku-5-5"];
+    expect(inputRate(pricing, 100_000)).toBeCloseTo(0.1, 10);
+    expect(inputRate(pricing, 100_001)).toBeCloseTo(0.5, 10);
   });
 
   it("prices a 250K-token prompt at the same per-token rate as a small one", () => {

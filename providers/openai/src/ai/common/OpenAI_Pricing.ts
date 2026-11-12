@@ -77,11 +77,11 @@ function flagshipCard(rates: OpenAiTokenRates): ModelPricing {
 /**
  * GPT Image is billed per token rather than per image, over three buckets: text
  * input, image input at a higher rate, and image output. The published row is
- * the same for gpt-image-2 and the 2.5 pair.
+ * the same for gpt-image-2 and the 2.5 and 2.6 pairs.
  *
  * A factory rather than one shared constant because {@link OPENAI_PRICING} is
- * exported with mutable rate fields: three keys aliasing one object would let a
- * consumer correcting one id's rate silently reprice the other two.
+ * exported with mutable rate fields: keys aliasing one object would let a
+ * consumer correcting one id's rate silently reprice the others.
  *
  * No cache rate beyond the text one is declared, and none is derived. The
  * Images API reports no cache counters at all, so `imageCached` never has a
@@ -101,6 +101,7 @@ function gptImageCard(): ModelPricing {
 export const OPENAI_PRICING: Record<string, ModelPricing> = {
   "gpt-6-astra": flagshipCard({ input: 10, output: 50, cached: 1, cacheWrite: 12.5 }),
   "gpt-6.1-sol": flagshipCard({ input: 2, output: 10, cached: 0.1, cacheWrite: 2.5 }),
+  "gpt-6.1-terra": flagshipCard({ input: 1, output: 5, cached: 0.05, cacheWrite: 1.25 }),
   "gpt-6-sol": flagshipCard({ input: 2, output: 10, cached: 0.2, cacheWrite: 2.5 }),
   "gpt-6-luna": flagshipCard({ input: 0.1, output: 0.5, cached: 0.01, cacheWrite: 0.125 }),
   "gpt-5.6-sol": flagshipCard({ input: 4, output: 20, cached: 0.4, cacheWrite: 5 }),
@@ -121,13 +122,15 @@ export const OPENAI_PRICING: Record<string, ModelPricing> = {
   "gpt-4o": standardCard({ input: 2.5, output: 10, cached: 1.25 }),
   "gpt-4o-mini": standardCard({ input: 0.15, output: 0.6, cached: 0.075 }),
   "o3-mini": standardCard({ input: 1.1, output: 4.4, cached: 0.55 }),
-  o3: standardCard({ input: 5, output: 20, cached: 2.5 }),
+  o3: standardCard({ input: 2, output: 8, cached: 0.5 }),
   o1: standardCard({ input: 15, output: 60, cached: 7.5 }),
   "o1-mini": standardCard({ input: 1.1, output: 4.4, cached: 0.55 }),
   // Embeddings are not cacheable, so these carry no cache rate at all rather
   // than the input-rate cache write every chat card gets.
   "text-embedding-3-small": { currency: "USD", input: 0.02, output: 0 },
   "text-embedding-3-large": { currency: "USD", input: 0.13, output: 0 },
+  "gpt-image-2.6-sunburst": gptImageCard(),
+  "gpt-image-2.6-flare": gptImageCard(),
   "gpt-image-2.5-sunburst": gptImageCard(),
   "gpt-image-2.5-flare": gptImageCard(),
   "gpt-image-2": gptImageCard(),

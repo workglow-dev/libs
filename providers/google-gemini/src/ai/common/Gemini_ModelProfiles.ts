@@ -24,7 +24,21 @@ export interface GeminiChatProfile {
   readonly multimodalFunctionResponses: boolean;
   /** Serves `cachedContents` and `countTokens`, which the legacy 1.0 ids predate. */
   readonly cachedContent: boolean;
+  /**
+   * The `thinkingLevel` values the model accepts, lowest first. Gemini 3 and
+   * later take a level rather than a token budget, but not every model takes
+   * every level — Gemini 4 Argon and Carbon have no `minimal` or `xhigh` — so
+   * an effort is clamped into this list, which must be a contiguous run of
+   * {@link GEMINI_THINKING_LEVELS}. Empty for a model that takes a budget
+   * instead, or does not think.
+   */
+  readonly thinkingLevels: readonly GeminiThinkingLevel[];
 }
+
+/** Every `thinkingLevel` the API defines, lowest first. */
+export const GEMINI_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+
+export type GeminiThinkingLevel = (typeof GEMINI_THINKING_LEVELS)[number];
 
 export interface GeminiEmbeddingProfile {
   readonly kind: "embedding";
@@ -50,11 +64,34 @@ const chat = (overrides: Partial<Omit<GeminiChatProfile, "kind">> = {}): GeminiC
   thinks: true,
   multimodalFunctionResponses: false,
   cachedContent: true,
+  thinkingLevels: [],
   ...overrides,
 });
 
-/** Gemini 3 and later: thinking, and images inside a tool result. */
-const GENERATION_3 = chat({ multimodalFunctionResponses: true });
+/** Gemini 3 and later: thinking levels, and images inside a tool result. */
+const GENERATION_3 = chat({
+  multimodalFunctionResponses: true,
+  thinkingLevels: GEMINI_THINKING_LEVELS,
+});
+/** Gemini 3.5 Flash-Lite tops out at `high`. */
+const FLASH_LITE_3_5 = chat({
+  multimodalFunctionResponses: true,
+  thinkingLevels: ["minimal", "low", "medium", "high"],
+});
+/**
+ * Gemini 4 Argon and Carbon take neither `minimal` nor `xhigh`. An unlisted
+ * Gemini 4 id gets this too: these three levels are the ones every Gemini 4
+ * model accepts.
+ */
+const GENERATION_4 = chat({
+  multimodalFunctionResponses: true,
+  thinkingLevels: ["low", "medium", "high"],
+});
+/** Gemini 4 Hydrogen adds `xhigh`, and still has no `minimal`. */
+const GENERATION_4_HYDROGEN = chat({
+  multimodalFunctionResponses: true,
+  thinkingLevels: ["low", "medium", "high", "xhigh"],
+});
 /** Gemini 2.5 and the `-latest` aliases: thinking, images beside a tool result. */
 const THINKING = chat();
 /** Gemini 1.5 and 2.0: the modern API surface, no thinking. */
@@ -71,10 +108,13 @@ const IMAGEN: GeminiImageProfile = { kind: "image", editing: false };
  * until both exist. An id with no row is answered by {@link GEMINI_MODEL_FAMILIES}.
  */
 export const GEMINI_MODEL_PROFILES: Readonly<Record<string, GeminiModelProfile>> = {
+  "gemini-4-carbon": GENERATION_4,
+  "gemini-4-argon": GENERATION_4,
+  "gemini-4-hydrogen": GENERATION_4_HYDROGEN,
   "gemini-3.8-flash": GENERATION_3,
   "gemini-3.7-flash": GENERATION_3,
   "gemini-3.6-flash": GENERATION_3,
-  "gemini-3.5-flash-lite": GENERATION_3,
+  "gemini-3.5-flash-lite": FLASH_LITE_3_5,
   "gemini-3.5-flash": GENERATION_3,
   "gemini-3.1-flash-lite": GENERATION_3,
   "gemini-3.1-pro-preview": GENERATION_3,
@@ -84,7 +124,10 @@ export const GEMINI_MODEL_PROFILES: Readonly<Record<string, GeminiModelProfile>>
   "gemini-2.5-flash": THINKING,
   "gemini-2.5-pro": THINKING,
   "gemini-embedding-2": EMBEDDING,
+  "gemini-embedding-001": EMBEDDING,
   "text-embedding-004": EMBEDDING,
+  "gemini-nano-banana-2.1": GEMINI_IMAGE,
+  "gemini-3.1-flash-lite-image": GEMINI_IMAGE,
   "gemini-3.1-flash-image": GEMINI_IMAGE,
   "gemini-3-pro-image": GEMINI_IMAGE,
   "imagen-4.0-generate-001": IMAGEN,
@@ -109,10 +152,11 @@ export const GEMINI_UNPRICED_PROFILE_IDS: ReadonlySet<string> = new Set([
 export const GEMINI_MODEL_FAMILIES: readonly ModelProfileFamily<GeminiModelProfile>[] = [
   { when: [/^text-embedding/, /^embedding-\d/, /^gemini-embedding/], profile: EMBEDDING },
   { when: /^imagen-/, profile: IMAGEN },
-  { when: /^gemini-.*-image(?:-|$)/, profile: GEMINI_IMAGE },
+  { when: [/^gemini-.*-image(?:-|$)/, /^gemini-nano-banana(?:-|$)/], profile: GEMINI_IMAGE },
   { when: /^gemini-1\.0-pro(?:$|-(?!vision))/, profile: LEGACY },
   { when: /^gemini-(?:1\.5|2\.0)/, profile: PRE_THINKING },
   { when: /^gemini-2\.5(?:[.-]|$)/, profile: THINKING },
+  { when: /^gemini-4(?:[.-]|$)/, profile: GENERATION_4 },
   { when: /^gemini-(?:[3-9]|\d{2,})(?:[.-]|$)/, profile: GENERATION_3 },
   // `gemini-flash-latest` and kin point at a current thinking model, but a
   // request cannot tell which generation, so tool images take the portable shape.

@@ -26,8 +26,11 @@ interface OpenAiModelListItem {
 const OPENAI_FALLBACK: Array<{ label: string; value: string }> = [
   { label: "gpt-6-astra", value: "gpt-6-astra" },
   { label: "gpt-6.1-sol", value: "gpt-6.1-sol" },
+  { label: "gpt-6.1-terra", value: "gpt-6.1-terra" },
   { label: "gpt-6-sol", value: "gpt-6-sol" },
   { label: "gpt-6-luna", value: "gpt-6-luna" },
+  { label: "gpt-image-2.6-sunburst", value: "gpt-image-2.6-sunburst" },
+  { label: "gpt-image-2.6-flare", value: "gpt-image-2.6-flare" },
   { label: "gpt-image-2.5-sunburst", value: "gpt-image-2.5-sunburst" },
   { label: "gpt-image-2.5-flare", value: "gpt-image-2.5-flare" },
   { label: "gpt-image-2", value: "gpt-image-2" },

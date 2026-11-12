@@ -179,6 +179,32 @@ describe("resolveThinkingConfig", () => {
       }
     });
 
+    // Argon and Carbon take low, medium and high; Hydrogen adds xhigh; 3.5
+    // Flash-Lite tops out at high. A level a model does not take is a 400.
+    it.each([
+      ["gemini-4-argon", { none: "low", medium: "medium", extra: "high", ultra: "high" }],
+      ["gemini-4-carbon", { none: "low", high: "high", ultra: "high" }],
+      ["gemini-4-hydrogen", { none: "low", low: "low", extra: "xhigh", ultra: "xhigh" }],
+      ["gemini-4-neon", { none: "low", ultra: "high" }],
+      ["gemini-3.5-flash-lite", { none: "minimal", high: "high", ultra: "high" }],
+    ] as const)("clamps effort to the levels %s takes", (model_name, expected) => {
+      for (const [effort, level] of Object.entries(expected)) {
+        expect([
+          effort,
+          resolveThinkingConfig(model({ effort, provider_config: { model_name } }), 100),
+        ]).toEqual([effort, { thinkingConfig: { thinkingLevel: level }, maxOutputTokens: 100 }]);
+      }
+    });
+
+    it("sends a level for any spelling of a Gemini 3+ id", () => {
+      expect(
+        resolveThinkingConfig(
+          model({ effort: "high", provider_config: { model_name: "models/gemini-4-argon" } }),
+          100
+        )
+      ).toEqual({ thinkingConfig: { thinkingLevel: "high" }, maxOutputTokens: 100 });
+    });
+
     it("keeps an explicit thinking_budget as a budget", () => {
       expect(
         resolveThinkingConfig(

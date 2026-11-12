@@ -53,7 +53,7 @@ describeModelProfileContract({
     [" text-embedding-004 ", "text-embedding-004"],
   ],
   unlisted: [
-    ["gemini-embedding-001", "family", true],
+    ["gemini-embedding-exp-03-07", "family", true],
     ["text-embedding-005", "family", true],
     ["embedding-001", "family", true],
     ["imagen-3.0-generate-002", "family", true],
@@ -67,6 +67,8 @@ describeModelProfileContract({
     ["gemini-3-flash-preview", "family", true],
     ["gemini-3.5-pro", "family", true],
     ["gemini-4-pro", "family", true],
+    ["gemini-4-neon", "family", true],
+    ["gemini-nano-banana-3", "family", true],
     ["gemini-10-pro", "family", true],
     ["gemini-flash-latest", "family", true],
     ["gemini-1.0-pro-vision", "default", false],
@@ -86,7 +88,11 @@ describeModelProfileContract({
       resolveThinkingConfig(model(name), 100, undefined, { includeThoughts: true }).thinkingConfig
     ).toEqual(thinks ? { includeThoughts: true } : undefined);
     // Gemini 3 and later take a level, earlier thinking models a token budget.
-    const takesLevel = /^gemini-(?:[3-9]|\d{2,})/.test(name);
+    // Every level list includes `high`, so no clamping applies to it.
+    const takesLevel = (chat?.thinkingLevels.length ?? 0) > 0;
+    expect(takesLevel).toBe(
+      thinks && /^gemini-(?:[3-9]|\d{2,})/.test(normalizeGeminiModelId(name))
+    );
     expect(resolveThinkingConfig(model(name, { effort: "high" }), 100).thinkingConfig).toEqual(
       !thinks ? undefined : takesLevel ? { thinkingLevel: "high" } : { thinkingBudget: 2048 }
     );

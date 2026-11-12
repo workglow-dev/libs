@@ -348,6 +348,8 @@ const PRICED_CASES: readonly {
         "gpt-image-2",
         "gpt-image-2.5-sunburst",
         "gpt-image-2.5-flare",
+        "gpt-image-2.6-sunburst",
+        "gpt-image-2.6-flare",
       ],
       () => new openai.OpenAiQueuedProvider(openai.OPENAI_RUN_FNS)
     ),
@@ -355,7 +357,13 @@ const PRICED_CASES: readonly {
     // image in, image out — which is what `imageInput`/`imageCached` exist to
     // express. `dall-e-3` and `gpt-image-1` are unpriced, so they need no
     // entry.
-    namedByTable: ["gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare"],
+    namedByTable: [
+      "gpt-image-2",
+      "gpt-image-2.5-sunburst",
+      "gpt-image-2.5-flare",
+      "gpt-image-2.6-sunburst",
+      "gpt-image-2.6-flare",
+    ],
   },
   {
     name: "google-gemini",
@@ -365,12 +373,20 @@ const PRICED_CASES: readonly {
         "gemini-2.5-pro",
         "gemini-embedding-001",
         "imagen-4.0-generate-001",
+        "gemini-nano-banana-2.1",
         "gemini-3.1-flash-image",
+        "gemini-3.1-flash-lite-image",
         "gemini-3-pro-image",
       ],
       () => new gemini.GoogleGeminiQueuedProvider(gemini.GEMINI_RUN_FNS)
     ),
-    namedByTable: ["imagen-4.0-generate-001", "gemini-3.1-flash-image", "gemini-3-pro-image"],
+    namedByTable: [
+      "imagen-4.0-generate-001",
+      "gemini-nano-banana-2.1",
+      "gemini-3.1-flash-image",
+      "gemini-3.1-flash-lite-image",
+      "gemini-3-pro-image",
+    ],
   },
   {
     name: "xai",
@@ -410,7 +426,7 @@ const PRICED_CASES: readonly {
 const KNOWN_UNPRICED: Readonly<Record<string, readonly string[]>> = {
   anthropic: [],
   openai: [],
-  "google-gemini": ["gemini-embedding-001"],
+  "google-gemini": [],
   xai: [],
   deepseek: [],
   typesafeai: [],
