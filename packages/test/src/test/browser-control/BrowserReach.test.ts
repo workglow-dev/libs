@@ -214,6 +214,14 @@ describe("browser navigation reach", () => {
     ).rejects.toBeInstanceOf(TaskEntitlementError);
   });
 
+  // An empty answer proves nothing about where the browser's own lookup will land.
+  it("refuses when the name resolves to no address", async () => {
+    lookup.mockResolvedValueOnce([] as never);
+    await expect(
+      new BrowserNavigateTask().execute({ sessionId, url: "https://empty.example.com/" }, context)
+    ).rejects.toBeInstanceOf(TaskEntitlementError);
+  });
+
   // A page can move after its navigation was checked: a meta refresh, a script setting
   // location, a click. Every task that hands the page back checks where it is first.
   describe("a page that moved after it loaded", () => {

@@ -155,7 +155,7 @@ export async function assertResolvesPublic(url: string, taskType: string): Promi
   if (!isAbsoluteHttpUrl(url)) return;
   const classification = classifyUrl(url);
   if (classification.kind !== "public" || classification.literalIp !== undefined) return;
-  const lookup = dnsLookupSync();
+  const lookup = nodeDnsLookup();
   if (!lookup) return;
   const host = classification.host!;
   let addresses: readonly { readonly address: string }[];
@@ -166,6 +166,11 @@ export async function assertResolvesPublic(url: string, taskType: string): Promi
       `${taskType}: could not resolve ${host} to check it is public: ${
         err instanceof Error ? err.message : String(err)
       }`
+    );
+  }
+  if (addresses.length === 0) {
+    throw new TaskEntitlementError(
+      `${taskType}: ${host} resolved to no address; ${url} is not reachable`
     );
   }
   for (const { address } of addresses) {
@@ -183,8 +188,20 @@ export async function assertResolvesPublic(url: string, taskType: string): Promi
  * a meta refresh, a script, a click or history can all leave a private page open. A
  * private origin is readable only once a navigation task landed on it.
  */
-export async function assertPageWithinReach(ctx: IBrowserContext, taskType: string): Promise<void> {
+export async function assertPageWithinReach(
+  ctx: IBrowserContext,
+  taskType: string
+): Promise<string> {
   const url = await ctx.currentUrl();
+  await assertUrlWithinReach(ctx, url, taskType);
+  return url;
+}
+
+async function assertUrlWithinReach(
+  ctx: IBrowserContext,
+  url: string,
+  taskType: string
+): Promise<void> {
   if (!isAbsoluteHttpUrl(url)) return;
   const classification = classifyUrl(url);
   if (classification.kind === "invalid") {
@@ -207,9 +224,10 @@ export async function readWithinReach<T>(
   taskType: string,
   read: () => Promise<T>
 ): Promise<T> {
-  await assertPageWithinReach(ctx, taskType);
+  const before = await assertPageWithinReach(ctx, taskType);
   const result = await read();
-  await assertPageWithinReach(ctx, taskType);
+  const after = await ctx.currentUrl();
+  if (after !== before) await assertUrlWithinReach(ctx, after, taskType);
   return result;
 }
 
@@ -230,7 +248,7 @@ type DnsLookupAll = (
 ) => Promise<readonly { readonly address: string }[]>;
 
 /** `node:dns`'s lookup, read per call; undefined in a browser, which has no resolver. */
-function dnsLookupSync(): DnsLookupAll | undefined {
+function nodeDnsLookup(): DnsLookupAll | undefined {
   const getBuiltin = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } })
     .process?.getBuiltinModule;
   if (typeof getBuiltin !== "function") return undefined;
