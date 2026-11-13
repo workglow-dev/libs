@@ -1,5 +1,15 @@
 # workglow
 
+## 0.6.17
+
+### Chores
+
+- update dependencies and improve Gemini model handling
+
+### Updated Dependencies
+
+- `tslog`: ^5.5.0
+
 ## 0.6.16
 
 _No changes in this package._

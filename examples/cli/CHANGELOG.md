@@ -1,5 +1,15 @@
 # @workglow/cli
 
+## 0.6.17
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `@napi-rs/keyring`: ^2.1.2
+
 ## 0.6.16
 
 ### Chores

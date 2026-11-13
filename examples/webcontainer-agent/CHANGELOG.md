@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.17
+
+### Chores
+
+- update dependencies and improve Gemini model handling
+
+### Updated Dependencies
+
+- `vite`: ^8.3.8
+
 ## 0.6.16
 
 ### Chores

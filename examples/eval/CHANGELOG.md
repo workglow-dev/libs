@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.17
+
+### Chores
+
+- update dependencies and improve Gemini model handling
+
+### Updated Dependencies
+
+- `hyparquet`: ^1.33.0
+
 ## 0.6.16
 
 ### Chores

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.17
+
+### Features
+
+#### providers
+
+- add Gemini 4, GPT-6.1 Terra, Claude Fable 5.2 and Haiku 5.5
+
+### Chores
+
+- update dependencies and improve Gemini model handling
+
 ## 0.6.16
 
 _No changes in this package._

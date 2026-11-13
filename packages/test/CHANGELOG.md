@@ -1,5 +1,23 @@
 # @workglow/test
 
+## 0.6.17
+
+### Features
+
+#### providers
+
+- add Gemini 4, GPT-6.1 Terra, Claude Fable 5.2 and Haiku 5.5
+
+### Bug Fixes
+
+#### browser-control
+
+- resolve hosts and re-check the page before reading it
+
+### Chores
+
+- update dependencies and improve Gemini model handling
+
 ## 0.6.16
 
 ### Bug Fixes

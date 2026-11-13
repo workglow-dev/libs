@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.17
+
+### Bug Fixes
+
+#### browser-control
+
+- resolve hosts and re-check the page before reading it
+
 ## 0.6.16
 
 ### Bug Fixes

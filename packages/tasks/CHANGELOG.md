@@ -1,5 +1,11 @@
 # @workglow/tasks
 
+## 0.6.17
+
+### Chores
+
+- update dependencies and improve Gemini model handling
+
 ## 0.6.16
 
 ### Bug Fixes

@@ -1,5 +1,9 @@
 # @workglow/util
 
+## 0.6.17
+
+_No changes in this package._
+
 ## 0.6.16
 
 _No changes in this package._

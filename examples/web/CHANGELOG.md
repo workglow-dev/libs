@@ -1,5 +1,19 @@
 # @workglow/web
 
+## 0.6.17
+
+### Chores
+
+- update dependencies and improve Gemini model handling
+
+### Updated Dependencies
+
+- `react-resizable-panels`: ^4.21.0
+- `@vitejs/plugin-react`: ^6.3.0
+- `jsdom`: ^31.0.0
+- `rollup-plugin-visualizer`: ^7.1.3
+- `vite`: ^8.3.8
+
 ## 0.6.16
 
 ### Chores
