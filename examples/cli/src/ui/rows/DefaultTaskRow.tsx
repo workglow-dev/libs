@@ -8,11 +8,12 @@ import { Box, Text } from "ink";
 import React from "react";
 import { TaskErrorDetail } from "../components/TaskErrorDetail";
 import { TaskStatusProgressRow } from "../components/TaskStatusProgressRow";
+import { concurrencyLimitOf, isIteratorTask } from "../model/iteratorTask";
 import type { CliTaskLine } from "../taskGraphCliSubscriptions";
 import type { TaskRowProps } from "./pickRenderer";
 import { isRedundantSubgraph, IterationTaskRows, SubtaskRows } from "./SubtaskRows";
 import { settledTaskDurationMs } from "./taskDuration";
-import { concurrencyLimitOf, isIteratorTask, useSubtaskRows } from "./useSubtaskRows";
+import { useSubtaskRows } from "./useSubtaskRows";
 import { useTaskUsageLine } from "./useTaskUsageLine";
 
 export function DefaultTaskRow({

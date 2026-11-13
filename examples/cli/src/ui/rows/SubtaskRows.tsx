@@ -11,6 +11,7 @@ import { AggregateProgressRow } from "../components/AggregateProgressRow";
 import { useVisibleRows } from "../components/RunViewport";
 import { TaskErrorDetail } from "../components/TaskErrorDetail";
 import { TaskStatusProgressRow } from "../components/TaskStatusProgressRow";
+import { concurrencyLimitOf, isIteratorTask } from "../model/iteratorTask";
 import {
   iterationSummaryLine,
   ownershipWrapperStatus,
@@ -21,12 +22,7 @@ import type { CliTaskLine, IterationSlotRow } from "../taskGraphCliSubscriptions
 import { mergeLiveIterationGraphs, visibleIterationSlots } from "../taskGraphCliSubscriptions";
 import { iterationGroupKey, iterationListKey } from "../useRunCensus";
 import { settledTaskDurationMs } from "./taskDuration";
-import {
-  concurrencyLimitOf,
-  isIteratorTask,
-  useGraphTaskRows,
-  useSubtaskRows,
-} from "./useSubtaskRows";
+import { useGraphTaskRows, useSubtaskRows } from "./useSubtaskRows";
 import { useTaskUsageLine } from "./useTaskUsageLine";
 
 /**

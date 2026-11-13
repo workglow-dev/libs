@@ -6,6 +6,7 @@
 
 import type { ITask, TaskGraph } from "@workglow/task-graph";
 import { useEffect, useState } from "react";
+import { isIteratorTask } from "../model/iteratorTask";
 import { sortCliTaskLinesForDisplay, startGraphTaskPoll } from "../cliTaskUi";
 import type { CliTaskLine, IterationSlotRow } from "../taskGraphCliSubscriptions";
 import { cliTaskLabel, subscribeTaskGraphForCli } from "../taskGraphCliSubscriptions";
@@ -31,22 +32,6 @@ const EMPTY_SUBTASK_ROWS: SubtaskRowsState = {
   overallProgress: undefined,
   iterationSlots: new Map(),
 };
-
-/**
- * MapTask / ReduceTask / ForEachTask: the subgraph is the idle template, not the
- * live iteration clones. Those clones arrive via `iteration_start` and are
- * rendered as ordinary task rows.
- */
-export function isIteratorTask(task: ITask): boolean {
-  return typeof (task as { analyzeIterationInput?: unknown }).analyzeIterationInput === "function";
-}
-
-function concurrencyLimitOf(task: ITask): number | undefined {
-  const limit = (task as { concurrencyLimit?: number }).concurrencyLimit;
-  return typeof limit === "number" && limit >= 1 ? limit : undefined;
-}
-
-export { concurrencyLimitOf };
 
 function taskToCliLine(task: ITask): CliTaskLine {
   return {

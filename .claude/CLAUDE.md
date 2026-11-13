@@ -598,6 +598,15 @@ terminal runs. Three load-bearing properties:
   `timeline`, `markdown`, `empty` and `error`; a status widget contributes meters **or** text
   lines, since most of what an operator checks has no denominator to draw a bar against.
 
+**Ink and React load only when something is drawn.** `src/ui/render.ts` is a façade whose
+functions reach `src/ui/inkRender.ts` through `import()`, so a process with no terminal — a
+piped run, a run reporting to the console, `mcp serve` — never loads ink, react or
+`@inkjs/ui`. Import the renderer from `render.ts`, never `inkRender.ts` or a component, and keep
+helpers that non-UI code needs out of hook modules (`ui/model/` is the place). The entry bundles
+pass `--splitting`: without it `bun build` inlines the lazy module and hoists its external
+imports into the entry. `src/test/inkLazyLoad.test.ts` fails on a static path from an entry point
+to the renderer, or a build script without the flag.
+
 `workglow agent chat` is the terminal consumer of `AgentTask`: a line-based REPL that
 streams the model's reply straight to stdout — so the transcript stays in scrollback, which
 the Ink run UI's clear-on-complete would erase — prints one row per tool call off the task's

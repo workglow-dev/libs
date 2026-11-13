@@ -16,7 +16,7 @@ import {
   runTaskCounts,
 } from "./model/runCensus";
 import { sortCliTaskLinesForDisplay } from "./model/runRowModel";
-import { isIteratorTask } from "./rows/useSubtaskRows";
+import { isIteratorTask } from "./model/iteratorTask";
 
 const TICK_MS = 250;
 

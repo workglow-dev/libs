@@ -14,19 +14,19 @@
   "homepage": "https://workglow.dev",
   "scripts": {
     "dev": "concurrently -c 'auto' -n 'cli:' 'bun:dev-*'",
-    "dev-js": "bun build --watch --target=bun --sourcemap=external --packages=external --outdir ./dist ./src/workglow.ts",
-    "dev-lib": "bun build --watch --target=bun --sourcemap=external --packages=external --outdir ./dist ./src/lib.ts",
+    "dev-js": "bun build --watch --target=bun --splitting --sourcemap=external --packages=external --outdir ./dist ./src/workglow.ts",
+    "dev-lib": "bun build --watch --target=bun --splitting --sourcemap=external --packages=external --outdir ./dist ./src/lib.ts",
     "dev-types": "tsc --watch --preserveWatchOutput",
     "build-example": "concurrently -c 'auto' -n 'js,js-worker-hft,lib,human,web,types' 'bun run build-js' 'bun run build-js-worker-hft' 'bun run build-lib' 'bun run build-human' 'bun run build-web' 'bun run build-types'",
     "build-clean": "rm -fr dist/* tsconfig.tsbuildinfo",
-    "build-js": "bun build --target=bun --packages=external --outdir ./dist ./src/workglow.ts",
+    "build-js": "bun build --target=bun --splitting --packages=external --outdir ./dist ./src/workglow.ts",
     "build-js-worker-hft": "bun build --target=node --packages=external --outdir ./dist ./src/worker_hft.ts",
-    "build-lib": "bun build --target=bun --packages=external --outdir ./dist ./src/lib.ts",
+    "build-lib": "bun build --target=bun --splitting --packages=external --outdir ./dist ./src/lib.ts",
     "build-types": "rm -f tsconfig.tsbuildinfo && tsc",
     "test": "vitest run --config ../../vitest.config.ts --project cli",
     "test:watch": "vitest",
     "build-web": "bun build --target=browser --minify --outdir ./dist/web ./src/web/client/main.tsx && cp src/web/client/index.html src/web/client/app.css dist/web/",
-    "build-human": "bun build --target=bun --packages=external --outdir ./dist ./src/human.ts"
+    "build-human": "bun build --target=bun --splitting --packages=external --outdir ./dist ./src/human.ts"
   },
   "bin": "./dist/workglow.js",
   "files": [

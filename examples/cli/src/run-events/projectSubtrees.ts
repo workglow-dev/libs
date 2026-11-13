@@ -5,7 +5,7 @@
  */
 
 import type { ITask, TaskGraph } from "@workglow/task-graph";
-import { concurrencyLimitOf, isIteratorTask } from "../ui/rows/useSubtaskRows";
+import { concurrencyLimitOf, isIteratorTask } from "../ui/model/iteratorTask";
 import type { RunEventSink } from "./runEventChannel";
 
 /**
