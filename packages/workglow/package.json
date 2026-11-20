@@ -143,6 +143,18 @@
       "types": "./dist/xai-runtime.d.ts",
       "import": "./dist/xai-runtime.js"
     },
+    "./meta": {
+      "browser": {
+        "types": "./dist/meta.d.ts",
+        "import": "./dist/meta.browser.js"
+      },
+      "types": "./dist/meta.d.ts",
+      "import": "./dist/meta.js"
+    },
+    "./meta/runtime": {
+      "types": "./dist/meta-runtime.d.ts",
+      "import": "./dist/meta-runtime.js"
+    },
     "./typesafeai": {
       "browser": {
         "types": "./dist/typesafeai.d.ts",
@@ -217,6 +229,7 @@
     "@workglow/openrouter": "workspace:*",
     "@workglow/typesafeai": "workspace:*",
     "@workglow/xai": "workspace:*",
+    "@workglow/meta": "workspace:*",
     "@workglow/deepseek": "workspace:*",
     "@workglow/google-gemini": "workspace:*",
     "@workglow/ollama": "workspace:*",

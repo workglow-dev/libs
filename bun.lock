@@ -75,6 +75,7 @@
         "@workglow/huggingface-inference": "workspace:*",
         "@workglow/huggingface-transformers": "workspace:*",
         "@workglow/mcp": "workspace:*",
+        "@workglow/meta": "workspace:*",
         "@workglow/node-llama-cpp": "workspace:*",
         "@workglow/ollama": "workspace:*",
         "@workglow/openai": "workspace:*",
@@ -115,6 +116,7 @@
         "@workglow/deepseek": "workspace:*",
         "@workglow/google-gemini": "workspace:*",
         "@workglow/huggingface-transformers": "workspace:*",
+        "@workglow/meta": "workspace:*",
         "@workglow/node-llama-cpp": "workspace:*",
         "@workglow/openai": "workspace:*",
         "@workglow/sqlite": "workspace:*",
@@ -411,6 +413,7 @@
         "@workglow/knowledge-base": "workspace:*",
         "@workglow/llamacpp-server": "workspace:*",
         "@workglow/mcp": "workspace:*",
+        "@workglow/meta": "workspace:*",
         "@workglow/mlx": "workspace:*",
         "@workglow/node-llama-cpp": "workspace:*",
         "@workglow/ollama": "workspace:*",
@@ -551,6 +554,7 @@
         "@workglow/job-queue": "workspace:*",
         "@workglow/knowledge-base": "workspace:*",
         "@workglow/mcp": "workspace:*",
+        "@workglow/meta": "workspace:*",
         "@workglow/node-llama-cpp": "workspace:*",
         "@workglow/ollama": "workspace:*",
         "@workglow/openai": "workspace:*",
@@ -806,6 +810,29 @@
       "version": "0.6.17",
       "devDependencies": {
         "@workglow/ai": "workspace:*",
+        "@workglow/util": "workspace:*",
+      },
+      "peerDependencies": {
+        "@workglow/ai": "workspace:*",
+        "@workglow/job-queue": "workspace:*",
+        "@workglow/storage": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
+        "@workglow/util": "workspace:*",
+      },
+    },
+    "providers/meta": {
+      "name": "@workglow/meta",
+      "version": "0.6.17",
+      "dependencies": {
+        "js-tiktoken": "catalog:",
+        "openai": "catalog:",
+        "tiktoken": "catalog:",
+      },
+      "devDependencies": {
+        "@workglow/ai": "workspace:*",
+        "@workglow/job-queue": "workspace:*",
+        "@workglow/storage": "workspace:*",
+        "@workglow/task-graph": "workspace:*",
         "@workglow/util": "workspace:*",
       },
       "peerDependencies": {
@@ -1868,6 +1895,8 @@
     "@workglow/llamacpp-server": ["@workglow/llamacpp-server@workspace:providers/llamacpp-server"],
 
     "@workglow/mcp": ["@workglow/mcp@workspace:packages/mcp"],
+
+    "@workglow/meta": ["@workglow/meta@workspace:providers/meta"],
 
     "@workglow/mlx": ["@workglow/mlx@workspace:providers/mlx"],
 

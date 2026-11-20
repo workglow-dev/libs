@@ -15,6 +15,7 @@ import {
   HfTransformersOnnxModelRecordSchema,
   parseOnnxQuantizations,
 } from "@workglow/huggingface-transformers/ai";
+import { MetaModelRecordSchema } from "@workglow/meta/ai";
 import { LlamaCppModelRecordSchema } from "@workglow/node-llama-cpp/ai";
 import { OllamaModelRecordSchema } from "@workglow/ollama/ai";
 import { OpenAiModelRecordSchema } from "@workglow/openai/ai";
@@ -41,6 +42,7 @@ const PROVIDER_SCHEMAS: Record<string, DataPortSchemaObject> = {
   OPENAI: OpenAiModelRecordSchema,
   XAI: XaiModelRecordSchema,
   DEEPSEEK: DeepSeekModelRecordSchema,
+  META: MetaModelRecordSchema,
   GOOGLE_GEMINI: GeminiModelRecordSchema,
   OLLAMA: OllamaModelRecordSchema,
   HF_INFERENCE: HfInferenceModelRecordSchema,

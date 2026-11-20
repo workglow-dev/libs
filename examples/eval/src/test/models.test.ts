@@ -16,6 +16,7 @@ describe("resolveModelConfig", () => {
     expect(resolveModelConfig("gemini-3-flash-preview", "classify").provider).toBe("GOOGLE_GEMINI");
     expect(resolveModelConfig("grok-4.6", "classify").provider).toBe("XAI");
     expect(resolveModelConfig("deepseek-v4-flash", "classify").provider).toBe("DEEPSEEK");
+    expect(resolveModelConfig("muse-spark-1.3", "classify").provider).toBe("META");
     expect(resolveModelConfig("deepseek-v4-pro", "classify").provider).toBe("DEEPSEEK");
     expect(resolveModelConfig("deepseek-v4-pro-0813", "classify").provider).toBe("DEEPSEEK");
   });

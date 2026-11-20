@@ -28,6 +28,7 @@
     { "path": "../../providers/google-gemini" },
     { "path": "../../providers/huggingface-inference" },
     { "path": "../../providers/huggingface-transformers" },
+    { "path": "../../providers/meta" },
     { "path": "../../providers/node-llama-cpp" },
     { "path": "../../providers/ollama" },
     { "path": "../../providers/openai" },
