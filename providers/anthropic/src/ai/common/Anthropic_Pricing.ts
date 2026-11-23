@@ -59,6 +59,45 @@ export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
     currency: "USD",
     input: 10,
     output: 50,
+    cached: 1,
+    cacheWrite: {
+      cacheWrite5m: 12.5,
+      cacheWrite1h: 20,
+    },
+    batch: {
+      input: 5,
+      output: 25,
+      cached: 0.5,
+      cacheWrite: {
+        cacheWrite5m: 6.25,
+        cacheWrite1h: 10,
+      },
+    },
+  },
+  "claude-mythos-5-2": {
+    currency: "USD",
+    input: 8,
+    output: 40,
+    cached: 0.2,
+    cacheWrite: {
+      cacheWrite5m: 10,
+      cacheWrite1h: 16,
+    },
+    batch: {
+      input: 4,
+      output: 20,
+      cached: 0.1,
+      cacheWrite: {
+        cacheWrite5m: 5,
+        cacheWrite1h: 8,
+      },
+    },
+  },
+
+  "claude-mythos-5-1": {
+    currency: "USD",
+    input: 10,
+    output: 50,
     cached: 0.25,
     cacheWrite: {
       cacheWrite5m: 12.5,
@@ -68,6 +107,26 @@ export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
       input: 5,
       output: 25,
       cached: 0.125,
+      cacheWrite: {
+        cacheWrite5m: 6.25,
+        cacheWrite1h: 10,
+      },
+    },
+  },
+
+  "claude-mythos-5": {
+    currency: "USD",
+    input: 10,
+    output: 50,
+    cached: 1,
+    cacheWrite: {
+      cacheWrite5m: 12.5,
+      cacheWrite1h: 20,
+    },
+    batch: {
+      input: 5,
+      output: 25,
+      cached: 0.5,
       cacheWrite: {
         cacheWrite5m: 6.25,
         cacheWrite1h: 10,
@@ -268,6 +327,25 @@ export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
     },
   },
   "claude-opus-4-6": {
+    currency: "USD",
+    input: 5,
+    output: 25,
+    cached: 0.5,
+    cacheWrite: {
+      cacheWrite5m: 6.25,
+      cacheWrite1h: 10,
+    },
+    batch: {
+      input: 2.5,
+      output: 12.5,
+      cached: 0.25,
+      cacheWrite: {
+        cacheWrite5m: 3.125,
+        cacheWrite1h: 5,
+      },
+    },
+  },
+  "claude-opus-4-5": {
     currency: "USD",
     input: 5,
     output: 25,

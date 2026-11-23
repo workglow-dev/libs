@@ -25,8 +25,10 @@ interface XaiModelListItem {
 }
 
 const XAI_FALLBACK: Array<{ label: string; value: string }> = [
+  { label: "grok-4.7", value: "grok-4.7" },
   { label: "grok-4.6", value: "grok-4.6" },
   { label: "grok-4.5", value: "grok-4.5" },
+  { label: "grok-4.3", value: "grok-4.3" },
   { label: "grok-4", value: "grok-4" },
   { label: "grok-4-fast-reasoning", value: "grok-4-fast-reasoning" },
   { label: "grok-4-fast-non-reasoning", value: "grok-4-fast-non-reasoning" },

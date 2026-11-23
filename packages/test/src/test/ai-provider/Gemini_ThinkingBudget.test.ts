@@ -185,7 +185,9 @@ describe("resolveThinkingConfig", () => {
       ["gemini-4-argon", { none: "low", medium: "medium", extra: "high", ultra: "high" }],
       ["gemini-4-carbon", { none: "low", high: "high", ultra: "high" }],
       ["gemini-4-hydrogen", { none: "low", low: "low", extra: "xhigh", ultra: "xhigh" }],
-      ["gemini-4-neon", { none: "low", ultra: "high" }],
+      ["gemini-4-neon", { none: "low", low: "low", extra: "xhigh", ultra: "xhigh" }],
+      // An unlisted Gemini 4 id takes only the levels every Gemini 4 model accepts.
+      ["gemini-4-krypton", { none: "low", ultra: "high" }],
       ["gemini-3.5-flash-lite", { none: "minimal", high: "high", ultra: "high" }],
     ] as const)("clamps effort to the levels %s takes", (model_name, expected) => {
       for (const [effort, level] of Object.entries(expected)) {

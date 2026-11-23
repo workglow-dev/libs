@@ -23,6 +23,7 @@ interface GeminiModelEntry {
 }
 
 export const GEMINI_FALLBACK_MODELS: readonly GeminiModelEntry[] = [
+  { label: "gemini-4-neon", value: "gemini-4-neon" },
   { label: "gemini-4-carbon", value: "gemini-4-carbon" },
   { label: "gemini-4-argon", value: "gemini-4-argon" },
   { label: "gemini-4-hydrogen", value: "gemini-4-hydrogen" },

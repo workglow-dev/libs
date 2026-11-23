@@ -87,7 +87,7 @@ const GENERATION_4 = chat({
   multimodalFunctionResponses: true,
   thinkingLevels: ["low", "medium", "high"],
 });
-/** Gemini 4 Hydrogen adds `xhigh`, and still has no `minimal`. */
+/** Gemini 4 Hydrogen and Neon add `xhigh`, and still have no `minimal`. */
 const GENERATION_4_HYDROGEN = chat({
   multimodalFunctionResponses: true,
   thinkingLevels: ["low", "medium", "high", "xhigh"],
@@ -108,6 +108,7 @@ const IMAGEN: GeminiImageProfile = { kind: "image", editing: false };
  * until both exist. An id with no row is answered by {@link GEMINI_MODEL_FAMILIES}.
  */
 export const GEMINI_MODEL_PROFILES: Readonly<Record<string, GeminiModelProfile>> = {
+  "gemini-4-neon": GENERATION_4_HYDROGEN,
   "gemini-4-carbon": GENERATION_4,
   "gemini-4-argon": GENERATION_4,
   "gemini-4-hydrogen": GENERATION_4_HYDROGEN,

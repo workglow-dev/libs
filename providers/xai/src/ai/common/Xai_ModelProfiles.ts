@@ -46,8 +46,10 @@ const IMAGE: XaiImageProfile = { kind: "image" };
  * both exist. An id with no row is answered by {@link XAI_MODEL_FAMILIES}.
  */
 export const XAI_MODEL_PROFILES: Readonly<Record<string, XaiModelProfile>> = {
+  "grok-4.7": VISION_REASONING,
   "grok-4.6": VISION_REASONING,
   "grok-4.5": VISION_REASONING,
+  "grok-4.3": VISION_REASONING,
   "grok-4": VISION_REASONING,
   "grok-3": REASONING,
   "grok-3-mini": REASONING,
