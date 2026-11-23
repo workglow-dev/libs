@@ -276,14 +276,20 @@ export class FsFolderTabularStorage<
     safeEmit(this.events, "delete", key as Partial<Entity>);
   }
 
-  async getAll(): Promise<Entity[] | undefined> {
+  async getAll(options?: QueryOptions<Entity>): Promise<Entity[] | undefined> {
+    this.validateGetAllOptions(options);
     await this.setupDirectory();
     try {
       const jsonFiles = await this.listRowFiles();
       if (jsonFiles.length === 0) {
         return undefined;
       }
-      const values = await this.readRowFiles(jsonFiles, "getAll");
+      let values = await this.readRowFiles(jsonFiles, "getAll");
+      if (options?.orderBy && options.orderBy.length > 0) {
+        values = this.sortInMemory(values, options.orderBy);
+      }
+      if (options?.offset !== undefined) values = values.slice(options.offset);
+      if (options?.limit !== undefined) values = values.slice(0, options.limit);
       return values.length > 0 ? values : undefined;
     } catch (error) {
       getLogger().error("Error in getAll:", { error });
