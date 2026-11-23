@@ -78,6 +78,8 @@ const GPT_IMAGE: OpenAiImageProfile = {
  * until both exist. An id with no row is answered by {@link OPENAI_MODEL_FAMILIES}.
  */
 export const OPENAI_MODEL_PROFILES: Readonly<Record<string, OpenAiModelProfile>> = {
+  "gpt-6.2-astra": ALWAYS_REASONING,
+  "gpt-6.2-sol": ALWAYS_REASONING,
   "gpt-6-astra": ALWAYS_REASONING,
   "gpt-6.1-sol": ALWAYS_REASONING,
   "gpt-6.1-terra": REASONING,
@@ -88,10 +90,13 @@ export const OPENAI_MODEL_PROFILES: Readonly<Record<string, OpenAiModelProfile>>
   "gpt-5.6-terra": REASONING_WITH_TEMPERATURE,
   "gpt-5.6-luna": REASONING_WITH_TEMPERATURE,
   "gpt-5.5": REASONING,
+  // The pro models only reason, and take no `effort: "none"`.
+  "gpt-5.5-pro": ALWAYS_REASONING,
+  "gpt-5.4-pro": ALWAYS_REASONING,
+  "gpt-5.2-pro": ALWAYS_REASONING,
   "gpt-5.4-mini": REASONING,
   "gpt-5.4-nano": REASONING,
   "gpt-5.4": REASONING,
-  "gpt-5.2-mini": REASONING,
   "gpt-5.2": REASONING,
   "gpt-5-mini": REASONING,
   "gpt-5-nano": REASONING,
