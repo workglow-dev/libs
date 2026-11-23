@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { PageCursor } from "@workglow/storage";
 import { FsFolderTabularStorage, StorageUnsupportedError } from "@workglow/storage";
 import { setLogger, uuid4 } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
@@ -126,6 +127,63 @@ describe("FsFolderTabularStorage", () => {
       writeFileSync(`${testDir}/corrupt.json`, "{ not json");
       expect((await storage.getAll())?.length).toBe(3);
       expect((await storage.getOffsetPage(0, 10))?.length).toBe(3);
+    });
+  });
+
+  // The keyset page engine trusts `getAll({ orderBy, limit })` for the first page.
+  // FsFolder once ignored both and returned rows in directory-listing order, which on
+  // ext4 is a hash order: the first page was an arbitrary slice, its cursor an
+  // arbitrary row, and the next page repeated rows sorting after it. A migration
+  // backfill walking those pages doubled some rows twice. The listing is pinned to
+  // reverse order here so the failure does not depend on the filesystem.
+  describe("pages in key order whatever order the directory lists", () => {
+    const schema = {
+      type: "object",
+      properties: { id: { type: "string" }, n: { type: "integer" } },
+      required: ["id", "n"],
+      additionalProperties: false,
+    } as const;
+
+    const seed = async () => {
+      const storage = new FsFolderTabularStorage(`${testDir}/order_${uuid4()}`, schema, [
+        "id",
+      ] as const);
+      await storage.setupDatabase();
+      for (let i = 0; i < 30; i++) await storage.put({ id: `r${i}`, n: i });
+      const listRowFiles = (storage as any).listRowFiles.bind(storage);
+      (storage as any).listRowFiles = async () => ((await listRowFiles()) as string[]).reverse();
+      return storage;
+    };
+
+    test("getAll honours orderBy, offset and limit", async () => {
+      const storage = await seed();
+      const ids = (rows: Array<{ id: string }> | undefined) => rows?.map((r) => r.id);
+      const sorted = Array.from({ length: 30 }, (_, i) => `r${i}`).sort();
+      expect(ids(await storage.getAll({ orderBy: [{ column: "id", direction: "ASC" }] }))).toEqual(
+        sorted
+      );
+      expect(
+        ids(
+          await storage.getAll({
+            orderBy: [{ column: "id", direction: "DESC" }],
+            offset: 2,
+            limit: 3,
+          })
+        )
+      ).toEqual(sorted.slice().reverse().slice(2, 5));
+    });
+
+    test("getPage visits every row exactly once", async () => {
+      const storage = await seed();
+      const seen: string[] = [];
+      let cursor: PageCursor | undefined;
+      do {
+        const page = await storage.getPage({ limit: 7, cursor });
+        seen.push(...page.items.map((r) => r.id));
+        cursor = page.nextCursor;
+      } while (cursor);
+      expect(seen).toHaveLength(30);
+      expect(new Set(seen).size).toBe(30);
     });
   });
 
