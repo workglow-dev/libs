@@ -25,7 +25,7 @@ const scripts = (
  * A gate that can be deleted with nothing failing will be deleted again, so the
  * gate is asserted here rather than described in prose.
  *
- * The test gate is `require-green-ci` alone. Running a test slice locally as
+ * The test gate is `waitfor-green-ci` alone. Running a test slice locally as
  * well would re-run, on the publisher's machine, work the checked CI run
  * already did on that exact commit — minutes bought nothing, since the answer
  * is the same one and it is the commit, not the working tree, that consumers
@@ -41,7 +41,7 @@ describe("the release gate on publish-all", () => {
   it("checks the commit's CI run before it publishes", () => {
     // The commit is what everyone else gets, and a check that reads GitHub is
     // the half a `--no-verify`-style shortcut cannot walk around.
-    expect(publishAll).toContain("require-green-ci");
+    expect(publishAll).toContain("waitfor-green-ci");
   });
 
   it("gates first, before anything that writes or pushes", () => {
@@ -54,7 +54,7 @@ describe("the release gate on publish-all", () => {
     // - after `format` or `rebuild`: those write to the tree, so the run that
     //   was checked covers the pre-format commit while `publish-workspaces`
     //   packs the post-format tree.
-    const gate = publishAll.indexOf("require-green-ci");
+    const gate = publishAll.indexOf("waitfor-green-ci");
     expect(gate).toBeGreaterThan(-1);
     for (const later of ["format", "rebuild", "bunset", "publish-workspaces"]) {
       const at = publishAll.indexOf(later);
@@ -88,6 +88,7 @@ describe("the release gate on publish-all", () => {
     // The gate is only as good as the script it calls: one that no longer
     // exists fails `publish-all` loudly, but one silently renamed would not be
     // caught by the string check above.
+    expect(scripts["waitfor-green-ci"]).toBeDefined();
     expect(scripts["require-green-ci"]).toBeDefined();
   });
 });

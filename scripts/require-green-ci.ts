@@ -36,8 +36,14 @@
  * guard on main is red. That guard never runs on a commit, so the check above
  * cannot see it; `Nightly Bun parity & coverage` is informational and is not
  * waited for.
+ *
+ * With `--wait` (the `waitfor-green-ci` script) a run still queued or in
+ * progress is polled until it finishes instead of refused; only a finished
+ * run that is not green fails. A commit with no run yet is given a short grace
+ * period to register before it is refused.
  */
 import { spawnSync } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { WorkflowRun } from "./lib/ciGate";
 import { evaluateCiRuns, evaluateNightlyGuard } from "./lib/ciGate";
 import { readTreeState, summarizePaths } from "./lib/cleanTree";
@@ -47,6 +53,12 @@ const OVERRIDE = "WORKGLOW_SKIP_CI_GATE";
 const WORKFLOW = "test.yml";
 /** The scheduled guard on main a release also waits for; see `evaluateNightlyGuard`. */
 const NIGHTLY_GUARD = "nightly-typecheck.yml";
+/** Seconds between polls in `--wait` mode. */
+const POLL_MS = 20_000;
+/** How long `--wait` keeps polling an unfinished run before giving up. */
+const WAIT_LIMIT_MS = 90 * 60_000;
+/** How long a commit with no run at all is given to have one registered. */
+const NO_RUN_GRACE_MS = 3 * 60_000;
 /** How many guard runs to read back through for one that finished. */
 const NIGHTLY_GUARD_RUNS = 30;
 
@@ -83,7 +95,8 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-function main(): void {
+async function main(): Promise<void> {
+  const wait = process.argv.includes("--wait");
   if (process.env[OVERRIDE] === "1") {
     console.warn(`⚠ ${OVERRIDE}=1 — publishing without checking CI for this commit.`);
     return;
@@ -107,7 +120,22 @@ function main(): void {
     );
   }
 
-  const runs = listRuns(["--commit", sha, "--workflow", WORKFLOW], sha);
+  const started = Date.now();
+  let runs = listRuns(["--commit", sha, "--workflow", WORKFLOW], sha);
+  while (wait) {
+    const newest = runs[0];
+    const elapsed = Date.now() - started;
+    const pending =
+      newest === undefined ? elapsed < NO_RUN_GRACE_MS : newest.status !== "completed";
+    if (!pending || elapsed >= WAIT_LIMIT_MS) break;
+    console.log(
+      newest === undefined
+        ? `… no \`Build & Test\` run for ${sha.slice(0, 7)} yet, waiting`
+        : `… \`Build & Test\` is ${newest.status}, waiting: ${newest.url}`
+    );
+    await sleep(POLL_MS);
+    runs = listRuns(["--commit", sha, "--workflow", WORKFLOW], sha);
+  }
   const verdict = evaluateCiRuns(runs, sha);
   if (!verdict.ok) fail(verdict.reason);
 
@@ -134,4 +162,4 @@ function main(): void {
   );
 }
 
-main();
+await main();
