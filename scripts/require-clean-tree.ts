@@ -7,14 +7,14 @@
 
 /**
  * Refuses to continue unless the working tree still matches the commit whose
- * CI `require-green-ci` checked.
+ * CI `waitfor-green-ci` checks.
  *
- * It sits between `rebuild` and `bunset` in `publish-all`, where `format` and
- * `rebuild` have just run over a tree the gate found clean. On a commit CI
- * passed, both are no-ops: the `lint` job runs `format-check` over the same
+ * It sits between `rebuild` and `waitfor-green-ci` in `publish-all`, where
+ * `format` and `rebuild` have just run over the release commit's tree. On a
+ * commit CI passes, both are no-ops: the `lint` job runs `format-check` over the same
  * glob `format` writes and `oxlint --deny-warnings` over the same source
  * `oxlint --fix` would fix, and `rebuild` only ever writes `dist`, which is
- * gitignored. So anything they change here is a file the green run never saw,
+ * gitignored. So anything they change here is a file the green run will never see,
  * and `publish-workspaces` is about to pack it.
  *
  * Which makes this an assertion rather than a step: it states what CI already
@@ -24,7 +24,7 @@
 import { spawnSync } from "node:child_process";
 import { readTreeState, summarizePaths } from "./lib/cleanTree";
 
-/** The same escape hatch `require-green-ci` uses — a publish that skipped the
+/** The same escape hatch `require-green-ci` and `waitfor-green-ci` use — a publish that skipped the
  * CI check has already accepted unverified bytes, so blocking it here would
  * refuse the release for a reason the operator already overrode. */
 const OVERRIDE = "WORKGLOW_SKIP_CI_GATE";

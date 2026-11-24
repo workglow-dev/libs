@@ -32,8 +32,9 @@ const scripts = (
  * install.
  *
  * Which is also why WHERE it runs is asserted and not only THAT it runs: the
- * answer is about a commit, so it is worth having only while the tree is still
- * that commit and only before anything pushes a new one.
+ * answer is about a commit, so it is worth having only once the tree is known
+ * to be that commit (`format`, `rebuild`, `require-clean-tree` first) and only
+ * before anything pushes a new one.
  */
 describe("the release gate on publish-all", () => {
   const publishAll = scripts["publish-all"] ?? "";
@@ -44,19 +45,24 @@ describe("the release gate on publish-all", () => {
     expect(publishAll).toContain("waitfor-green-ci");
   });
 
-  it("gates first, before anything that writes or pushes", () => {
-    // Order, not just presence. Each of these is a different failure:
+  it("gates after the tree is settled and before anything that pushes", () => {
+    // Order, not just presence:
     //
     // - after `bunset`: the check asks about a commit no workflow has seen —
     //   `bunset` wrote it — and passes for that reason. `bunset` also PUSHES,
     //   so a full build starts on a pure version bump before anyone knows
     //   whether the release may proceed.
-    // - after `format` or `rebuild`: those write to the tree, so the run that
-    //   was checked covers the pre-format commit while `publish-workspaces`
-    //   packs the post-format tree.
+    // - before `format` or `rebuild` is fine only because `require-clean-tree`
+    //   sits between them and the gate: it fails the release if either changed
+    //   a byte, so the run being waited for is the tree that gets packed.
     const gate = publishAll.indexOf("waitfor-green-ci");
     expect(gate).toBeGreaterThan(-1);
-    for (const later of ["format", "rebuild", "bunset", "publish-workspaces"]) {
+    for (const earlier of ["bun run format", "rebuild", "require-clean-tree"]) {
+      const at = publishAll.indexOf(earlier);
+      expect(at).toBeGreaterThan(-1);
+      expect(at).toBeLessThan(gate);
+    }
+    for (const later of ["bunset", "publish-workspaces"]) {
       const at = publishAll.indexOf(later);
       expect(at).toBeGreaterThan(-1);
       expect(gate).toBeLessThan(at);

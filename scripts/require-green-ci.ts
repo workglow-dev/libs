@@ -15,22 +15,23 @@
  * the half a `--no-verify`-style shortcut cannot walk around: the answer comes
  * from GitHub rather than from the machine doing the publishing.
  *
- * It is the FIRST step of `publish-all`, deliberately, and every later step is
- * a reason:
+ * It sits after `format`, `rebuild` and `require-clean-tree` in `publish-all`
+ * and before `bunset`, deliberately:
  *
+ * - `format` and `rebuild` write to the tree, but on a commit CI passed they
+ *   are no-ops, and `require-clean-tree` fails the release if they were not.
+ *   So by the time this runs the tree IS the commit, and the run checked here
+ *   covers the bytes `publish-workspaces` will pack. They run first so that
+ *   the possibly long wait for CI (`--wait`) comes with the tree already
+ *   known to be good, and a stale tree fails in seconds rather than after it.
  * - `bunset` writes and pushes the release commit. After it, HEAD names
  *   something no workflow has ever seen, and a push of a pure version bump
  *   starts a full build of a tree nobody is waiting on — paid for before
- *   anyone knows whether the release may proceed at all.
- * - `format` and `rebuild` write to the tree. Running them first means the run
- *   this checks covers the pre-format commit while `publish-workspaces` packs
- *   the post-format tree, so the thing tested and the thing published are two
- *   trees by construction.
+ *   anyone knows whether the release may proceed at all. Nothing that writes
+ *   or pushes may come between this and the publish.
  *
  * Reading the commit is only worth anything while the tree still IS that
- * commit, which is why a dirty tree is refused here rather than noted. What
- * `format` and `rebuild` do to the tree afterwards is `require-clean-tree`'s
- * question.
+ * commit, which is why a dirty tree is refused here as well rather than noted.
  *
  * It also refuses while the latest finished run of the nightly type-drift
  * guard on main is red. That guard never runs on a commit, so the check above
