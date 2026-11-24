@@ -5,14 +5,37 @@
  */
 
 import type { AnyVectorStorage, IVectorStorage, VectorSearchOptions } from "@workglow/storage";
-import { getLogger } from "@workglow/util";
 import type { DataPortSchemaObject, TypedArray } from "@workglow/util/schema";
 import { ScopedTabularStorage } from "./ScopedTabularStorage";
 
 /**
- * Adds an `IVectorStorage` surface to {@link ScopedTabularStorage}. Inner
- * vector results are post-filtered by `kb_id`, with overfetch sized by
- * `overFetchMultiplier` so filtering rarely starves the result.
+ * The `topK` every vector backend in this monorepo applies when a search names
+ * none. The wrapper has to know it: it widens the inner search until that many
+ * of its own rows come back.
+ */
+const DEFAULT_TOP_K = 10;
+
+/**
+ * The most rows one widened inner search asks for (unless `topK` times the
+ * multiplier already asks for more). Without a ceiling, a knowledge base
+ * holding fewer than `topK` rows widens until the request exceeds the shared
+ * table, which is a full-table search materialised on every query.
+ */
+const MAX_WIDENED_FETCH = 10_000;
+
+/**
+ * Adds an `IVectorStorage` surface to {@link ScopedTabularStorage}.
+ *
+ * `IVectorStorage` filters on metadata only, not on columns, so the inner
+ * search cannot be told to keep `kb_id`'s rows; its results are filtered here.
+ * The first search over-fetches `topK * overFetchMultiplier`, and while fewer
+ * than `topK` of this scope's rows survive and the inner store returned all it
+ * was asked for (so it may hold more), the request doubles. A small knowledge
+ * base sharing a table with a large one therefore still gets its `topK`, at the
+ * cost of a deeper inner search, instead of an empty answer. The widening stops
+ * at {@link MAX_WIDENED_FETCH} rows, so a scope with fewer than `topK` rows of
+ * its own costs a bounded search rather than one over the whole table; past that
+ * depth it returns what it found.
  */
 export class ScopedVectorStorage<
   Metadata extends Record<string, unknown> | undefined,
@@ -31,47 +54,36 @@ export class ScopedVectorStorage<
   constructor(inner: AnyVectorStorage, kbId: string, overFetchMultiplier: number = 3) {
     super(inner, kbId);
     this.inner = inner;
-    this.overFetchMultiplier = overFetchMultiplier;
+    this.overFetchMultiplier = Math.max(1, overFetchMultiplier);
   }
 
   getVectorDimensions(): number {
     return this.inner.getVectorDimensions();
   }
 
-  private filterAndStrip(
-    results: any[],
-    topK: number | undefined,
-    overfetchLimit: number | undefined
-  ): (Entity & { score: number })[] {
-    const filtered = results.filter((r: any) => r.kb_id === this.kbId).slice(0, topK);
-
-    // Only warn when cross-KB filtering is likely the culprit: the inner search
-    // returned exactly as many results as we requested (overfetch limit) and
-    // filtering still left us short of topK.
-    if (topK && overfetchLimit && results.length >= overfetchLimit && filtered.length < topK) {
-      getLogger().warn(
-        `ScopedVectorStorage: search returned ${filtered.length}/${topK} results after ` +
-          `kb_id filtering. Consider increasing overFetchMultiplier (currently ${this.overFetchMultiplier}).`
-      );
-    }
-
-    return filtered.map((r: any) => {
-      const { kb_id: _, ...rest } = r;
-      return rest as Entity & { score: number };
-    });
-  }
-
   async similaritySearch(
     query: TypedArray,
     options?: VectorSearchOptions<Metadata>
   ): Promise<(Entity & { score: number })[]> {
-    const overfetchLimit = options?.topK ? options.topK * this.overFetchMultiplier : undefined;
-    const results = await this.inner.similaritySearch(query, {
-      ...options,
-      topK: overfetchLimit,
-    } as any);
+    const topK = options?.topK ?? DEFAULT_TOP_K;
+    let limit = Math.max(1, Math.ceil(topK * this.overFetchMultiplier));
+    const maxLimit = Math.max(limit, MAX_WIDENED_FETCH);
+    let own: any[];
+    for (;;) {
+      const results = await this.inner.similaritySearch(query, {
+        ...options,
+        topK: limit,
+      } as any);
+      own = results.filter((r: any) => r.kb_id === this.kbId);
+      // Fewer rows than asked for means the inner store has no more to give.
+      if (own.length >= topK || results.length < limit || limit >= maxLimit) break;
+      limit = Math.min(limit * 2, maxLimit);
+    }
 
-    const scoped = this.filterAndStrip(results, options?.topK, overfetchLimit);
+    const scoped = own.slice(0, Math.max(0, topK)).map((r: any) => {
+      const { kb_id: _, ...rest } = r;
+      return rest as Entity & { score: number };
+    });
 
     // On this wrapper's own emitter, and with the rows the caller is handed —
     // as every inherited event here already does. The inner store's event fires

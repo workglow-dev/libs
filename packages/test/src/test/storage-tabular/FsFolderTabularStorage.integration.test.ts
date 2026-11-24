@@ -4,11 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { PageCursor } from "@workglow/storage";
-import { FsFolderTabularStorage, StorageUnsupportedError } from "@workglow/storage";
+import type { ITabularMigration, PageCursor } from "@workglow/storage";
+import {
+  FsFolderTabularStorage,
+  StorageCorruptionError,
+  StorageUnsupportedError,
+} from "@workglow/storage";
 import { setLogger, uuid4 } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
-import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { runTabularStorageContract } from "@workglow/test-contract/tabular-storage";
 import { runGenericTabularStorageSubscriptionTests } from "./genericTabularStorageSubscriptionTests";
@@ -122,11 +126,126 @@ describe("FsFolderTabularStorage", () => {
       await expect(storage.getOffsetPage(0, 10)).rejects.toThrow(/Failed to read file/);
     });
 
-    test("a corrupt row file is skipped and the readable rows still come back", async () => {
+    // A row that does not parse used to be skipped with a warning, so it
+    // vanished from every listing while size() still counted it.
+    test("a corrupt row file raises a typed error naming the file", async () => {
       const storage = await seed();
       writeFileSync(`${testDir}/corrupt.json`, "{ not json");
-      expect((await storage.getAll())?.length).toBe(3);
-      expect((await storage.getOffsetPage(0, 10))?.length).toBe(3);
+      await expect(storage.getAll()).rejects.toBeInstanceOf(StorageCorruptionError);
+      await expect(storage.getOffsetPage(0, 10)).rejects.toThrow(/corrupt\.json/);
+    });
+
+    test("a zero-byte row file (a torn write) raises rather than vanishing", async () => {
+      const storage = await seed();
+      const [victim] = readdirSync(testDir).filter((f) => f.endsWith(".json"));
+      writeFileSync(`${testDir}/${victim}`, "");
+      expect(await storage.size()).toBe(3);
+      await expect(storage.getAll()).rejects.toBeInstanceOf(StorageCorruptionError);
+    });
+  });
+
+  // Rows are written to a temp file and renamed into place. A crash between
+  // the two leaves the temp file behind and the previous row untouched.
+  describe("crash-safe writes", () => {
+    const makeStorage = (dir: string) =>
+      new FsFolderTabularStorage<typeof CompoundSchema, typeof CompoundPrimaryKeyNames>(
+        dir,
+        CompoundSchema,
+        CompoundPrimaryKeyNames
+      );
+
+    test("a leftover temp file is ignored and the previous row survives", async () => {
+      const dir = `${testDir}/crash_${uuid4()}`;
+      const storage = makeStorage(dir);
+      await storage.setupDatabase();
+      await storage.put({ name: "a", type: "t", option: "v1", success: true });
+      const [rowFile] = readdirSync(dir).filter((f) => f.endsWith(".json"));
+      // What an interrupted put of "v2" leaves: a partial temp sibling.
+      writeFileSync(`${dir}/${rowFile}.${uuid4()}.tmp`, '{"name":"a","type":"t","opt');
+
+      expect(await storage.size()).toBe(1);
+      const rows = await storage.getAll();
+      expect(rows).toHaveLength(1);
+      expect(rows?.[0].option).toBe("v1");
+      expect((await storage.get({ name: "a", type: "t" }))?.option).toBe("v1");
+    });
+
+    test("put leaves no temp file behind and replaces the row whole", async () => {
+      const dir = `${testDir}/crash_${uuid4()}`;
+      const storage = makeStorage(dir);
+      await storage.setupDatabase();
+      await storage.put({ name: "a", type: "t", option: "v1", success: true });
+      await storage.put({ name: "a", type: "t", option: "v2", success: false });
+      const files = readdirSync(dir);
+      expect(files.filter((f) => f.endsWith(".tmp"))).toEqual([]);
+      expect(JSON.parse(readFileSync(`${dir}/${files[0]}`, "utf8")).option).toBe("v2");
+    });
+
+    test("setupDatabase sweeps stale temp files but keeps fresh ones", async () => {
+      const dir = `${testDir}/crash_${uuid4()}`;
+      mkdirSync(dir, { recursive: true });
+      const stale = `${dir}/row.json.${uuid4()}.tmp`;
+      const fresh = `${dir}/row.json.${uuid4()}.tmp`;
+      writeFileSync(stale, "{");
+      writeFileSync(fresh, "{");
+      const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      utimesSync(stale, hourAgo, hourAgo);
+      await makeStorage(dir).setupDatabase();
+      const left = readdirSync(dir);
+      expect(left).toContain(fresh.slice(dir.length + 1));
+      expect(left).not.toContain(stale.slice(dir.length + 1));
+    });
+  });
+
+  // The migration bookkeeping file is read on every setupDatabase. Written in
+  // place, a torn copy made the store unopenable with a bare SyntaxError.
+  describe("migration bookkeeping", () => {
+    const schema = {
+      type: "object",
+      properties: { id: { type: "string" }, n: { type: "integer" } },
+      required: ["id"],
+      additionalProperties: false,
+    } as const;
+    const migrations: ReadonlyArray<ITabularMigration> = [
+      {
+        component: "rows",
+        version: 1,
+        ops: [{ kind: "addIndex", name: "by_n", columns: ["n"] }],
+      },
+    ];
+
+    test("is persisted without a temp file left behind", async () => {
+      const dir = `${testDir}/mig_${uuid4()}`;
+      const storage = new FsFolderTabularStorage(
+        dir,
+        schema,
+        ["id"] as const,
+        [],
+        "if-missing",
+        migrations
+      );
+      await storage.setupDatabase();
+      const files = readdirSync(dir);
+      expect(files).toContain("_storage_migrations.json");
+      expect(files.filter((f) => f.endsWith(".tmp"))).toEqual([]);
+      expect(JSON.parse(readFileSync(`${dir}/_storage_migrations.json`, "utf8"))).toEqual({
+        rows: [1],
+      });
+    });
+
+    test("a corrupt bookkeeping file raises StorageCorruptionError", async () => {
+      const dir = `${testDir}/mig_${uuid4()}`;
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(`${dir}/_storage_migrations.json`, "");
+      const storage = new FsFolderTabularStorage(
+        dir,
+        schema,
+        ["id"] as const,
+        [],
+        "if-missing",
+        migrations
+      );
+      await expect(storage.setupDatabase()).rejects.toBeInstanceOf(StorageCorruptionError);
     });
   });
 

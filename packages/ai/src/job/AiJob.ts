@@ -20,6 +20,13 @@ import type { Capability } from "../capability/Capabilities";
 import type { ModelConfig } from "../model/ModelSchema";
 import type { AiSessionContext } from "../provider/AiProviderRegistry";
 import { getAiProviderRegistry } from "../provider/AiProviderRegistry";
+import {
+  DEFAULT_RATE_LIMIT_RETRY_MS,
+  hasBillingCode,
+  isCreditExhaustedError,
+  markRetryDateEstimated,
+  statedRetryAfterMs,
+} from "./ProviderErrorSignals";
 
 /** Default timeout for provider API calls (60 minutes). */
 const DEFAULT_AI_TIMEOUT_MS = 60 * 60 * 1000;
@@ -155,9 +162,11 @@ export function classifyProviderError(err: unknown, taskType: string, provider: 
   // different question from a retry, and a stated answer beats a guess made
   // from the message.
   const declared = declaredRetryability(err);
+  const retryAfterMs = statedRetryAfterMs(err);
+  const retryDate = retryAfterMs === undefined ? undefined : new Date(Date.now() + retryAfterMs);
   if (declared !== undefined) {
     return declared
-      ? new RetryableJobError(withJobErrorDiagnostics(message, err))
+      ? new RetryableJobError(withJobErrorDiagnostics(message, err), retryDate)
       : new PermanentJobError(withJobErrorDiagnostics(message, err));
   }
 
@@ -169,13 +178,34 @@ export function classifyProviderError(err: unknown, taskType: string, provider: 
     return new RetryableJobError(withJobErrorDiagnostics(message, err));
   }
 
-  if (status === 429) {
-    const retryAfterMatch = message.match(/retry.after[:\s]*(\d+)/i);
-    const retryMs = retryAfterMatch ? parseInt(retryAfterMatch[1], 10) * 1000 : 30_000;
-    return new RetryableJobError(
-      withJobErrorDiagnostics(`Rate limited by ${provider} for ${taskType}: ${message}`, err),
-      new Date(Date.now() + retryMs)
+  // An account out of credits answers 429 too (OpenAI's `insufficient_quota`),
+  // and no wait fixes it. A billing code is taken at its word; billing wording
+  // alone is not, because Gemini words a per-minute quota the same way, with
+  // or without the wait that clears it. So wording decides only once the
+  // status is gone too (an error flattened across a worker) and no wait was
+  // stated; beside a live 429 it is read as the rate limit it most often is.
+  if (
+    hasBillingCode(err) ||
+    (retryAfterMs === undefined && status !== 429 && isCreditExhaustedError(err))
+  ) {
+    return new PermanentJobError(
+      withJobErrorDiagnostics(`Out of credits with ${provider} for ${taskType}: ${message}`, err)
     );
+  }
+
+  // A stated wait becomes the retry date. Without one a default spaces the
+  // retry for a queue, whose limiter would otherwise reschedule it at once, and
+  // is marked estimated so a caller with its own backoff (an agent's round
+  // retry) does not read it as the provider's word. A stated wait with no
+  // status left (an error flattened across a worker keeps its message and the
+  // wait, not its status) is the provider asking to be called again, so it is
+  // a rate limit too.
+  if (status === 429 || (status === undefined && retryAfterMs !== undefined)) {
+    const limited = new RetryableJobError(
+      withJobErrorDiagnostics(`Rate limited by ${provider} for ${taskType}: ${message}`, err),
+      retryDate ?? new Date(Date.now() + DEFAULT_RATE_LIMIT_RETRY_MS)
+    );
+    return retryDate === undefined ? markRetryDateEstimated(limited) : limited;
   }
 
   if (status === 401 || status === 403) {
@@ -198,7 +228,8 @@ export function classifyProviderError(err: unknown, taskType: string, provider: 
       withJobErrorDiagnostics(
         `Server error from ${provider} for ${taskType} (HTTP ${status}): ${message}`,
         err
-      )
+      ),
+      retryDate
     );
   }
 
@@ -207,7 +238,8 @@ export function classifyProviderError(err: unknown, taskType: string, provider: 
   // occurred while processing the request." — is as transient as a 5xx.
   if (isServerErrorReport(err, message)) {
     return new RetryableJobError(
-      withJobErrorDiagnostics(`Server error from ${provider} for ${taskType}: ${message}`, err)
+      withJobErrorDiagnostics(`Server error from ${provider} for ${taskType}: ${message}`, err),
+      retryDate
     );
   }
 

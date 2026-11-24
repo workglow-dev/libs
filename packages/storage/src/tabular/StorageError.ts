@@ -69,3 +69,19 @@ export class StorageUnsupportedError extends StorageError {
     super(`${operation} is not supported for ${backend}`);
   }
 }
+
+/**
+ * A stored record exists but cannot be decoded (a truncated or hand-edited
+ * file, say). Raised rather than treating the record as absent: a listing that
+ * quietly drops it disagrees with `size()`, and a caller reading "missing"
+ * would overwrite or re-create what is in fact damaged data.
+ */
+export class StorageCorruptionError extends StorageError {
+  static override readonly type: string = "StorageCorruptionError";
+  constructor(
+    public readonly location: string,
+    options?: { cause?: unknown }
+  ) {
+    super(`Stored record at "${location}" is corrupt and cannot be read`, options);
+  }
+}

@@ -6,10 +6,11 @@
 
 import { createServiceToken } from "@workglow/util";
 import type { JsonSchema } from "@workglow/util/schema";
-import { mkdir, readFile, rm, unlink, writeFile } from "fs/promises";
+import { mkdir, readFile, rm, unlink } from "fs/promises";
 import path from "path";
 import { safeEmit } from "../events/safeEmit";
-import { StorageUnsupportedError } from "../tabular/StorageError";
+import { StorageCorruptionError, StorageUnsupportedError } from "../tabular/StorageError";
+import { atomicWriteFile } from "../util/atomicWriteFile";
 import type { IKvStorage } from "./IKvStorage";
 import { KvStorage } from "./KvStorage";
 
@@ -70,7 +71,9 @@ export class FsFolderKvStorage<
     }
 
     await mkdir(path.dirname(localPath), { recursive: true });
-    await writeFile(localPath, content);
+    // Temp file + rename: a crash mid-write leaves the previous value, never a
+    // truncated file that reads back as a different value.
+    await atomicWriteFile(localPath, content);
     // Post-commit emit: the file is written, so a throwing subscriber must not
     // turn a durable write into a thrown error.
     safeEmit(this.events, "put", key, value);
@@ -96,48 +99,61 @@ export class FsFolderKvStorage<
     return combined;
   }
 
+  /**
+   * Only a missing file means "no such key". Any other read failure (`EACCES`,
+   * `EMFILE`, a path that is a directory) is thrown: reporting it as absent
+   * invites the caller to recompute and overwrite a value that still exists.
+   */
   public async get(key: Key): Promise<Value | undefined> {
     const localPath = path.join(this.folderPath, this.pathWriter(key).replaceAll("..", "_"));
     const typeDef = this.valueSchema;
+    const encoding =
+      typeof typeDef === "object" &&
+      typeDef !== null &&
+      "contentEncoding" in typeDef &&
+      typeDef.contentEncoding === "blob"
+        ? "binary"
+        : "utf-8";
+    let content: string;
     try {
-      const encoding =
-        typeof typeDef === "object" &&
-        typeDef !== null &&
-        "contentEncoding" in typeDef &&
-        typeDef.contentEncoding === "blob"
-          ? "binary"
-          : "utf-8";
-      const content = (await readFile(localPath, { encoding })).toString().trim();
+      content = (await readFile(localPath, { encoding })).toString().trim();
+    } catch (error) {
+      if ((error as { code?: string })?.code !== "ENOENT") throw error;
+      safeEmit(this.events, "get", key, undefined);
+      return undefined;
+    }
 
-      let value: Value;
-      if (encoding === "utf-8") {
-        const schemaType =
-          typeof typeDef === "object" && typeDef !== null && "type" in typeDef
-            ? typeDef.type
-            : undefined;
-        if (
-          schemaType === "object" ||
-          (content.startsWith("{") && content.endsWith("}")) ||
-          (content.startsWith("[") && content.endsWith("]"))
-        ) {
-          try {
-            value = JSON.parse(content) as Value;
-          } catch (e) {
-            value = content as unknown as Value;
+    let value: Value;
+    if (encoding === "utf-8") {
+      const schemaType =
+        typeof typeDef === "object" && typeDef !== null && "type" in typeDef
+          ? typeDef.type
+          : undefined;
+      if (
+        schemaType === "object" ||
+        (content.startsWith("{") && content.endsWith("}")) ||
+        (content.startsWith("[") && content.endsWith("]"))
+      ) {
+        try {
+          value = JSON.parse(content) as Value;
+        } catch (error) {
+          // An object-typed value is always written as JSON (or as "" for
+          // null), so anything else under that schema is a damaged file. An
+          // untyped value that merely looks like JSON may be a plain string.
+          if (schemaType === "object" && content !== "") {
+            throw new StorageCorruptionError(localPath, { cause: error });
           }
-        } else {
           value = content as unknown as Value;
         }
       } else {
         value = content as unknown as Value;
       }
-
-      safeEmit(this.events, "get", key, value);
-      return value;
-    } catch (error) {
-      safeEmit(this.events, "get", key, undefined);
-      return undefined;
+    } else {
+      value = content as unknown as Value;
     }
+
+    safeEmit(this.events, "get", key, value);
+    return value;
   }
 
   public async delete(key: Key): Promise<void> {

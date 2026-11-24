@@ -9,6 +9,7 @@ import type { Usage } from "@workglow/task-graph";
 import { USAGE_PROMPT_FIELDS } from "@workglow/task-graph";
 import type { ServiceRegistry } from "@workglow/util";
 import { estimateCost } from "../capability/CostEstimate";
+import { isRetryDateEstimated } from "../job/ProviderErrorSignals";
 import type { ModelPricing } from "../model/ModelPricing";
 import { mergeModelPricing } from "../model/ModelPricing";
 import { getGlobalModelRepository } from "../model/ModelRegistry";
@@ -137,7 +138,10 @@ const MAX_RETRY_MS = 60_000;
  * one second and one minute either way.
  */
 export function retryDelayMs(err: unknown, attempt: number, now: number = Date.now()): number {
-  const stated = err instanceof RetryableJobError ? err.retryDate?.getTime() : undefined;
+  const stated =
+    err instanceof RetryableJobError && !isRetryDateEstimated(err)
+      ? err.retryDate?.getTime()
+      : undefined;
   const wanted = stated !== undefined ? stated - now : 2_000 * 2 ** (attempt - 1);
   return Math.min(MAX_RETRY_MS, Math.max(MIN_RETRY_MS, wanted));
 }

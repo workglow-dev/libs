@@ -17,10 +17,15 @@ import type {
   FromSchema,
   TypedArraySchemaOptions,
 } from "@workglow/util/schema";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { safeEmit } from "../events/safeEmit";
 import { type ITabularMigration, type ITabularMigrationApplier } from "../migrations";
+import {
+  atomicWriteFile,
+  isAtomicWriteTempFile,
+  sweepStaleAtomicWriteTempFiles,
+} from "../util/atomicWriteFile";
 import { PollingSubscriptionManager } from "../util/PollingSubscriptionManager";
 import type { ClientProvidedKeysOption, KeyGenerationStrategy } from "./BaseTabularStorage";
 import { BaseTabularStorage } from "./BaseTabularStorage";
@@ -41,7 +46,7 @@ import type {
   TabularChangePayload,
   TabularSubscribeOptions,
 } from "./ITabularStorage";
-import { StorageUnsupportedError } from "./StorageError";
+import { StorageCorruptionError, StorageUnsupportedError } from "./StorageError";
 
 export const FS_FOLDER_TABULAR_REPOSITORY = createServiceToken<AnyTabularStorage>(
   "storage.tabularRepository.fsFolder"
@@ -53,6 +58,12 @@ export const FS_FOLDER_TABULAR_REPOSITORY = createServiceToken<AnyTabularStorage
  * and an `EMFILE` here is indistinguishable from a row that does not exist.
  */
 const FS_READ_CONCURRENCY = 32;
+
+/**
+ * Age past which a leftover temp file is the remains of a crashed write rather
+ * than one in progress, and `setupDatabase` removes it.
+ */
+const STALE_TEMP_FILE_MS = 10 * 60 * 1000;
 
 class FsFolderMigrationApplier extends InMemoryTabularMigrationApplier {
   private loaded = false;
@@ -72,14 +83,22 @@ class FsFolderMigrationApplier extends InMemoryTabularMigrationApplier {
   private async load(): Promise<void> {
     if (this.loaded) return;
     const file = `${this.folderPath}/_storage_migrations.json`;
+    let text: string;
     try {
-      const text = await readFile(file, "utf8");
-      const parsed = JSON.parse(text) as Record<string, number[]>;
-      for (const [c, vs] of Object.entries(parsed)) {
-        this.applied.set(c, new Set(vs));
-      }
+      text = await readFile(file, "utf8");
     } catch (err: unknown) {
       if ((err as { code?: string })?.code !== "ENOENT") throw err;
+      this.loaded = true;
+      return;
+    }
+    let parsed: Record<string, number[]>;
+    try {
+      parsed = JSON.parse(text) as Record<string, number[]>;
+    } catch (error) {
+      throw new StorageCorruptionError(file, { cause: error });
+    }
+    for (const [c, vs] of Object.entries(parsed)) {
+      this.applied.set(c, new Set(vs));
     }
     this.loaded = true;
   }
@@ -87,7 +106,7 @@ class FsFolderMigrationApplier extends InMemoryTabularMigrationApplier {
     const file = `${this.folderPath}/_storage_migrations.json`;
     const out: Record<string, number[]> = {};
     for (const [c, vs] of this.applied) out[c] = [...vs].sort((a, b) => a - b);
-    await writeFile(file, JSON.stringify(out, null, 2));
+    await atomicWriteFile(file, JSON.stringify(out, null, 2));
   }
 }
 
@@ -138,6 +157,7 @@ export class FsFolderTabularStorage<
 
   override async setupDatabase(): Promise<void> {
     await this.setupDirectory();
+    await sweepStaleAtomicWriteTempFiles(this.folderPath, STALE_TEMP_FILE_MS);
     if (this.tabularMigrations && this.tabularMigrations.length > 0) {
       await this.applyTabularMigrations();
     }
@@ -193,14 +213,19 @@ export class FsFolderTabularStorage<
     return { ...entity, [keyName]: generatedValue } as Entity;
   }
 
+  /**
+   * Writes through a temp file and a rename, so a crash mid-save leaves the
+   * previous row intact rather than a truncated file every reader rejects.
+   */
   private async writeEntityToPath(filePath: string, entityToStore: Entity): Promise<Entity> {
+    const content = JSON.stringify(entityToStore);
     try {
-      await writeFile(filePath, JSON.stringify(entityToStore));
+      await atomicWriteFile(filePath, content);
     } catch (error) {
       // CI system sometimes has issues temporarily; retry once.
       await sleep(1);
       try {
-        await writeFile(filePath, JSON.stringify(entityToStore));
+        await atomicWriteFile(filePath, content);
       } catch (retryError) {
         throw new Error(
           `Failed to write file "${filePath}" after retry: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
@@ -313,10 +338,15 @@ export class FsFolderTabularStorage<
     return (await this.listRowFiles()).length;
   }
 
-  /** Row files in the folder, excluding internal bookkeeping ("_"-prefixed) ones. */
+  /**
+   * Row files in the folder, excluding internal bookkeeping ("_"-prefixed) ones
+   * and the temp files of writes in progress (or interrupted by a crash).
+   */
   private async listRowFiles(): Promise<string[]> {
     const files = await readdir(this.folderPath);
-    return files.filter((file) => file.endsWith(".json") && !file.startsWith("_"));
+    return files.filter(
+      (file) => file.endsWith(".json") && !file.startsWith("_") && !isAtomicWriteTempFile(file)
+    );
   }
 
   /**
@@ -345,8 +375,11 @@ export class FsFolderTabularStorage<
 
   /**
    * Reads one row file. A file that is gone (deleted between the listing and
-   * the read) means "no row here" and is skipped; one whose contents do not
-   * parse is skipped too, with a warning, since that is corruption.
+   * the read) means "no row here" and is skipped. One whose contents do not
+   * parse throws {@link StorageCorruptionError} naming the file: rows are
+   * written atomically, so such a file was damaged outside this class, and
+   * skipping it would make the row vanish from every listing while `size()`
+   * still counted it.
    *
    * Every other read failure is transient, and it gets one retry and is then
    * thrown. Swallowing it would return a row set that is short but looks
@@ -376,8 +409,7 @@ export class FsFolderTabularStorage<
     try {
       return JSON.parse(content) as Entity;
     } catch (error) {
-      getLogger().warn(`Skipping corrupted file in ${context}`, { filePath, error });
-      return undefined;
+      throw new StorageCorruptionError(filePath, { cause: error });
     }
   }
 

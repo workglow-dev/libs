@@ -13,6 +13,7 @@ export * from "./human/HumanConnector";
 export * from "./human/humanPrompt";
 export * from "./logging";
 export * from "./utilities/BaseError";
+export * from "./utilities/creditExhaustion";
 export * from "./utilities/asText";
 export * from "./utilities/Misc";
 export * from "./utilities/regexShape";

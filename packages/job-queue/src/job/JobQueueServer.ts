@@ -59,6 +59,8 @@ export type JobQueueServerEventListeners<Input, Output> = {
     details: Record<string, unknown> | null
   ) => void;
   job_stream: (queueName: string, jobId: unknown, event: StreamEventLike) => void;
+  /** See the worker's `job_lease_lost`: an execution abandoned after losing its lease. */
+  job_lease_lost: (queueName: string, jobId: unknown, reason: string) => void;
 };
 
 export type JobQueueServerEvents = keyof JobQueueServerEventListeners<unknown, unknown>;
@@ -530,6 +532,16 @@ export class JobQueueServer<
       this.forwardToClients("handleJobRetry", jobId, visibleAt);
     });
 
+    worker.on("job_lease_lost", (jobId, reason) => {
+      // The job is not settled: the claim that now owns it reports its outcome,
+      // possibly from another process, which an attached client never hears.
+      // Clients are told so that a caller waiting on the job reads storage for
+      // it instead of waiting on an event that will not come here.
+      this.events.emit("job_lease_lost", this.queueName, jobId, reason);
+      this.forwardToClients("handleJobLeaseLost", jobId);
+      this.notifyWorkers();
+    });
+
     worker.on("job_progress", (jobId, progress, message, details) => {
       this.events.emit("job_progress", this.queueName, jobId, progress, message, details);
       this.forwardToClients("handleJobProgress", jobId, progress, message, details);
@@ -581,6 +593,7 @@ export class JobQueueServer<
     errorCode?: string
   ): void;
   protected forwardToClients(method: "handleJobDisabled", jobId: unknown): void;
+  protected forwardToClients(method: "handleJobLeaseLost", jobId: unknown): void;
   protected forwardToClients(method: "handleJobRetry", jobId: unknown, visibleAt: Date): void;
   protected forwardToClients(
     method: "handleJobProgress",

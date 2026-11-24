@@ -251,3 +251,70 @@ describe("ScopedTabularStorage.putByUniqueKey", () => {
     expect(await b.getAll()).toEqual([{ id: "1", slug: "intro", title: "B" }]);
   });
 });
+
+/**
+ * Every concrete backend reduces `delete(entity)` to the entity's primary key.
+ * The wrapper once matched on every field instead, so an entity read before a
+ * later update deleted nothing and reported nothing.
+ */
+describe("ScopedTabularStorage.delete", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      kb_id: { type: "string" },
+      n: { type: "integer" },
+      tags: { type: "array", items: { type: "string" } },
+    },
+    required: ["id", "kb_id", "n"],
+    additionalProperties: false,
+  } as const satisfies DataPortSchemaObject;
+
+  const makeInner = (): AnyTabularStorage =>
+    new InMemoryTabularStorage(
+      schema,
+      ["kb_id", "id"] as const,
+      []
+    ) as unknown as AnyTabularStorage;
+
+  it("deletes by primary key, so a stale entity still removes its row", async () => {
+    const a = new ScopedTabularStorage(makeInner(), "A") as ScopedTabularStorage<
+      any,
+      any,
+      any,
+      any,
+      any
+    >;
+    await a.put({ id: "z", n: 1, tags: ["x"] });
+    const stale = await a.get({ id: "z" });
+    await a.put({ id: "z", n: 2, tags: ["y"] });
+
+    await a.delete(stale);
+    expect(await a.get({ id: "z" })).toBeUndefined();
+  });
+
+  it("deletes only within its own scope", async () => {
+    const inner = makeInner();
+    const a = new ScopedTabularStorage(inner, "A") as ScopedTabularStorage<any, any, any, any, any>;
+    const b = new ScopedTabularStorage(inner, "B") as ScopedTabularStorage<any, any, any, any, any>;
+    await a.put({ id: "z", n: 1 });
+    await b.put({ id: "z", n: 1 });
+
+    await a.delete({ id: "z" });
+    expect(await a.get({ id: "z" })).toBeUndefined();
+    expect(await b.get({ id: "z" })).toEqual({ id: "z", n: 1 });
+  });
+
+  it("refuses a key missing a primary-key column rather than widening the delete", async () => {
+    const a = new ScopedTabularStorage(makeInner(), "A") as ScopedTabularStorage<
+      any,
+      any,
+      any,
+      any,
+      any
+    >;
+    await a.put({ id: "z", n: 1 });
+    await expect(a.delete({ n: 1 })).rejects.toBeInstanceOf(StorageValidationError);
+    expect(await a.get({ id: "z" })).toEqual({ id: "z", n: 1 });
+  });
+});

@@ -7,6 +7,8 @@
 import { traced } from "@workglow/util";
 import type { StreamChunkRow, StreamEventLike } from "../job/JobQueueEventListeners";
 import type {
+  ClaimFence,
+  ClaimFinalizeFields,
   IQueueStorage,
   JobStatus,
   JobStorageFormat,
@@ -80,6 +82,12 @@ export class TelemetryQueueStorage<Input, Output> implements IQueueStorage<Input
           this.inner.failWithError!(id, opts)
         );
     }
+    if (typeof inner.finalizeClaim === "function") {
+      this.finalizeClaim = (id: unknown, fence: ClaimFence, fields: ClaimFinalizeFields<Output>) =>
+        traced("workglow.storage.queue.finalizeClaim", this.storageName, () =>
+          this.inner.finalizeClaim!(id, fence, fields)
+        );
+    }
   }
 
   public get scope(): QueueStorageScope {
@@ -116,6 +124,15 @@ export class TelemetryQueueStorage<Input, Output> implements IQueueStorage<Input
       readonly abortRequested?: boolean;
     }
   ) => Promise<void>;
+  /**
+   * Hiding the inner's fenced write would drop the claim back to the
+   * wrapper's read-check-write fallback, reopening the stale-claim race.
+   */
+  public readonly finalizeClaim?: (
+    id: unknown,
+    fence: ClaimFence,
+    fields: ClaimFinalizeFields<Output>
+  ) => Promise<boolean>;
 
   /** Conditionally assigned in the constructor — mirrors the inner's presence. */
   public readonly publishStreamChunk?: (jobId: unknown, event: StreamEventLike) => Promise<void>;
@@ -141,9 +158,11 @@ export class TelemetryQueueStorage<Input, Output> implements IQueueStorage<Input
       this.inner.next(workerId, opts)
     );
   }
-  extendLease(id: unknown, workerId: string, ms: number): Promise<void> {
+  extendLease(id: unknown, workerId: string, ms: number, attempts?: number): Promise<void> {
     return traced("workglow.storage.queue.extendLease", this.storageName, () =>
-      this.inner.extendLease(id, workerId, ms)
+      attempts === undefined
+        ? this.inner.extendLease(id, workerId, ms)
+        : this.inner.extendLease(id, workerId, ms, attempts)
     );
   }
   peek(status?: JobStatus, num?: number): Promise<Array<JobStorageFormat<Input, Output>>> {

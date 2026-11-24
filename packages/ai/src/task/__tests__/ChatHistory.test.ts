@@ -7,6 +7,7 @@
 import type { ChatMessage } from "@workglow/ai";
 import {
   DEFAULT_MAX_HISTORY_CHARS,
+  IMAGE_BLOCK_CHARS,
   measureHistoryForModel,
   normalizeHistoryForModel,
   trimHistoryForModel,
@@ -29,6 +30,28 @@ const toolResult = (id: string): ChatMessage => ({
     },
   ],
 });
+
+const system = (text: string): ChatMessage => ({
+  role: "system",
+  content: [{ type: "text", text }],
+});
+const toolUse = (id: string): ChatMessage => ({
+  role: "assistant",
+  content: [{ type: "tool_use", id, name: "screenshot", input: {} }],
+});
+const toolResultImage = (id: string, data: string): ChatMessage => ({
+  role: "tool",
+  content: [
+    {
+      type: "tool_result",
+      tool_use_id: id,
+      content: [{ type: "image", mimeType: "image/png", data }],
+      is_error: undefined,
+    },
+  ],
+});
+/** About what a 100 KB PNG is as base64. */
+const SCREENSHOT = "A".repeat(140_000);
 
 describe("normalizeHistoryForModel", () => {
   it("merges consecutive user messages, keeping both texts", () => {
@@ -230,6 +253,50 @@ describe("trimHistoryForModel", () => {
     ];
     expect(measureHistoryForModel(plain)).toBeGreaterThan(0);
     expect(measureHistoryForModel(withPayload)).toBeLessThan(5000);
+  });
+
+  it("keeps a conversation holding one screenshot whole under the default budget", () => {
+    // Measured by its base64, one screenshot is over the whole budget, and
+    // every turn up to it would be cut on every later round.
+    const history: ChatMessage[] = [
+      system("sys"),
+      user("My name is Ada. Remember it."),
+      assistant("OK Ada."),
+      user("Take a screenshot"),
+      toolUse("t1"),
+      toolResultImage("t1", SCREENSHOT),
+      assistant("Done."),
+      user("What is my name?"),
+    ];
+    expect(trimHistoryForModel(history)).toEqual(history);
+  });
+
+  it("still trims oldest-first when many image turns exceed the budget", () => {
+    const history: ChatMessage[] = [system("sys")];
+    for (let i = 0; i < 40; i++) {
+      history.push(user(`shot ${i}`), toolUse(`t${i}`), toolResultImage(`t${i}`, SCREENSHOT));
+      history.push(assistant(`done ${i}`));
+    }
+    const trimmed = trimHistoryForModel(history);
+    expect(trimmed.length).toBeLessThan(history.length);
+    expect(trimmed[0]).toEqual(history[0]);
+    // What survives is the newest run of turns, contiguous to the end.
+    expect(trimmed.slice(1)).toEqual(history.slice(history.length - (trimmed.length - 1)));
+    expect(trimmed[1]!.role).toBe("user");
+    expect(measureHistoryForModel(trimmed)).toBeLessThanOrEqual(DEFAULT_MAX_HISTORY_CHARS);
+  });
+
+  it("measures an image at a fixed size, top-level or inside a tool_result", () => {
+    const nested = (data: string): ChatMessage[] => [toolResultImage("t1", data)];
+    const topLevel = (data: string): ChatMessage[] => [
+      { role: "user", content: [{ type: "image", mimeType: "image/png", data }] },
+    ];
+    for (const build of [nested, topLevel]) {
+      const big = measureHistoryForModel(build(SCREENSHOT));
+      expect(big).toBe(measureHistoryForModel(build("AAAA")));
+      expect(big).toBeGreaterThanOrEqual(IMAGE_BLOCK_CHARS);
+      expect(big).toBeLessThan(IMAGE_BLOCK_CHARS + 300);
+    }
   });
 
   it("exposes a default budget callers can reason about", () => {

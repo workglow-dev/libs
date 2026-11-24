@@ -86,3 +86,29 @@ export class AbortSignalJobError extends PermanentJobError {
 export class JobDisabledError extends PermanentJobError {
   public static override type: string = "JobDisabledError";
 }
+
+/**
+ * Raised when a claim's lease is no longer held by the claim that tried to
+ * use it: its lease expired and another claim (another worker's, or this
+ * worker's own poll loop's) now owns the row, or the row is gone. A terminal
+ * write (`ack` / `fail` / `retry` / `disable`) or a lease renewal from such a
+ * claim is refused with this error instead of overwriting the new owner's
+ * row, and the worker abandons the execution rather than reporting a result.
+ */
+export class LeaseLostError extends JobError {
+  public static override type: string = "LeaseLostError";
+  constructor(message: string = "Lease lost") {
+    super(message);
+  }
+}
+
+/**
+ * True for a {@link LeaseLostError}, including one whose class was lost on
+ * the way (a duplicate copy of this package, or a value rebuilt from a
+ * message), which still carries its `name`.
+ */
+export function isLeaseLostError(err: unknown): err is LeaseLostError {
+  return (
+    err instanceof LeaseLostError || (err instanceof Error && err.name === LeaseLostError.type)
+  );
+}

@@ -37,6 +37,16 @@ export interface JobQueueFactoryOptions<Input, Output> {
   readonly deleteAfterDisabledMs?: number;
   readonly cleanupIntervalMs?: number;
   readonly stopTimeoutMs?: number;
+  /** Passed to the server; see `JobQueueServerOptions.leaseMs`. */
+  readonly leaseMs?: number;
+  /**
+   * Passed to the server; see `JobQueueServerOptions.extendLeaseWhileRunning`.
+   * Defaults to `true` when the factory builds its own in-memory storage (no
+   * `storage` given) and to the server's default otherwise. An in-memory queue
+   * dies with its worker, so a lease there only ever expires under a job that
+   * is still running — and the worker's own poll loop then reclaims it.
+   */
+  readonly extendLeaseWhileRunning?: boolean;
 }
 
 export interface JobQueueFactoryParams<Input extends TaskInput, Output extends TaskOutput> {
@@ -54,16 +64,19 @@ export type JobQueueFactory = <Input extends TaskInput, Output extends TaskOutpu
 
 export const JOB_QUEUE_FACTORY = createServiceToken<JobQueueFactory>("taskgraph.jobQueueFactory");
 
-const defaultJobQueueFactory: JobQueueFactory = async <
-  Input extends TaskInput,
-  Output extends TaskOutput,
->({
-  queueName,
-  jobClass,
-  options,
-}: JobQueueFactoryParams<Input, Output>): Promise<RegisteredQueue<Input, Output>> => {
+/**
+ * Build the storage, server and client one factory call returns. Shared by
+ * the default factory and {@link createJobQueueFactoryWithOptions} so the two
+ * cannot drift on which options reach the server.
+ */
+async function buildRegisteredQueue<Input extends TaskInput, Output extends TaskOutput>(
+  queueName: string,
+  jobClass: JobClassConstructor<Input, Output>,
+  options: JobQueueFactoryOptions<Input, Output> | undefined
+): Promise<RegisteredQueue<Input, Output>> {
+  const ownsStorage = options?.storage === undefined;
   const storage =
-    (options?.storage as IQueueStorage<Input, Output>) ??
+    (options?.storage as IQueueStorage<Input, Output> | undefined) ??
     new InMemoryQueueStorage<Input, Output>(queueName);
   await storage.migrate();
   const { messageQueue, jobStore } = wrapQueueStorage(storage);
@@ -80,6 +93,8 @@ const defaultJobQueueFactory: JobQueueFactory = async <
     deleteAfterDisabledMs: options?.deleteAfterDisabledMs,
     cleanupIntervalMs: options?.cleanupIntervalMs,
     stopTimeoutMs: options?.stopTimeoutMs,
+    leaseMs: options?.leaseMs,
+    extendLeaseWhileRunning: options?.extendLeaseWhileRunning ?? (ownsStorage ? true : undefined),
   });
 
   const client = new JobQueueClient<Input, Output>({
@@ -92,7 +107,17 @@ const defaultJobQueueFactory: JobQueueFactory = async <
   client.attach(server);
 
   return { server, client, storage };
-};
+}
+
+const defaultJobQueueFactory: JobQueueFactory = async <
+  Input extends TaskInput,
+  Output extends TaskOutput,
+>({
+  queueName,
+  jobClass,
+  options,
+}: JobQueueFactoryParams<Input, Output>): Promise<RegisteredQueue<Input, Output>> =>
+  buildRegisteredQueue(queueName, jobClass, options);
 
 export function registerJobQueueFactory(factory: JobQueueFactory): void {
   globalServiceRegistry.registerInstance(JOB_QUEUE_FACTORY, factory);
@@ -113,37 +138,7 @@ export function createJobQueueFactoryWithOptions(
       ...defaultOptions,
       ...(options ?? {}),
     } as JobQueueFactoryOptions<Input, Output>;
-
-    const storage =
-      (mergedOptions.storage as IQueueStorage<Input, Output>) ??
-      new InMemoryQueueStorage<Input, Output>(queueName);
-    await storage.migrate();
-    const { messageQueue, jobStore } = wrapQueueStorage(storage);
-
-    const server = new JobQueueServer<Input, Output>(jobClass as JobClassConstructor<any, any>, {
-      messageQueue,
-      jobStore,
-      queueName,
-      limiter: mergedOptions.limiter,
-      workerCount: mergedOptions.workerCount,
-      pollIntervalMs: mergedOptions.pollIntervalMs,
-      deleteAfterCompletionMs: mergedOptions.deleteAfterCompletionMs,
-      deleteAfterFailureMs: mergedOptions.deleteAfterFailureMs,
-      deleteAfterDisabledMs: mergedOptions.deleteAfterDisabledMs,
-      cleanupIntervalMs: mergedOptions.cleanupIntervalMs,
-      stopTimeoutMs: mergedOptions.stopTimeoutMs,
-    });
-
-    const client = new JobQueueClient<Input, Output>({
-      messageQueue,
-      jobStore,
-      queueName,
-    });
-
-    // Attach client to server for same-process optimization
-    client.attach(server);
-
-    return { server, client, storage };
+    return buildRegisteredQueue(queueName, jobClass, mergedOptions);
   };
 }
 

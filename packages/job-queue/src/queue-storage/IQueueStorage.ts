@@ -136,6 +136,56 @@ export type JobStorageFormat<Input, Output> = {
 export type QueueStorageScope = "process" | "cluster";
 
 /**
+ * The fields {@link IQueueStorage.finalize} may write. A partial overwrite:
+ * a field absent from the object is left untouched.
+ */
+export interface QueueFinalizeFields<Output> {
+  readonly output?: Output | null;
+  readonly error?: string | null;
+  readonly error_code?: string | null;
+  readonly status?: JobStatus;
+  readonly completed_at?: string | null;
+  readonly abort_requested_at?: string | null;
+  readonly lease_owner?: string | null;
+  readonly progress?: number;
+  readonly progress_message?: string;
+  readonly progress_details?: Record<string, any> | null;
+  /**
+   * Shift the PENDING `visible_at` forward to defer redelivery. Used by
+   * the transient-enqueue path (markEnqueueDeferred) so a producer-side
+   * failure does not lose the job — set visible_at + error_code, leave
+   * status/attempts alone.
+   */
+  readonly visible_at?: string | null;
+}
+
+/**
+ * Identifies one claim on a row for {@link IQueueStorage.finalizeClaim}: the
+ * worker id it was claimed under and the row's `attempts` at claim time.
+ * `attempts` is part of the identity because a lease-expiry reclaim bumps it,
+ * so a stale claim is refused even when the reclaim came from the same worker
+ * id.
+ */
+export interface ClaimFence {
+  readonly leaseOwner: string;
+  readonly attempts: number;
+}
+
+/**
+ * The fields {@link IQueueStorage.finalizeClaim} may write: everything
+ * {@link QueueFinalizeFields} allows, plus what the retry transition needs.
+ */
+export interface ClaimFinalizeFields<Output> extends QueueFinalizeFields<Output> {
+  readonly lease_expires_at?: string | null;
+  /**
+   * Charge an attempt (`attempts = attempts + 1`) in the same write. Set by a
+   * claim's `retry`, which hands the job back to PENDING; terminal writes
+   * leave `attempts` alone, as {@link IQueueStorage.finalize} does.
+   */
+  readonly incrementAttempts?: boolean;
+}
+
+/**
  * Interface defining the storage operations for a job queue
  */
 export interface IQueueStorage<Input, Output> {
@@ -176,12 +226,18 @@ export interface IQueueStorage<Input, Output> {
 
   /**
    * Extend the lease on a currently PROCESSING job. Guards: lease_owner must
-   * match workerId and status must be PROCESSING. Throws if lease was lost.
+   * match workerId and status must be PROCESSING. Throws if lease was lost —
+   * built-in backends throw a `LeaseLostError`, which the worker reads as
+   * "stop this execution" rather than as a transient storage failure.
    * @param id - The ID of the job to extend the lease for
    * @param workerId - Worker ID that must match the current lease owner
    * @param ms - Number of milliseconds to extend the lease by
+   * @param attempts - When given, the row's `attempts` must also equal it.
+   *   A lease-expiry reclaim bumps `attempts`, so this is what tells a claim
+   *   apart from a later reclaim by the SAME worker id (a worker's own poll
+   *   loop re-claiming a job it is still running).
    */
-  extendLease(id: unknown, workerId: string, ms: number): Promise<void>;
+  extendLease(id: unknown, workerId: string, ms: number, attempts?: number): Promise<void>;
 
   /**
    * Releases a job that was just claimed by {@link next} but won't be
@@ -253,28 +309,33 @@ export interface IQueueStorage<Input, Output> {
    * @param id - The ID of the job to finalize
    * @param fields - Terminal fields to write
    */
-  finalize(
+  finalize(id: unknown, fields: QueueFinalizeFields<Output>): Promise<void>;
+
+  /**
+   * Fenced terminal write for a claim: applies `fields` exactly as
+   * {@link finalize} does, but only while the row is still held by the claim
+   * named by `fence` — `status = PROCESSING`, `lease_owner = fence.leaseOwner`
+   * and `attempts = fence.attempts`, checked in the same operation as the
+   * write. Resolves `true` when the row was written and `false` when it was
+   * not (the lease was lost to a reclaim, the job settled, or the row is gone),
+   * leaving the row untouched.
+   *
+   * Without the fence a worker whose lease expired and was reclaimed lands its
+   * result over the new owner's row: a late `ack` overwrites a running
+   * execution, a late `retry` resurrects a completed job, a late `fail` turns
+   * COMPLETED into FAILED.
+   *
+   * Optional so a custom store keeps compiling; the {@link wrapQueueStorage}
+   * claim falls back to a read-check-write over {@link get} / {@link finalize}
+   * / {@link complete} when it is absent, which narrows the race to the gap
+   * between the read and the write rather than closing it. Every built-in
+   * backend implements it.
+   */
+  finalizeClaim?(
     id: unknown,
-    fields: {
-      output?: Output | null;
-      error?: string | null;
-      error_code?: string | null;
-      status?: JobStatus;
-      completed_at?: string | null;
-      abort_requested_at?: string | null;
-      lease_owner?: string | null;
-      progress?: number;
-      progress_message?: string;
-      progress_details?: Record<string, any> | null;
-      /**
-       * Shift the PENDING `visible_at` forward to defer redelivery. Used by
-       * the transient-enqueue path (markEnqueueDeferred) so a producer-side
-       * failure does not lose the job — set visible_at + error_code, leave
-       * status/attempts alone.
-       */
-      visible_at?: string | null;
-    }
-  ): Promise<void>;
+    fence: ClaimFence,
+    fields: ClaimFinalizeFields<Output>
+  ): Promise<boolean>;
 
   /**
    * Atomically writes the DISABLED terminal transition: status=DISABLED,

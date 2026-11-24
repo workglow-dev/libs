@@ -25,10 +25,12 @@ import type { DeadLetter } from "./DeadLetter";
 import type { Job, JobClass } from "./Job";
 import {
   AbortSignalJobError,
+  isLeaseLostError,
   JobDisabledError,
   JobError,
   jobErrorPersistedCode,
   JobNotFoundError,
+  LeaseLostError,
   PermanentJobError,
   RetryableJobError,
 } from "./JobError";
@@ -44,6 +46,12 @@ import { isRetryableError } from "./Retryability";
  * immediately so operators get a prompt signal.
  */
 const LOOP_ERROR_LOG_INTERVAL_MS = 5_000;
+
+/**
+ * How many times one terminal write is re-issued through a claim this worker's
+ * own poll loop reclaimed while the write was in flight.
+ */
+const MAX_SETTLE_REISSUES = 3;
 
 /**
  * First backoff step used when the idle peek says the head of the queue is
@@ -69,6 +77,14 @@ export type JobQueueWorkerEventListeners<Input, Output> = {
     details: Record<string, unknown> | null
   ) => void;
   job_stream: (jobId: unknown, event: StreamEventLike) => void;
+  /**
+   * The worker lost its lease on a running job — another claim now owns the
+   * row — and abandoned the execution: its signal was aborted with a
+   * {@link LeaseLostError}, and no terminal write or `job_complete` /
+   * `job_error` / `job_retry` / `job_disabled` event follows from it. The job's
+   * outcome is the new owner's to report.
+   */
+  job_lease_lost: (jobId: unknown, reason: string) => void;
   worker_start: () => void;
   worker_stop: () => void;
 };
@@ -109,7 +125,8 @@ export interface JobQueueWorkerOptions<Input, Output> {
   readonly stopTimeoutMs?: number;
   /**
    * If true, the worker will call extendLease periodically while a job is
-   * executing. Extension interval is leaseMs * 0.5. Default: false.
+   * executing, every leaseMs / 3 — two renewals fit in each lease, so one
+   * late timer under load does not let it expire. Default: false.
    */
   readonly extendLeaseWhileRunning?: boolean;
   /**
@@ -201,6 +218,33 @@ export class JobQueueWorker<
    * ack/retry/fail/extendLease in completion paths.
    */
   private readonly activeClaims: Map<unknown, IClaim<JobStorageFormat<Input, Output>>> = new Map();
+
+  /**
+   * Claims whose lease this worker learned it lost (a renewal refused with a
+   * {@link LeaseLostError}), with that error. The execution holding one is
+   * aborted and makes no terminal write.
+   */
+  private readonly lostLeases = new WeakMap<IClaim<JobStorageFormat<Input, Output>>, JobError>();
+
+  /**
+   * Claims whose settling write has started, and which kind it is. A claim for
+   * the same job arriving during a `retry` is a genuinely new delivery (the
+   * retry handed the row back to PENDING). One arriving during a terminal write
+   * (`ack` / `fail` / `disable`) can only be this worker's poll loop reclaiming
+   * the row under it, so it is adopted and the write is re-issued through it.
+   */
+  private readonly settlingClaims = new WeakMap<
+    IClaim<JobStorageFormat<Input, Output>>,
+    "terminal" | "retry"
+  >();
+
+  /**
+   * The polling loop's claim batch while it is being fetched and dispatched. A
+   * terminal write refused because this worker's own poll reclaimed the row
+   * waits for it, so the reclaimed claim has reached {@link reclaimDisposition}
+   * (and been adopted) before the refusal is read as a lost lease.
+   */
+  private claimBatchInFlight: Promise<void> | undefined;
 
   /**
    * Resolve function for the idle wait promise.
@@ -478,9 +522,66 @@ export class JobQueueWorker<
     if (!claim) return undefined;
     const job = this.storageToClass(claim.body) as QueueJob;
     if (job.id != null) {
+      const disposition = this.reclaimDisposition(job.id, claim);
+      if (disposition === "adopted") return undefined;
+      if (disposition === "busy") {
+        await this.deferReclaim(claim);
+        return undefined;
+      }
       this.activeClaims.set(job.id, claim);
     }
     return job;
+  }
+
+  /**
+   * What to do with a claim for a job this worker may already be running.
+   *
+   * A storage hands a PROCESSING row whose lease expired to the next `next()`
+   * caller — this worker's own poll loop included, which reclaims a job it is
+   * still executing whenever a renewal ran late. Running the claim would
+   * execute the job a second time beside the first.
+   *
+   * - `"adopted"`: the execution already running here takes the new claim
+   *   over, so its renewals and its terminal write go through the claim that
+   *   now owns the row. Nobody else held the job in between — the reclaimer
+   *   is this worker — so nothing ran twice; the reclaim's attempt is the only
+   *   cost.
+   * - `"busy"`: the job is still winding down here after its lease was lost;
+   *   the claim is handed back rather than run alongside it.
+   * - `"dispatch"`: nothing here holds the job (or its claim is settling a
+   *   retry, which handed the row back for a new delivery); run the claim
+   *   normally.
+   *
+   * A claim arriving while the held one settles a terminal write is adopted
+   * too: the write was refused or is about to be, and {@link settleClaim}
+   * re-issues it through the adopted claim.
+   */
+  private reclaimDisposition(
+    jobId: unknown,
+    claim: IClaim<JobStorageFormat<Input, Output>>
+  ): "adopted" | "busy" | "dispatch" {
+    const held = this.activeClaims.get(jobId);
+    if (held === undefined || held === claim || !this.inFlight.has(jobId)) return "dispatch";
+    if (this.settlingClaims.get(held) === "retry") return "dispatch";
+    if (this.lostLeases.has(held)) return "busy";
+    this.activeClaims.set(jobId, claim);
+    return "adopted";
+  }
+
+  /**
+   * Hand back a claim for a job still winding down here. `releaseClaim`
+   * returns the row to PENDING without charging an attempt; a later poll
+   * picks it up once the abandoned execution has settled.
+   */
+  private async deferReclaim(claim: IClaim<JobStorageFormat<Input, Output>>): Promise<void> {
+    try {
+      await this.messageQueue.releaseClaim(claim.id);
+    } catch (err) {
+      getLogger().error("releasing a reclaim of a job still settling here failed", {
+        jobId: claim.id,
+        error: err,
+      });
+    }
   }
 
   /**
@@ -549,6 +650,15 @@ export class JobQueueWorker<
     for (const claim of claims) {
       const job = this.storageToClass(claim.body) as QueueJob;
       if (job.id != null) {
+        const disposition = this.reclaimDisposition(job.id, claim);
+        if (disposition === "adopted") continue;
+        if (disposition === "busy") {
+          await this.deferReclaim(claim);
+          // Back off as for a full limiter: the poll would otherwise reclaim
+          // the released row at once and spin until the old execution ends.
+          limiterFull = true;
+          continue;
+        }
         this.activeClaims.set(job.id, claim);
       }
 
@@ -648,8 +758,14 @@ export class JobQueueWorker<
         // non-blocking tryAcquire for each. Jobs that can't immediately get a
         // limiter slot are released back to PENDING so other workers can pick
         // them up. With prefetch == 1 the behavior is identical to before.
-        const claims = await this.nextBatch();
-        if (claims.length === 0) {
+        const batch = await this.trackClaimBatch(async () => {
+          const claims = await this.nextBatch();
+          if (claims.length === 0) return undefined;
+          this.readyRetryStreak = 0;
+          this.idleStreak = 0;
+          return await this.processClaimsInternal(claims);
+        });
+        if (batch === undefined) {
           // Queue is empty — sleep until notified of new work or until the
           // next deferred job becomes ready.
           const delay = await this.getIdleDelay();
@@ -657,10 +773,7 @@ export class JobQueueWorker<
           continue;
         }
 
-        this.readyRetryStreak = 0;
-        this.idleStreak = 0;
-
-        const { dispatched, limiterFull } = await this.processClaimsInternal(claims);
+        const { dispatched, limiterFull } = batch;
 
         if (!this.running) {
           return;
@@ -688,6 +801,21 @@ export class JobQueueWorker<
         }
         await sleep(this.pollIntervalMs);
       }
+    }
+  }
+
+  /**
+   * Runs one claim batch with {@link claimBatchInFlight} set to its settling,
+   * which never rejects, so a waiter only learns the batch is done.
+   */
+  private async trackClaimBatch<T>(run: () => Promise<T>): Promise<T> {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.claimBatchInFlight = promise;
+    try {
+      return await run();
+    } finally {
+      resolve();
+      if (this.claimBatchInFlight === promise) this.claimBatchInFlight = undefined;
     }
   }
 
@@ -891,16 +1019,10 @@ export class JobQueueWorker<
 
       let leaseInterval: ReturnType<typeof setInterval> | undefined;
       if (this.extendLeaseWhileRunning) {
-        leaseInterval = setInterval(() => {
-          const claim = this.activeClaims.get(job.id);
-          if (!claim) return;
-          claim.extendLease(this.leaseMs).catch((err) => {
-            getLogger().error("extendLease failed during job execution:", {
-              error: err,
-              jobId: job.id,
-            });
-          });
-        }, this.leaseMs * 0.5);
+        leaseInterval = setInterval(
+          () => this.renewLease(job.id, "extendLease failed during job execution:"),
+          this.renewalPeriodMs()
+        );
       }
 
       let output: Output;
@@ -911,6 +1033,11 @@ export class JobQueueWorker<
           clearInterval(leaseInterval);
         }
         this.clearStreamClaimHeartbeat(job.id);
+      }
+      const lost = this.lostLeaseOf(job.id);
+      if (lost) {
+        this.abandonLostLease(job.id, lost);
+        return;
       }
       await this.completeJob(job, output);
 
@@ -925,6 +1052,15 @@ export class JobQueueWorker<
         span.setStatus(SpanStatusCode.OK);
       }
     } catch (err: unknown) {
+      const lost = this.lostLeaseOf(job.id);
+      if (lost) {
+        // The failure is most likely the abort the lost lease fired. Either
+        // way it is not this execution's to record: the row has a new owner.
+        this.abandonLostLease(job.id, lost);
+        span?.setStatus(SpanStatusCode.UNSET);
+        span?.setAttributes({ "workglow.job.lease_lost": true });
+        return;
+      }
       const error = this.normalizeError(err);
       let spanErrorMessage = error.message;
       if (isRetryableError(error)) {
@@ -1129,18 +1265,147 @@ export class JobQueueWorker<
     // claimed window (a fire-and-forget event landing after the terminal
     // write) and a timer here would have nothing to clear it.
     if (!this.activeClaims.has(jobId)) return;
-    const period = Math.max(1, Math.floor(this.leaseMs * 0.5));
-    const timer = setInterval(() => {
-      const claim = this.activeClaims.get(jobId);
-      if (!claim) return;
-      claim.extendLease(this.leaseMs).catch((err) => {
-        getLogger().error("extendLease failed while a stream event was in flight:", {
-          error: err,
-          jobId,
-        });
-      });
-    }, period);
+    const timer = setInterval(
+      () => this.renewLease(jobId, "extendLease failed while a stream event was in flight:"),
+      this.renewalPeriodMs()
+    );
     this.streamClaimHeartbeats.set(jobId, timer);
+  }
+
+  /**
+   * Renewal period: a third of the lease, so the lease survives one renewal
+   * that lands late (a timer delayed by a busy event loop, a slow round trip).
+   */
+  private renewalPeriodMs(): number {
+    return Math.max(1, Math.floor(this.leaseMs / 3));
+  }
+
+  /**
+   * Renew the lease of the claim this worker currently holds for `jobId`. A
+   * renewal refused with a {@link LeaseLostError} means another claim owns the
+   * row: the execution is abandoned (see {@link markLeaseLost}). Any other
+   * failure is logged and left to the next renewal; the fenced terminal write
+   * still refuses the result if the lease really was lost.
+   */
+  private renewLease(jobId: unknown, failureMessage: string): void {
+    const claim = this.activeClaims.get(jobId);
+    if (!claim || this.lostLeases.has(claim) || this.settlingClaims.has(claim)) return;
+    claim.extendLease(this.leaseMs).catch((err: unknown) => {
+      // A claim replaced while its renewal was in flight was taken over by
+      // this worker (see reclaimDisposition); its refusal is expected.
+      if (this.activeClaims.get(jobId) !== claim) return;
+      if (isLeaseLostError(err)) {
+        this.markLeaseLost(jobId, claim, err);
+        return;
+      }
+      getLogger().error(failureMessage, { error: err, jobId });
+    });
+  }
+
+  /**
+   * Record that `claim` no longer owns its row and stop the execution holding
+   * it. The abort carries the {@link LeaseLostError} as its reason, so a job
+   * reading `signal.reason` can tell this apart from a user's abort.
+   */
+  private markLeaseLost(
+    jobId: unknown,
+    claim: IClaim<JobStorageFormat<Input, Output>>,
+    err: JobError
+  ): void {
+    if (this.lostLeases.has(claim)) return;
+    this.lostLeases.set(claim, err);
+    getLogger().warn("JobQueueWorker lost the lease on a running job; abandoning it", {
+      jobId,
+      queueName: this.queueName,
+      workerId: this.workerId,
+      reason: err.message,
+    });
+    const controller = this.activeJobAbortControllers.get(jobId);
+    if (controller && !controller.signal.aborted) {
+      controller.abort(err);
+    }
+  }
+
+  /** The lease-loss error recorded for the claim this worker holds, if any. */
+  private lostLeaseOf(jobId: unknown): JobError | undefined {
+    const claim = this.activeClaims.get(jobId);
+    return claim ? this.lostLeases.get(claim) : undefined;
+  }
+
+  /**
+   * Settle an execution whose lease was lost: no terminal write and no
+   * outcome event, only `job_lease_lost`.
+   */
+  private abandonLostLease(jobId: unknown, err: JobError): void {
+    try {
+      this.events.emit("job_lease_lost", jobId, err.message);
+    } finally {
+      this.cleanupJob(jobId);
+    }
+  }
+
+  /**
+   * Mark `claim` as settling and hand it to `write`. A {@link LeaseLostError}
+   * from the write (the storage refused it because another claim owns the
+   * row) is reported as `job_lease_lost` and resolves `false`; any other
+   * error propagates.
+   *
+   * A terminal write is first re-issued through a claim this worker adopted
+   * meanwhile: its own poll loop can reclaim the row while the write is in
+   * flight, which bumps `attempts` and so refuses the write, yet nobody else
+   * holds the job. The in-flight claim batch is awaited first so that claim
+   * has been adopted by the time the refusal is read.
+   */
+  private async settleClaim(
+    jobId: unknown,
+    claim: IClaim<JobStorageFormat<Input, Output>>,
+    kind: "terminal" | "retry",
+    write: (claim: IClaim<JobStorageFormat<Input, Output>>) => Promise<void>
+  ): Promise<boolean> {
+    let current = claim;
+    // Each re-issue follows a fresh reclaim; a write that always outlasts the
+    // lease would otherwise chase reclaims for ever.
+    let reissuesLeft = MAX_SETTLE_REISSUES;
+    for (;;) {
+      this.settlingClaims.set(current, kind);
+      try {
+        await write(current);
+        return true;
+      } catch (err) {
+        if (!isLeaseLostError(err)) throw err;
+        if (kind === "terminal") {
+          await this.claimBatchInFlight;
+          const adopted = this.activeClaims.get(jobId);
+          if (
+            reissuesLeft > 0 &&
+            adopted !== undefined &&
+            adopted !== current &&
+            !this.lostLeases.has(adopted)
+          ) {
+            reissuesLeft -= 1;
+            current = adopted;
+            continue;
+          }
+        }
+        return this.reportRefusedWrite(jobId, current, err);
+      }
+    }
+  }
+
+  private reportRefusedWrite(
+    jobId: unknown,
+    claim: IClaim<JobStorageFormat<Input, Output>>,
+    err: JobError
+  ): false {
+    this.lostLeases.set(claim, err);
+    getLogger().warn("JobQueueWorker terminal write refused: the lease was lost", {
+      jobId,
+      queueName: this.queueName,
+      workerId: this.workerId,
+      reason: err.message,
+    });
+    this.events.emit("job_lease_lost", jobId, err.message);
+    return false;
   }
 
   /** Stop renewing a job's claim. Idempotent. */
@@ -1177,7 +1442,10 @@ export class JobQueueWorker<
       // reclaims it, and no `job_complete` is ever emitted.
       const claim = this.getClaim(job.id);
       if (claim) {
-        await claim.ack(output ?? null);
+        const written = await this.settleClaim(job.id, claim, "terminal", (c) =>
+          c.ack(output ?? null)
+        );
+        if (!written) return;
       } else {
         // No active claim (rare path — e.g. abort beat us to it). Write
         // result + COMPLETED status atomically via the job store.
@@ -1211,11 +1479,14 @@ export class JobQueueWorker<
       const abortRequested = error instanceof AbortSignalJobError;
       const claim = this.getClaim(job.id);
       if (claim) {
-        await claim.fail({
-          error: error.message,
-          errorCode: persistedCode,
-          abortRequested,
-        });
+        const written = await this.settleClaim(job.id, claim, "terminal", (c) =>
+          c.fail({
+            error: error.message,
+            errorCode: persistedCode,
+            abortRequested,
+          })
+        );
+        if (!written) return;
       } else {
         // No active claim (e.g. lease lost or abort path).
         await this.jobStore.failWithError(job.id, {
@@ -1247,7 +1518,7 @@ export class JobQueueWorker<
       // releases the lease, and clears progress fields.
       const claim = this.getClaim(job.id);
       if (claim) {
-        await claim.disable();
+        if (!(await this.settleClaim(job.id, claim, "terminal", (c) => c.disable()))) return;
       } else {
         // No active claim (lease lost / aborted). Use markDisabled, not
         // saveStatus, so the no-claim path produces the same row state as
@@ -1306,7 +1577,10 @@ export class JobQueueWorker<
       const claim = this.getClaim(job.id);
       const delaySeconds = Math.max(0, (job.visibleAt.getTime() - Date.now()) / 1000);
       if (claim) {
-        await claim.retry({ delaySeconds });
+        const written = await this.settleClaim(job.id, claim, "retry", (c) =>
+          c.retry({ delaySeconds })
+        );
+        if (!written) return;
       }
       this.events.emit("job_retry", job.id, job.visibleAt);
     } catch (err) {

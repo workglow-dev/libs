@@ -65,6 +65,12 @@ export interface WorkerErrorPayload {
   readonly name: string;
   readonly stack?: string;
   readonly retryable?: boolean;
+  /**
+   * How long the failed call's provider asked the caller to wait, when it said.
+   * The headers or `Date` that said so do not survive the trip, so the worker
+   * copies the wait onto the error as this number.
+   */
+  readonly retryAfterMs?: number;
 }
 
 /**
@@ -83,11 +89,13 @@ export function workerErrorPayload(
   }
   const scrubbed = options.includeStack ? scrubStack(error.stack, options.roots) : undefined;
   const retryable = (error as { retryable?: unknown }).retryable;
+  const retryAfterMs = (error as { retryAfterMs?: unknown }).retryAfterMs;
   return {
     message: error.message,
     name: error.name,
     ...(scrubbed !== undefined ? { stack: scrubbed } : {}),
     ...(typeof retryable === "boolean" ? { retryable } : {}),
+    ...(isRetryAfterMs(retryAfterMs) ? { retryAfterMs } : {}),
   };
 }
 
@@ -115,5 +123,10 @@ export function rehydrateWorkerError(data: unknown): Error {
     name: payload.name ?? "Error",
     ...(scrubbedStack !== undefined ? { stack: scrubbedStack } : {}),
     ...(typeof payload.retryable === "boolean" ? { retryable: payload.retryable } : {}),
+    ...(isRetryAfterMs(payload.retryAfterMs) ? { retryAfterMs: payload.retryAfterMs } : {}),
   });
+}
+
+function isRetryAfterMs(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }

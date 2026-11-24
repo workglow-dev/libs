@@ -62,6 +62,7 @@ export {
   takeDeferredPuts,
 } from "./tabular/NativeConnectionTransaction.server";
 
+export * from "./util/atomicWriteFile";
 export * from "./tabular/FsFolderTabularStorage";
 
 export * from "./kv/FsFolderJsonKvStorage";

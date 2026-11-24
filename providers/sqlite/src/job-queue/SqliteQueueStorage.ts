@@ -5,14 +5,17 @@
  */
 
 import type {
+  ClaimFence,
+  ClaimFinalizeFields,
   IQueueStorage,
   JobStorageFormat,
   PrefixColumn,
   QueueChangePayload,
+  QueueFinalizeFields,
   QueueStorageOptions,
   QueueSubscribeOptions,
 } from "@workglow/job-queue";
-import { JobStatus, validateLeaseMs } from "@workglow/job-queue";
+import { JobStatus, LeaseLostError, validateLeaseMs } from "@workglow/job-queue";
 import type { Sqlite } from "@workglow/sqlite/storage";
 import {
   assertPrefixesSafe,
@@ -454,16 +457,23 @@ export class SqliteQueueStorage<Input, Output> implements IQueueStorage<Input, O
    * @param workerId - Worker ID that must match the current lease owner (lease_owner)
    * @param ms - Number of milliseconds to extend the lease by
    */
-  public async extendLease(id: unknown, workerId: string, ms: number): Promise<void> {
+  public async extendLease(
+    id: unknown,
+    workerId: string,
+    ms: number,
+    attempts?: number
+  ): Promise<void> {
     validateLeaseMs(ms, "ms");
     const leaseExpiry = new Date(Date.now() + ms).toISOString();
     const prefixConditions = this.buildPrefixWhereClause();
     const prefixParams = this.getPrefixParamValues();
+    const attemptsCondition = attempts === undefined ? "" : " AND COALESCE(attempts, 0) = ?";
+    const attemptsParams = attempts === undefined ? [] : [attempts];
 
     const stmt = this.db.prepare<unknown[], { changes: number }>(
       `UPDATE ${this.tableName}
          SET lease_expires_at = ?
-         WHERE id = ? AND queue = ? AND lease_owner = ? AND status = ?${prefixConditions}`
+         WHERE id = ? AND queue = ? AND lease_owner = ? AND status = ?${attemptsCondition}${prefixConditions}`
     );
     const info = stmt.run(
       leaseExpiry,
@@ -471,10 +481,11 @@ export class SqliteQueueStorage<Input, Output> implements IQueueStorage<Input, O
       this.queueName,
       workerId,
       JobStatus.PROCESSING,
+      ...attemptsParams,
       ...prefixParams
     ) as { changes: number };
     if (info.changes === 0) {
-      throw new Error(
+      throw new LeaseLostError(
         `extendLease failed: job ${String(id)} is not PROCESSING or lease is not owned by worker ${workerId}`
       );
     }
@@ -567,24 +578,63 @@ export class SqliteQueueStorage<Input, Output> implements IQueueStorage<Input, O
    * for the rationale (avoids double-counting on ack/fail because the lease
    * reclaim path already charged the attempt at next() time).
    */
-  public async finalize(
+  public async finalize(id: unknown, fields: QueueFinalizeFields<Output>): Promise<void> {
+    const { sets, params } = this.finalizeAssignments(fields);
+    if (sets.length === 0) return;
+    const prefixConditions = this.buildPrefixWhereClause();
+    const prefixParams = this.getPrefixParamValues();
+    const stmt = this.db.prepare(
+      `UPDATE ${this.tableName}
+         SET ${sets.join(", ")}
+         WHERE id = ? AND queue = ?${prefixConditions}`
+    );
+    stmt.run(...(params as never[]), String(id), this.queueName, ...prefixParams);
+  }
+
+  /**
+   * {@link finalize} fenced to one claim: the ownership predicate is part of
+   * the UPDATE's WHERE clause, so a reclaim can never interleave between the
+   * check and the write.
+   */
+  public async finalizeClaim(
     id: unknown,
-    fields: {
-      output?: Output | null;
-      error?: string | null;
-      error_code?: string | null;
-      status?: JobStatus;
-      completed_at?: string | null;
-      abort_requested_at?: string | null;
-      lease_owner?: string | null;
-      progress?: number;
-      progress_message?: string;
-      progress_details?: Record<string, any> | null;
-      visible_at?: string | null;
+    fence: ClaimFence,
+    fields: ClaimFinalizeFields<Output>
+  ): Promise<boolean> {
+    const { sets, params } = this.finalizeAssignments(fields);
+    if ("lease_expires_at" in fields) {
+      sets.push("lease_expires_at = ?");
+      params.push(fields.lease_expires_at ?? null);
     }
-  ): Promise<void> {
+    if (fields.incrementAttempts === true) sets.push("attempts = COALESCE(attempts, 0) + 1");
+    // An empty write still has to answer whether the claim holds the row.
+    if (sets.length === 0) sets.push("id = id");
+    const prefixConditions = this.buildPrefixWhereClause();
+    const prefixParams = this.getPrefixParamValues();
+    const stmt = this.db.prepare<unknown[], { changes: number }>(
+      `UPDATE ${this.tableName}
+         SET ${sets.join(", ")}
+         WHERE id = ? AND queue = ? AND status = ? AND lease_owner = ?
+           AND COALESCE(attempts, 0) = ?${prefixConditions}`
+    );
+    const info = stmt.run(
+      ...(params as never[]),
+      String(id),
+      this.queueName,
+      JobStatus.PROCESSING,
+      fence.leaseOwner,
+      fence.attempts,
+      ...prefixParams
+    ) as { changes: number };
+    return info.changes > 0;
+  }
+
+  private finalizeAssignments(fields: QueueFinalizeFields<Output>): {
+    sets: string[];
+    params: unknown[];
+  } {
     const sets: string[] = [];
-    const params: Array<unknown> = [];
+    const params: unknown[] = [];
     const push = (col: string, value: unknown): void => {
       sets.push(`${col} = ?`);
       params.push(value);
@@ -608,15 +658,7 @@ export class SqliteQueueStorage<Input, Output> implements IQueueStorage<Input, O
       );
     }
     if ("visible_at" in fields) push("visible_at", fields.visible_at ?? null);
-    if (sets.length === 0) return;
-    const prefixConditions = this.buildPrefixWhereClause();
-    const prefixParams = this.getPrefixParamValues();
-    const stmt = this.db.prepare(
-      `UPDATE ${this.tableName}
-         SET ${sets.join(", ")}
-         WHERE id = ? AND queue = ?${prefixConditions}`
-    );
-    stmt.run(...(params as never[]), String(id), this.queueName, ...prefixParams);
+    return { sets, params };
   }
 
   public async deleteAll(): Promise<void> {

@@ -4,10 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { FsFolderKvStorage, StorageUnsupportedError } from "@workglow/storage";
+import {
+  FsFolderKvStorage,
+  StorageCorruptionError,
+  StorageUnsupportedError,
+} from "@workglow/storage";
 import { setLogger } from "@workglow/util";
 import { getTestingLogger } from "@workglow/util/test";
-import { mkdirSync, rmSync } from "fs";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runGenericKvRepositoryTests } from "./genericKvRepositoryTests";
 
@@ -69,6 +73,45 @@ describe("FsFolderKvStorage", () => {
     it("size throws the typed StorageUnsupportedError", async () => {
       const store = makeStore();
       await expect(store.size()).rejects.toBeInstanceOf(StorageUnsupportedError);
+    });
+  });
+
+  // `get` used to map every read failure to undefined, so a permission error
+  // or a damaged file read as "no such key" and invited an overwrite.
+  describe("read failures", () => {
+    it("returns undefined only for a key that was never written", async () => {
+      const store = new FsFolderKvStorage(testDir, (key) => `${String(key)}.data`);
+      expect(await store.get("missing")).toBeUndefined();
+    });
+
+    it("rethrows a read error other than ENOENT", async () => {
+      const store = new FsFolderKvStorage(testDir, (key) => `${String(key)}.data`);
+      mkdirSync(`${testDir}/is-a-dir.data`, { recursive: true });
+      await expect(store.get("is-a-dir")).rejects.toMatchObject({ code: "EISDIR" });
+    });
+
+    it("raises StorageCorruptionError for a torn object value", async () => {
+      const store = new FsFolderKvStorage(
+        testDir,
+        (key) => `${String(key)}.json`,
+        { type: "string" },
+        { type: "object" }
+      );
+      writeFileSync(`${testDir}/torn.json`, '{"a": 1, "b"');
+      await expect(store.get("torn")).rejects.toBeInstanceOf(StorageCorruptionError);
+    });
+
+    it("put leaves no temp file behind", async () => {
+      const store = new FsFolderKvStorage(
+        testDir,
+        (key) => `${String(key)}.json`,
+        { type: "string" },
+        { type: "object" }
+      );
+      await store.put("k", { a: 1 });
+      await store.put("k", { a: 2 });
+      expect(readdirSync(testDir)).toEqual(["k.json"]);
+      expect(await store.get("k")).toEqual({ a: 2 });
     });
   });
 });
