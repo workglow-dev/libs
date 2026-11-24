@@ -81,7 +81,7 @@
     "@google/genai": "^3.6.1",
     "node-llama-cpp": "^3.22.3",
     "needle-rs": "^0.3.1",
-    "@huggingface/inference": "^4.13.33",
+    "@huggingface/inference": "4.13.32",
     "ollama": "^0.6.4",
     "openai": "^7.63.0",
     "tiktoken": "^1.0.22",
