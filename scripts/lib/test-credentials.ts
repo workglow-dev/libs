@@ -22,6 +22,7 @@ export const CREDENTIAL_TO_ENV: Readonly<Record<string, string>> = {
   "gemini-api-key": "GEMINI_API_KEY",
   "hf-token": "HF_TOKEN",
   "xai-api-key": "XAI_API_KEY",
+  "meta-api-key": "META_API_KEY",
   "openrouter-api-key": "OPENROUTER_API_KEY",
   "deepseek-api-key": "DEEPSEEK_API_KEY",
   "typesafe-api-key": "TYPESAFE_API_KEY",

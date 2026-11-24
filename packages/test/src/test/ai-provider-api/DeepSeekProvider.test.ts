@@ -63,7 +63,7 @@ describe("DeepSeekQueuedProvider.inferCapabilities", () => {
     expect(caps).not.toContain("text.generation");
   });
 
-  it("infers the full capability set for deepseek-v4-flash", () => {
+  it("infers the full capability set for deepseek-v4-flash, image input included", () => {
     const caps = provider.inferCapabilities(model("deepseek-v4-flash"));
     const sorted = [...caps].sort();
     expect(sorted).toEqual([
@@ -75,7 +75,12 @@ describe("DeepSeekQueuedProvider.inferCapabilities", () => {
       "text.rewriter",
       "text.summary",
       "tool-use",
+      "vision-input",
     ]);
+  });
+
+  it("infers no image input for deepseek-v4-pro, which reads text only", () => {
+    expect(provider.inferCapabilities(model("deepseek-v4-pro"))).not.toContain("vision-input");
   });
 });
 

@@ -34,8 +34,8 @@ type CapabilityHints = Pick<ModelRecord, "model_id" | "provider_config" | "capab
  * stored `capabilities` array (or a baseline of search + info) when the id
  * names no known family.
  *
- * The DeepSeek chat models are text-only — no vision input and no image
- * generation — so the inferred set never includes those.
+ * DeepSeek generates no images; only DeepSeek Flash reads them, which its
+ * profile's `vision` records.
  *
  * Main-thread method only — workers do not run capability inference.
  */

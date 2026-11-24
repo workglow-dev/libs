@@ -23,6 +23,7 @@ interface GeminiModelEntry {
 }
 
 export const GEMINI_FALLBACK_MODELS: readonly GeminiModelEntry[] = [
+  { label: "gemini-4-neon", value: "gemini-4-neon" },
   { label: "gemini-4-carbon", value: "gemini-4-carbon" },
   { label: "gemini-4-argon", value: "gemini-4-argon" },
   { label: "gemini-4-hydrogen", value: "gemini-4-hydrogen" },
@@ -37,7 +38,6 @@ export const GEMINI_FALLBACK_MODELS: readonly GeminiModelEntry[] = [
   { label: "gemini-3.1-flash-image", value: "gemini-3.1-flash-image" },
   { label: "gemini-3.1-flash-lite-image", value: "gemini-3.1-flash-lite-image" },
   { label: "gemini-3-pro-image", value: "gemini-3-pro-image" },
-  { label: "imagen-4.0-generate-001", value: "imagen-4.0-generate-001" },
 ];
 
 interface GeminiApiModel {

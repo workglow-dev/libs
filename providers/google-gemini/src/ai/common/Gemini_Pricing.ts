@@ -20,6 +20,8 @@ import { resolveGeminiProfile } from "./Gemini_ModelProfiles";
  * rate is the card's own.
  */
 export const GEMINI_PRICING: Record<string, ModelPricing> = {
+  // Gemini 4 Neon is cached implicitly only, so no storage rate is published.
+  "gemini-4-neon": { currency: "USD", input: 3, output: 15, cached: 0.15 },
   // Gemini 4 Carbon and Argon carry an introductory price through 2026-11-30.
   // From 2026-12-01 Google lists input $4, output $20 and cached $0.20 per 1M
   // tokens; these two cards need updating then. No storage rate is published.
@@ -82,14 +84,7 @@ export const GEMINI_PRICING: Record<string, ModelPricing> = {
       { minInputTokens: 200_000, pricing: { input: 4, output: 18, cached: 0.4 } },
     ],
   },
-  "gemini-3.1-pro": {
-    currency: "USD",
-    input: 2,
-    output: 12,
-    cached: 0.5,
-    cacheStoragePerHour: 4.5,
-  },
-  "gemini-3-flash": {
+  "gemini-3-flash-preview": {
     currency: "USD",
     input: 0.5,
     output: 3,

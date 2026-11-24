@@ -28,6 +28,16 @@ const ALWAYS_REASONING = {
 } as const satisfies ModelEffortPolicy;
 
 /**
+ * The pro models (gpt-5.2-pro, 5.4-pro, 5.5-pro) take `medium`, `high` and
+ * `xhigh` only; any other level is left off the request, which then runs at
+ * the class default.
+ */
+const PRO_REASONING = {
+  supported: ["medium", "high", "extra"],
+  default: "medium",
+} as const satisfies ModelEffortPolicy;
+
+/**
  * Read off the profile's `reasoning`. OpenAI rejects `reasoning` with a 400 on
  * the chat models that do not take it, so a model the profile table cannot
  * place keeps the plain no-reasoning path; a new reasoning family is one row
@@ -40,6 +50,8 @@ export const openaiEffortPolicy: ModelEffortPolicyFn = makeProfileEffortPolicy(
     switch (profile.reasoning) {
       case "always":
         return ALWAYS_REASONING;
+      case "pro":
+        return PRO_REASONING;
       case "optional":
         return REASONING;
       case "none":

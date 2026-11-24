@@ -115,7 +115,7 @@ export type ToolResultImages =
   | {
       /**
        * In a user turn right after the tool results, the results carrying text
-       * only: OpenAI, xAI, OpenRouter, HF Inference, Ollama, older Gemini.
+       * only: OpenAI, xAI, Meta, OpenRouter, HF Inference, Ollama, older Gemini.
        */
       readonly kind: "user-turn-after";
     }

@@ -7,6 +7,7 @@
 import { Anthropic_ModelSearch_Stream, getAnthropicModelPricing } from "@workglow/anthropic/ai";
 import { DeepSeek_ModelSearch_Stream, getDeepSeekModelPricing } from "@workglow/deepseek/ai";
 import { Gemini_ModelSearch_Stream, getGeminiModelPricing } from "@workglow/google-gemini/ai";
+import { Meta_ModelSearch_Stream, getMetaModelPricing } from "@workglow/meta/ai";
 import { OpenAI_ModelSearch_Stream, getOpenAiModelPricing } from "@workglow/openai/ai";
 import { Xai_ModelSearch_Stream, getXaiModelPricing } from "@workglow/xai/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -57,6 +58,14 @@ describe("cloud model search results", () => {
       expect(result.record.pricing).toBeUndefined();
     }
     expect(results.some((result) => getDeepSeekModelPricing(result.id) !== undefined)).toBe(true);
+  });
+
+  it("leaves pricing unset on Meta records while the table still prices them", async () => {
+    const results = await searchRecords(Meta_ModelSearch_Stream);
+    for (const result of results) {
+      expect(result.record.pricing).toBeUndefined();
+      expect(getMetaModelPricing(result.id)).toBeDefined();
+    }
   });
 
   it("leaves pricing unset on xAI records while the table still prices them", async () => {
@@ -125,6 +134,7 @@ const PRICED_PROVIDERS = [
   { name: "OpenAI", search: OpenAI_ModelSearch_Stream, resolve: getOpenAiModelPricing },
   { name: "DeepSeek", search: DeepSeek_ModelSearch_Stream, resolve: getDeepSeekModelPricing },
   { name: "xAI", search: Xai_ModelSearch_Stream, resolve: getXaiModelPricing },
+  { name: "Meta", search: Meta_ModelSearch_Stream, resolve: getMetaModelPricing },
 ] as const;
 
 /**

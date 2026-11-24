@@ -39,6 +39,7 @@
     "@workglow/deepseek": "workspace:*",
     "@workglow/google-gemini": "workspace:*",
     "@workglow/huggingface-transformers": "workspace:*",
+    "@workglow/meta": "workspace:*",
     "@workglow/node-llama-cpp": "workspace:*",
     "@workglow/openai": "workspace:*",
     "@workglow/sqlite": "workspace:*",

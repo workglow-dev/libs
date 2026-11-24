@@ -68,7 +68,7 @@ describeModelProfileContract({
     const caps = inferDeepSeekCapabilities({ model_id: name } as never);
     if (recognized) {
       expect(caps).toEqual(deepSeekProfileCapabilities(profile));
-      expect(caps).not.toContain("vision-input");
+      expect(caps.includes("vision-input")).toBe(profile.vision);
     } else {
       expect(caps).toEqual(["model.search", "model.info"]);
     }

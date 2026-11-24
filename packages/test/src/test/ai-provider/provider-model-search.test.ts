@@ -119,12 +119,9 @@ describe("provider model search samples", () => {
     const { results } = (await collectStream(
       await runFnToIterable(Xai_ModelSearch, { query: "" })
     )) as { results: Array<{ id: string; record?: { effort_options?: string[] } }> };
-    expect(results.find((r) => r.id === "grok-4")?.record?.effort_options).toEqual([
+    expect(results.find((r) => r.id === "grok-4.3")?.record?.effort_options).toEqual([
       ...MODEL_EFFORTS,
     ]);
-    expect(
-      results.find((r) => r.id === "grok-4-fast-non-reasoning")?.record?.effort_options
-    ).toEqual([]);
     expect(results.find((r) => r.id === "grok-2-image-1212")?.record?.effort_options).toEqual([]);
   });
 

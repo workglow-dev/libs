@@ -57,6 +57,7 @@
     "@workglow/knowledge-base": "workspace:*",
     "@workglow/llamacpp-server": "workspace:*",
     "@workglow/mcp": "workspace:*",
+    "@workglow/meta": "workspace:*",
     "@workglow/mlx": "workspace:*",
     "@workglow/node-llama-cpp": "workspace:*",
     "@workglow/ollama": "workspace:*",

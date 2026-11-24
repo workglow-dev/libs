@@ -52,6 +52,7 @@
     "@workglow/google-gemini": "workspace:*",
     "@workglow/huggingface-transformers": "workspace:*",
     "@workglow/huggingface-inference": "workspace:*",
+    "@workglow/meta": "workspace:*",
     "@workglow/node-llama-cpp": "workspace:*",
     "@workglow/ollama": "workspace:*",
     "@workglow/openai": "workspace:*",

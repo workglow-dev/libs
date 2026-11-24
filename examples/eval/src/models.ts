@@ -9,6 +9,7 @@ import { downloadModel } from "@workglow/ai";
 import { getAnthropicModelPricing } from "@workglow/anthropic/ai";
 import { getDeepSeekModelPricing } from "@workglow/deepseek/ai";
 import { getGeminiModelPricing } from "@workglow/google-gemini/ai";
+import { getMetaModelPricing } from "@workglow/meta/ai";
 import { getOpenAiModelPricing } from "@workglow/openai/ai";
 import { getXaiModelPricing } from "@workglow/xai/ai";
 import { ggufCacheDir } from "./config";
@@ -36,6 +37,7 @@ const GGUF_PREFIX = "gguf:";
  * - `gemini-*` → Google Gemini
  * - `grok-*` → xAI
  * - `deepseek-*` → DeepSeek
+ * - `muse-*` → Meta
  *
  * The slash check runs after the `gguf:` prefix but before the cloud
  * prefixes: hub paths are unambiguous, and org names can legitimately start
@@ -106,8 +108,15 @@ export function resolveModelConfig(id: string, kind: EvalKind): ModelConfig {
       pricing: getDeepSeekModelPricing(id),
     };
   }
+  if (/^muse-/.test(id)) {
+    return {
+      provider: "META",
+      provider_config: { model_name: id },
+      pricing: getMetaModelPricing(id),
+    };
+  }
   throw new Error(
-    `cannot infer a provider for model "${id}" — use a claude-*/gpt-*/gemini-*/grok-*/deepseek-* ` +
+    `cannot infer a provider for model "${id}" — use a claude-*/gpt-*/gemini-*/grok-*/deepseek-*/muse-* ` +
       `cloud id or an org/name HuggingFace ONNX model path`
   );
 }

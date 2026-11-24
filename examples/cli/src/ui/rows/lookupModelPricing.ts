@@ -14,11 +14,12 @@ import {
 import { getAnthropicModelPricing } from "@workglow/anthropic/ai";
 import { getDeepSeekModelPricing } from "@workglow/deepseek/ai";
 import { getGeminiModelPricing } from "@workglow/google-gemini/ai";
+import { getMetaModelPricing } from "@workglow/meta/ai";
 import { getOpenAiModelPricing } from "@workglow/openai/ai";
 import { getXaiModelPricing } from "@workglow/xai/ai";
 
 /**
- * Providers whose own list table is one of the five consulted below.
+ * Providers whose own list table is one of the six consulted below.
  *
  * The chain reads an id's SHAPE, which only means something for a record that
  * belongs to one of these vendors — or for a bare id, where the shape is all
@@ -31,6 +32,7 @@ const VENDOR_TABLE_PROVIDERS: ReadonlySet<string> = new Set([
   "GOOGLE_GEMINI",
   "XAI",
   "DEEPSEEK",
+  "META",
 ]);
 
 const cache = new Map<string, ModelPricing | undefined>();
@@ -75,7 +77,8 @@ function resolveFallbackPricing(modelId: string, record?: ModelRecord): ModelPri
     getOpenAiModelPricing(modelId) ??
     getGeminiModelPricing(modelId) ??
     getXaiModelPricing(modelId) ??
-    getDeepSeekModelPricing(modelId)
+    getDeepSeekModelPricing(modelId) ??
+    getMetaModelPricing(modelId)
   );
 }
 

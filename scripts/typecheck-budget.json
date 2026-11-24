@@ -34,6 +34,7 @@
     "providers/huggingface-inference": 55669,
     "providers/huggingface-transformers": 175588,
     "providers/llamacpp-server": 56957,
+    "providers/meta": 47965,
     "providers/mlx": 579,
     "providers/node-llama-cpp": 64027,
     "providers/ollama": 60806,

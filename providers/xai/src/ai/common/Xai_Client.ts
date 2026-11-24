@@ -5,9 +5,10 @@
  */
 
 import { isBrowserLike, resolveApiKey, validateProviderBaseUrl } from "@workglow/ai/provider-utils";
-import { resolveEnabledEffort, type ModelEffort } from "@workglow/ai/worker";
+import { resolveEnabledEffort } from "@workglow/ai/worker";
 import { xaiEffortPolicy } from "./Xai_EffortPolicy";
 import type { XaiModelConfig } from "./Xai_ModelSchema";
+import { resolveXaiProfile, XAI_REASONING_EFFORTS } from "./Xai_ModelProfiles";
 
 /** Default base URL for the xAI (Grok) OpenAI-compatible API. */
 export const XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1";
@@ -107,29 +108,23 @@ export function getModelName(model: XaiModelConfig | undefined): string {
   return name;
 }
 
-const EFFORT_TO_XAI: Record<ModelEffort, string> = {
-  none: "none",
-  low: "low",
-  medium: "medium",
-  high: "high",
-  extra: "high",
-  ultra: "high",
-};
-
-const XAI_REASONING_EFFORTS = new Set(["none", "low", "medium", "high"]);
+const NATIVE_REASONING_EFFORTS: ReadonlySet<string> = new Set(XAI_REASONING_EFFORTS);
 
 /**
  * Native `provider_config.reasoning_effort` wins over coarse `model.effort`.
- * Extra/ultra collapse to xAI's highest documented value (`high`).
+ * Extra and ultra send the model's top level: `xhigh` where it is accepted
+ * (Grok 4.6 and later), otherwise `high`.
  */
 export function getXaiReasoningEffort(model: XaiModelConfig | undefined): string | undefined {
   const native = (model?.provider_config as { reasoning_effort?: unknown } | undefined)
     ?.reasoning_effort;
   if (typeof native === "string") {
     const trimmed = native.trim();
-    if (XAI_REASONING_EFFORTS.has(trimmed)) return trimmed;
+    if (NATIVE_REASONING_EFFORTS.has(trimmed)) return trimmed;
   }
   const effort = resolveEnabledEffort(model, xaiEffortPolicy(model));
-  if (effort !== undefined) return EFFORT_TO_XAI[effort];
-  return undefined;
+  if (effort === undefined) return undefined;
+  if (effort !== "extra" && effort !== "ultra") return effort;
+  const { profile } = resolveXaiProfile(model?.provider_config?.model_name);
+  return profile.kind === "chat" && profile.efforts.includes("xhigh") ? "xhigh" : "high";
 }

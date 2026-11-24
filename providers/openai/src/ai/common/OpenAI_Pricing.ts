@@ -99,6 +99,8 @@ function gptImageCard(): ModelPricing {
  * the window is large enough to pass that threshold.
  */
 export const OPENAI_PRICING: Record<string, ModelPricing> = {
+  "gpt-6.2-astra": flagshipCard({ input: 8, output: 40, cached: 0.4, cacheWrite: 10 }),
+  "gpt-6.2-sol": flagshipCard({ input: 2, output: 10, cached: 0.1, cacheWrite: 2.5 }),
   "gpt-6-astra": flagshipCard({ input: 10, output: 50, cached: 1, cacheWrite: 12.5 }),
   "gpt-6.1-sol": flagshipCard({ input: 2, output: 10, cached: 0.1, cacheWrite: 2.5 }),
   "gpt-6.1-terra": flagshipCard({ input: 1, output: 5, cached: 0.05, cacheWrite: 1.25 }),
@@ -108,10 +110,14 @@ export const OPENAI_PRICING: Record<string, ModelPricing> = {
   "gpt-5.6-terra": flagshipCard({ input: 2, output: 12, cached: 0.2, cacheWrite: 2.5 }),
   "gpt-5.6-luna": flagshipCard({ input: 0.2, output: 1.2, cached: 0.02, cacheWrite: 0.25 }),
   "gpt-5.5": flagshipCard({ input: 5, output: 30, cached: 0.5 }),
+  // The pro models publish no cached rate. Without their own rows the table's
+  // substring walk would price each at its base model's card, a sixth of it.
+  "gpt-5.5-pro": flagshipCard({ input: 30, output: 180 }),
+  "gpt-5.4-pro": flagshipCard({ input: 30, output: 180 }),
+  "gpt-5.2-pro": standardCard({ input: 21, output: 168 }),
   "gpt-5.4-mini": standardCard({ input: 0.75, output: 4.5, cached: 0.075 }),
   "gpt-5.4-nano": standardCard({ input: 0.2, output: 1.25, cached: 0.02 }),
   "gpt-5.4": flagshipCard({ input: 2.5, output: 15, cached: 0.25 }),
-  "gpt-5.2-mini": standardCard({ input: 0.15, output: 0.6, cached: 0.075 }),
   "gpt-5.2": standardCard({ input: 1.75, output: 14, cached: 0.175 }),
   "gpt-5-mini": standardCard({ input: 0.25, output: 2, cached: 0.025 }),
   "gpt-5-nano": standardCard({ input: 0.05, output: 0.4, cached: 0.005 }),

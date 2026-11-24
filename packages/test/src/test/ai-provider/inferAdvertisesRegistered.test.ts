@@ -13,6 +13,7 @@ import { _testOnly as gemini, GEMINI_PRICING } from "@workglow/google-gemini/ai"
 import { _testOnly as hfi } from "@workglow/huggingface-inference/ai";
 import { _testOnly as hft } from "@workglow/huggingface-transformers/ai";
 import { _testOnly as llamaServer } from "@workglow/llamacpp-server/ai";
+import { _testOnly as meta, META_PRICING } from "@workglow/meta/ai";
 import { _testOnly as llamaCpp } from "@workglow/node-llama-cpp/ai";
 import { _testOnly as ollama } from "@workglow/ollama/ai";
 import { _testOnly as openai, OPENAI_PRICING } from "@workglow/openai/ai";
@@ -136,6 +137,13 @@ const PROVIDER_CASES: readonly {
     registered: servesOf(xai.XAI_RUN_FN_SPECS),
     inferred: inferEach(["grok-4", "grok-2-image-1212"], (id) =>
       new xai.XaiQueuedProvider(xai.XAI_RUN_FNS).inferCapabilities(model("XAI", id))
+    ),
+  },
+  {
+    name: "meta",
+    registered: servesOf(meta.META_RUN_FN_SPECS),
+    inferred: inferEach(["muse-spark-1.3", "muse-wonder-1.0", "muse-image-1.0"], (id) =>
+      new meta.MetaQueuedProvider(meta.META_RUN_FNS).inferCapabilities(model("META", id))
     ),
   },
   {
@@ -398,6 +406,15 @@ const PRICED_CASES: readonly {
     namedByTable: [],
   },
   {
+    name: "meta",
+    models: pricedEach(
+      "META",
+      ["muse-spark-1.3", "muse-spark-1.3-contributor", "muse-ember-1.0", "muse-wonder-1.0"],
+      () => new meta.MetaQueuedProvider(meta.META_RUN_FNS)
+    ),
+    namedByTable: [],
+  },
+  {
     name: "deepseek",
     models: pricedEach(
       "DEEPSEEK",
@@ -428,6 +445,7 @@ const KNOWN_UNPRICED: Readonly<Record<string, readonly string[]>> = {
   openai: [],
   "google-gemini": [],
   xai: [],
+  meta: [],
   deepseek: [],
   typesafeai: [],
 };
@@ -475,6 +493,14 @@ const PRICING_TABLES: readonly {
       "XAI",
       Object.keys(XAI_PRICING),
       () => new xai.XaiQueuedProvider(xai.XAI_RUN_FNS)
+    ),
+  },
+  {
+    name: "meta",
+    models: pricedEach(
+      "META",
+      Object.keys(META_PRICING),
+      () => new meta.MetaQueuedProvider(meta.META_RUN_FNS)
     ),
   },
   {

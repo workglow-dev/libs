@@ -12,6 +12,7 @@ import { _testOnly as deepseek } from "@workglow/deepseek/ai";
 import { _testOnly as gemini } from "@workglow/google-gemini/ai";
 import { _testOnly as hfi } from "@workglow/huggingface-inference/ai";
 import { _testOnly as hft } from "@workglow/huggingface-transformers/ai";
+import { _testOnly as meta } from "@workglow/meta/ai";
 import { _testOnly as llamaCpp } from "@workglow/node-llama-cpp/ai";
 import { _testOnly as ollama } from "@workglow/ollama/ai";
 import { _testOnly as openai } from "@workglow/openai/ai";
@@ -34,6 +35,7 @@ const PROVIDER_SERVES: Readonly<Record<string, readonly (readonly Capability[])[
   "@workglow/google-gemini": gemini.GEMINI_RUN_FN_SPECS.map((s) => s.serves),
   "@workglow/huggingface-inference": hfi.HFI_RUN_FN_SPECS.map((s) => s.serves),
   "@workglow/huggingface-transformers": hft.HFT_RUN_FN_SPECS.map((s) => s.serves),
+  "@workglow/meta": meta.META_RUN_FN_SPECS.map((s) => s.serves),
   "@workglow/node-llama-cpp": llamaCpp.LLAMACPP_RUN_FN_SPECS.map((s) => s.serves),
   "@workglow/ollama": ollama.OLLAMA_RUN_FN_SPECS.map((s) => s.serves),
   "@workglow/openai": openai.OPENAI_RUN_FN_SPECS.map((s) => s.serves),

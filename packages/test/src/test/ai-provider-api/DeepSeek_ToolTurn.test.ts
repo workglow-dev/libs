@@ -6,18 +6,19 @@
 
 import type { AiProviderRunFn } from "@workglow/ai";
 import { _testOnly } from "@workglow/deepseek/ai";
-import type { ScriptedReply } from "@workglow/test-contract/ai-provider";
+import type { ScriptedReply, ToolResultImages } from "@workglow/test-contract/ai-provider";
 import { runToolTurnConformance } from "@workglow/test-contract/ai-provider";
 import { asText } from "@workglow/util";
 import { vi } from "vitest";
 
 import { chatCompletionTurns, reasoningContentChunks, sseResponse } from "./chatCompletionsWire";
 
-const model = {
-  model_id: "deepseek-conformance",
-  provider: "DEEPSEEK",
-  provider_config: { model_name: "deepseek-reasoner", api_key: "test-key" },
-} as never;
+const modelFor = (model_name: string) =>
+  ({
+    model_id: "deepseek-conformance",
+    provider: "DEEPSEEK",
+    provider_config: { model_name, api_key: "test-key" },
+  }) as never;
 
 function toolCallingRunFn(): AiProviderRunFn {
   const registration = _testOnly.DEEPSEEK_RUN_FNS.find(
@@ -29,30 +30,40 @@ function toolCallingRunFn(): AiProviderRunFn {
   return registration.runFn as AiProviderRunFn;
 }
 
-runToolTurnConformance({
-  name: "DeepSeek",
-  createHarness: () => {
-    const replies: ScriptedReply[] = [];
-    // DeepSeek is reached through the `openai` SDK, which posts with the global fetch.
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async () => sseResponse(reasoningContentChunks(replies.shift() ?? {})));
-    return {
-      respond: (reply) => void replies.push(reply),
-      run: (request, emit) =>
-        toolCallingRunFn()(request as never, model, new AbortController().signal, emit as never),
-      sent: () =>
-        fetchSpy.mock.calls.map(([, init]) => JSON.parse(asText((init as RequestInit).body))),
-      dispose: () => fetchSpy.mockRestore(),
-    };
-  },
-  turns: chatCompletionTurns,
-  reasoningStream: "reasoning-port",
-  // `reasoning_content` on every assistant turn: the thinking models read it back
-  // in a tool-calling loop. `provider_config.replay_reasoning: false` turns it off.
-  reasoningReplay: { kind: "text" },
-  toolResultImages: {
-    kind: "text-only",
-    reason: "DeepSeek's chat models read text only, so the result names the image in its place",
-  },
+function runDeepSeekToolTurnConformance(
+  modelName: string,
+  toolResultImages: ToolResultImages
+): void {
+  const model = modelFor(modelName);
+  runToolTurnConformance({
+    name: `DeepSeek (${modelName})`,
+    createHarness: () => {
+      const replies: ScriptedReply[] = [];
+      // DeepSeek is reached through the `openai` SDK, which posts with the global fetch.
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async () => sseResponse(reasoningContentChunks(replies.shift() ?? {})));
+      return {
+        respond: (reply) => void replies.push(reply),
+        run: (request, emit) =>
+          toolCallingRunFn()(request as never, model, new AbortController().signal, emit as never),
+        sent: () =>
+          fetchSpy.mock.calls.map(([, init]) => JSON.parse(asText((init as RequestInit).body))),
+        dispose: () => fetchSpy.mockRestore(),
+      };
+    },
+    turns: chatCompletionTurns,
+    reasoningStream: "reasoning-port",
+    // `reasoning_content` on every assistant turn: the thinking models read it back
+    // in a tool-calling loop. `provider_config.replay_reasoning: false` turns it off.
+    reasoningReplay: { kind: "text" },
+    toolResultImages,
+  });
+}
+
+runDeepSeekToolTurnConformance("deepseek-reasoner", {
+  kind: "text-only",
+  reason: "DeepSeek's text models read text only, so the result names the image in its place",
 });
+// DeepSeek Flash reads images since V4.1; a tool's go in a user message after the result.
+runDeepSeekToolTurnConformance("deepseek-flash", { kind: "user-turn-after" });

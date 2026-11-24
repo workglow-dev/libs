@@ -22,6 +22,7 @@ import { createPartialJsonStream } from "@workglow/util/worker";
 import { finalizeResponsesRequest, getClient, getModelName } from "./OpenAI_Client";
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
 import { warnStrictDowngradedOnce } from "./OpenAI_ResponsesWarnings";
+import { createResponsesEventStream } from "./OpenAI_ResponsesCall";
 
 export { isStrictCompatibleSchema };
 
@@ -75,10 +76,7 @@ export const OpenAI_StructuredGeneration_Stream: AiProviderRunFn<
   const provisionalUsage = createEstimatedOutputUsageReporter(emit);
   provisionalUsage.onPrompt(typeof prompt === "string" ? prompt : "");
 
-  const stream = await client.responses.create(
-    { ...params, stream: true } as Parameters<typeof client.responses.create>[0],
-    { signal }
-  );
+  const stream = await createResponsesEventStream(client, params, model, signal);
 
   const json = createPartialJsonStream();
   let refusal = "";

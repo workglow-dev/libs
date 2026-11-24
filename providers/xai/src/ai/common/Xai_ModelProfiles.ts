@@ -7,6 +7,11 @@
 import type { Capability, ModelProfileFamily, ResolvedModelProfile } from "@workglow/ai/worker";
 import { makeModelProfileResolver } from "@workglow/ai/worker";
 
+/** Every `reasoning_effort` value the xAI API defines, lowest first. */
+export const XAI_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
+
+export type XaiReasoningEffort = (typeof XAI_REASONING_EFFORTS)[number];
+
 export interface XaiChatProfile {
   readonly kind: "chat";
   /** Takes image input. */
@@ -16,6 +21,17 @@ export interface XaiChatProfile {
    * reason, so a wrong `true` is a 400 where a wrong `false` drops the dial.
    */
   readonly reasoning: boolean;
+  /**
+   * The `reasoning_effort` values the model accepts, lowest first; empty when it
+   * does not reason. Grok 4.6 and 4.7 cannot turn reasoning off and add
+   * `xhigh`; Grok 4.5 stops at `high`; Grok 4.3 takes `none`.
+   */
+  readonly efforts: readonly XaiReasoningEffort[];
+  /**
+   * The level xAI applies when the field is omitted, shown as the dial's
+   * default; `none` for a model that does not reason.
+   */
+  readonly defaultEffort: XaiReasoningEffort;
 }
 
 /** Image generation, billed per image rather than per token. */
@@ -30,14 +46,29 @@ export interface XaiImageProfile {
  */
 export type XaiModelProfile = XaiChatProfile | XaiImageProfile;
 
-const chat = (vision: boolean, reasoning: boolean): XaiChatProfile => ({
+const chat = (
+  vision: boolean,
+  efforts: readonly XaiReasoningEffort[] = [],
+  defaultEffort: XaiReasoningEffort = efforts.length > 0 ? "medium" : "none"
+): XaiChatProfile => ({
   kind: "chat",
   vision,
-  reasoning,
+  reasoning: efforts.length > 0,
+  efforts,
+  defaultEffort,
 });
 
-const REASONING = chat(false, true);
-const VISION_REASONING = chat(true, true);
+/**
+ * The levels the earlier reasoning ids took. The retired ones (grok-4, grok-3)
+ * now answer through grok-4.3, which takes the same four.
+ */
+const EARLIER_EFFORTS = ["none", "low", "medium", "high"] as const;
+
+const REASONING = chat(false, EARLIER_EFFORTS);
+const VISION_REASONING = chat(true, EARLIER_EFFORTS);
+const GROK_4_6 = chat(true, ["low", "medium", "high", "xhigh"], "high");
+const GROK_4_5 = chat(true, ["low", "medium", "high"], "high");
+const GROK_4_3 = chat(true, EARLIER_EFFORTS, "low");
 const IMAGE: XaiImageProfile = { kind: "image" };
 
 /**
@@ -46,14 +77,16 @@ const IMAGE: XaiImageProfile = { kind: "image" };
  * both exist. An id with no row is answered by {@link XAI_MODEL_FAMILIES}.
  */
 export const XAI_MODEL_PROFILES: Readonly<Record<string, XaiModelProfile>> = {
-  "grok-4.6": VISION_REASONING,
-  "grok-4.5": VISION_REASONING,
+  "grok-4.7": GROK_4_6,
+  "grok-4.6": GROK_4_6,
+  "grok-4.5": GROK_4_5,
+  "grok-4.3": GROK_4_3,
   "grok-4": VISION_REASONING,
   "grok-3": REASONING,
   "grok-3-mini": REASONING,
   // Grok 2 predates reasoning: a `reasoning_effort` sent to it is rejected.
-  "grok-2": chat(false, false),
-  "grok-2-vision": chat(true, false),
+  "grok-2": chat(false),
+  "grok-2-vision": chat(true),
 };
 
 /** Rows for models `XAI_PRICING` has no card for; the contract test allows exactly these. */
@@ -72,22 +105,22 @@ function grokTakesImages(id: string): boolean {
 export const XAI_MODEL_FAMILIES: readonly ModelProfileFamily<XaiModelProfile>[] = [
   { when: /(?:^|-)image(?:-|$)/, profile: IMAGE },
   // The retired beta ids predate reasoning, as Grok 2 does.
-  { when: /^grok-beta$/, profile: chat(false, false) },
-  { when: /^grok-vision-beta$/, profile: chat(true, false) },
+  { when: /^grok-beta$/, profile: chat(false) },
+  { when: /^grok-vision-beta$/, profile: chat(true) },
   {
     when: (id) => id.startsWith("grok") && id.includes("non-reasoning") && grokTakesImages(id),
-    profile: chat(true, false),
+    profile: chat(true),
   },
   {
     when: (id) => id.startsWith("grok") && id.includes("non-reasoning"),
-    profile: chat(false, false),
+    profile: chat(false),
   },
   { when: (id) => id.startsWith("grok") && grokTakesImages(id), profile: VISION_REASONING },
   { when: /^grok/, profile: REASONING },
 ];
 
 /** An id no row or family names: a text-only chat model with no reasoning, not recognized. */
-const UNKNOWN: XaiModelProfile = chat(false, false);
+const UNKNOWN: XaiModelProfile = chat(false);
 
 /**
  * The canonical id for any spelling of an xAI model: the gateway's `xai/` (and

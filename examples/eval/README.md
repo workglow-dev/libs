@@ -118,6 +118,7 @@ setup needed:
 | `gemini-*`                               | Google Gemini (`GEMINI_API_KEY`)    |
 | `grok-*`                                 | xAI (`XAI_API_KEY`)                 |
 | `deepseek-*`                             | DeepSeek (`DEEPSEEK_API_KEY`)       |
+| `muse-*`                                 | Meta (`META_API_KEY`)               |
 | `org/name` (optionally `org/name:dtype`) | Local HuggingFace Transformers ONNX |
 | `gguf:org/repo:Quant` or `gguf:*.gguf`   | Local node-llama-cpp (GGUF)         |
 

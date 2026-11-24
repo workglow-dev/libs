@@ -84,3 +84,39 @@ describe("getXaiReasoningEffort", () => {
     ).toBe("low");
   });
 });
+
+describe("the levels each current Grok model takes", () => {
+  it("offers Grok 4.6 and 4.7 no none, defaults them to high, and sends extra and ultra as xhigh", () => {
+    for (const name of ["grok-4.7", "grok-4.6"]) {
+      expect(xaiEffortPolicy(cfg(name))).toEqual({
+        supported: ["low", "medium", "high", "extra", "ultra"],
+        default: "high",
+      });
+      expect(getXaiReasoningEffort(cfg(name, { effort: "extra" }))).toBe("xhigh");
+      expect(getXaiReasoningEffort(cfg(name, { effort: "ultra" }))).toBe("xhigh");
+      expect(getXaiReasoningEffort(cfg(name, { effort: "none" }))).toBeUndefined();
+    }
+  });
+
+  it("sends Grok 4.5's extra and ultra as high, its top level", () => {
+    expect(xaiEffortPolicy(cfg("grok-4.5"))?.supported).not.toContain("none");
+    expect(getXaiReasoningEffort(cfg("grok-4.5", { effort: "ultra" }))).toBe("high");
+  });
+
+  it("lets Grok 4.3 turn reasoning off, and defaults it to low", () => {
+    expect(xaiEffortPolicy(cfg("grok-4.3"))).toEqual({
+      supported: ["none", "low", "medium", "high", "extra", "ultra"],
+      default: "low",
+    });
+    expect(getXaiReasoningEffort(cfg("grok-4.3", { effort: "none" }))).toBe("none");
+    expect(getXaiReasoningEffort(cfg("grok-4.3", { effort: "extra" }))).toBe("high");
+  });
+
+  it("passes a native xhigh through", () => {
+    expect(
+      getXaiReasoningEffort(
+        cfg("grok-4.7", { provider_config: { model_name: "grok-4.7", reasoning_effort: "xhigh" } })
+      )
+    ).toBe("xhigh");
+  });
+});

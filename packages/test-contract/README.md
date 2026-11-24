@@ -205,8 +205,10 @@ down rather than a field left out. Which provider replays what:
 | HF Transformers (text) | reasoning port                        | `text` (`reasoning_content`)                               | `text-only`        |
 | HF Transformers (VLM)  | reasoning port                        | `text` (`reasoning_content`)                               | `user-turn-after`  |
 | llama.cpp server       | reasoning port                        | `text` (`reasoning_content`)                               | `user-turn-after`  |
-| DeepSeek               | reasoning port                        | `text` (`reasoning_content`)                               | `text-only`        |
+| DeepSeek V4 Pro        | reasoning port                        | `text` (`reasoning_content`)                               | `text-only`        |
+| DeepSeek Flash         | reasoning port                        | `text` (`reasoning_content`)                               | `user-turn-after`  |
 | xAI                    | reasoning port                        | `none` (chat completions read no reasoning back)           | `user-turn-after`  |
+| Meta                   | reasoning port                        | `none` (reasoning is redacted on chat completions)         | `user-turn-after`  |
 | HF Inference           | reasoning port                        | `none` (the routed backend may refuse `reasoning_content`) | `user-turn-after`  |
 | node-llama-cpp         | reasoning port                        | `text` (ended `thought` segments)                          | `text-only`        |
 | Cactus                 | reasoning port (`<think>`)            | `none` (one stateless query per round)                     | `text-only`        |

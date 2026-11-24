@@ -121,13 +121,7 @@ export const ANTHROPIC_MODEL_PROFILES: Readonly<Record<string, AnthropicModelPro
 };
 
 /** Rows for models `ANTHROPIC_PRICING` has no card for; the contract test allows exactly these. */
-export const ANTHROPIC_UNPRICED_PROFILE_IDS: ReadonlySet<string> = new Set([
-  "claude-mythos-5-2",
-  "claude-mythos-5-1",
-  "claude-mythos-5",
-  "claude-opus-4-5",
-  "claude-opus-4-1",
-]);
+export const ANTHROPIC_UNPRICED_PROFILE_IDS: ReadonlySet<string> = new Set(["claude-opus-4-1"]);
 
 /** Families the profile table names; any other family is not guessed at. */
 const KNOWN_FAMILIES: ReadonlySet<string> = new Set(["fable", "mythos", "opus", "sonnet", "haiku"]);

@@ -448,7 +448,7 @@ the provider, the query and a plausible result set with the restriction gone.
 ### `providers/*`
 
 Standalone packages with optional peer deps, each exposing `./ai` (main thread) and
-`./ai-runtime` (worker/inline): anthropic, openai, google-gemini, ollama,
+`./ai-runtime` (worker/inline): anthropic, openai, google-gemini, xai, meta, deepseek, ollama,
 huggingface-transformers, huggingface-inference, node-llama-cpp, tf-mediapipe, chrome-ai.
 Shared cloud helpers live in `@workglow/ai/provider-utils`.
 
@@ -536,11 +536,11 @@ every round, and a converter that reads `prompt` or flattens to text shows the m
 turn again and never a tool result. A history holding tool calls or tool results must never go
 through `toTextFlatMessages`; HF Transformers still uses it, but only on the path where the
 history has no tool messages and no reasoning yet, where it loses nothing. Tool-result images go
-in a user message after the tool message (OpenAI, xAI, OpenRouter, HF Inference, Ollama, and an HF
+in a user message after the tool message (OpenAI, xAI, Meta, DeepSeek Flash, OpenRouter, HF Inference, Ollama, and an HF
 Transformers vision-language model); Gemini 3+ takes them in
 `functionResponse.parts`, and older models, which reject that with HTTP 400, get a user turn of
 their own — beside the response they leak their thinking into the answer. A model that reads
-text only (DeepSeek, an HF Transformers text-generation model, node-llama-cpp, Cactus, Chrome AI) is shown the image named
+text only (DeepSeek V4 Pro, an HF Transformers text-generation model, node-llama-cpp, Cactus, Chrome AI) is shown the image named
 in the result (`textOnlyToolResult`, `@workglow/ai/provider-utils`), never sent it and never left
 without a word of it: a result missing what the tool returned is the one most likely to be
 called for again.

@@ -20,6 +20,7 @@ import { RetryableJobError } from "@workglow/job-queue";
 import { getClient, getModelName, reasoningParams, resolveMaxTokens } from "./DeepSeek_Client";
 import type { DeepSeekModelConfig } from "./DeepSeek_ModelSchema";
 import { mapDeepSeekUsage } from "./DeepSeek_Usage";
+import { resolveDeepSeekProfile } from "./DeepSeek_ModelProfiles";
 
 /**
  * Thrown when the caller demanded a tool call that the model did not make.
@@ -126,11 +127,15 @@ export const DeepSeek_ToolCalling_Stream: AiProviderRunFn<
 
   const tools = buildOpenAITools(input.tools);
   // DeepSeek's thinking models read their reasoning back on each turn of a
-  // tool-calling loop. They read text only, so an image a tool returned is
-  // named in its result rather than sent as an image part they would refuse.
+  // tool-calling loop. A model that reads images is sent a tool's images in a
+  // user message after the result, as the other chat-completions providers
+  // are; one that reads text only is told what the image was instead of being
+  // sent an image part it would refuse.
+  const vision = resolveDeepSeekProfile(modelName).profile.vision;
   const messages = toOpenAIMessages(input, {
     replayReasoning: model?.provider_config?.replay_reasoning !== false,
-    textOnlyToolResults: true,
+    textOnlyToolResults: !vision,
+    toolImagesInUserMessage: vision,
   });
   const toolChoice = mapDeepSeekToolChoice(input.toolChoice);
 
