@@ -8,58 +8,44 @@
  * What a provider's error says about itself beyond its status: whether the
  * account is out of credits, and how long the provider asked the caller to
  * wait. Both read the error as each vendor's SDK builds it, and both walk
- * `cause`, so a wrapper around an SDK error still answers.
+ * `cause`, so a wrapper around an SDK error still answers. The billing matcher
+ * is `@workglow/util`'s, re-exported here.
  */
 
-const BILLING_CODES: ReadonlySet<string> = new Set([
-  "insufficient_quota",
-  "billing_hard_limit_reached",
-  "insufficient_credits",
-  "insufficient_balance",
-  "billing_error",
-]);
-
-const CREDIT_MESSAGE =
-  /insufficient credits|not enough credits|no (?:credits remaining|remaining credits)|out of credits|credits are depleted|prepayment credits|insufficient[\s_-]balance|balance is (?:too low|insufficient)|exceeded[\s\S]{0,80}credits|monthly included credits|payment required|exceeded your current quota|check your plan and billing|billing_hard_limit/i;
+export { hasBillingCode, isCreditExhaustedError } from "@workglow/util";
 
 /**
- * A 402 that survives only as text: an error rebuilt from its message (a
- * classified job error, one flattened across a worker) has lost its numeric
- * `status`. Anchored to an HTTP-shaped position — start of a line, after a
- * summary line's colon, or a JSON error body's `"code": 402`, which is how
- * Gemini's billing failure arrives — so prose that merely contains the number
- * ("Item 402(c)") is not scavenged as a status.
+ * The wait a job queue gives a 429 that stated none. A queue reschedules a
+ * retryable job at its limiter's next free slot, which for a concurrency
+ * limiter is now, so without a date of its own a rate-limited job would be
+ * retried at once until its attempts ran out.
  */
-const HTTP_402_MESSAGE =
-  /\bHTTP\/?\d?(?:\.\d)?\s*402\b|\bstatus(?:\s*code)?\s*[:=]\s*402\b|\berror code:?\s*402\b|"code"\s*:\s*402\b|(?:^|:\s+)402\s+[a-z]/im;
+export const DEFAULT_RATE_LIMIT_RETRY_MS = 30_000;
+
+const ESTIMATED_RETRY_DATE: unique symbol = Symbol.for("workglow.ai.estimatedRetryDate");
 
 /**
- * Whether `err` reports an account that cannot pay: a 402, a billing code or
- * type (OpenAI's `insufficient_quota`, Anthropic's `billing_error`), or a
- * vendor's credit-exhaustion wording. Rate limits are not this — a TPM or RPM
- * 429 passes on its own.
- *
- * The wording half is looser than the structured half: Gemini words a
- * per-minute quota as "exceeded your current quota ... check your plan and
- * billing", exactly as OpenAI words exhausted credits. {@link hasBillingCode}
- * answers the structured half alone, for a caller that has to tell them apart.
+ * Marks `err`'s `retryDate` as this package's own default rather than the
+ * provider's word, so a caller with a backoff of its own (an agent's round
+ * retry) uses that instead, while a queue still spaces the retry by the date.
+ * Returns `err`.
  */
-export function isCreditExhaustedError(err: unknown): boolean {
-  return someInCauseChain(err, (node) => {
-    if (typeof node === "string") return messageLooksLikeCreditExhaustion(node);
-    if (nodeHasBillingCode(node)) return true;
-    if (!node || typeof node !== "object") return false;
-    const rec = node as Record<string, unknown>;
-    const message = [stringish(rec.message), stringish(nested(rec.error, "message"))]
-      .filter((part): part is string => part !== undefined)
-      .join("\n");
-    return messageLooksLikeCreditExhaustion(message);
-  });
+export function markRetryDateEstimated<T extends object>(err: T): T {
+  try {
+    Object.defineProperty(err, ESTIMATED_RETRY_DATE, { value: true });
+  } catch {
+    // A frozen error keeps its date; it is then read as stated.
+  }
+  return err;
 }
 
-/** Whether `err` carries a 402 status or a billing code or type as a field, not just as wording. */
-export function hasBillingCode(err: unknown): boolean {
-  return someInCauseChain(err, nodeHasBillingCode);
+/** Whether `err`'s `retryDate` is a default {@link markRetryDateEstimated} stamped, not a stated wait. */
+export function isRetryDateEstimated(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { [ESTIMATED_RETRY_DATE]?: unknown })[ESTIMATED_RETRY_DATE] === true
+  );
 }
 
 /** Header names, lower-cased, a provider states its wait in. */
@@ -116,7 +102,11 @@ function nodeRetryAfterMs(node: unknown, now: number): number | undefined {
   if (typeof carried === "number" && Number.isFinite(carried) && carried >= 0) return carried;
 
   const retryDate = rec.retryDate;
-  if (retryDate instanceof Date && !Number.isNaN(retryDate.getTime())) {
+  if (
+    retryDate instanceof Date &&
+    !Number.isNaN(retryDate.getTime()) &&
+    !isRetryDateEstimated(node)
+  ) {
     return Math.max(0, retryDate.getTime() - now);
   }
 
@@ -180,27 +170,23 @@ function retryDelayFromDetails(details: unknown): number | undefined {
 function retryAfterFromMessage(message: string): number | undefined {
   const gemini = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(message);
   if (gemini) return Math.round(Number(gemini[1]) * 1000);
-  const openai = /try again in (\d+(?:\.\d+)?)\s*(ms|s)\b/i.exec(message);
-  if (openai) {
-    const amount = Number(openai[1]);
-    return Math.round(openai[2]!.toLowerCase() === "ms" ? amount : amount * 1000);
-  }
+  const openai = /try again in ((?:\d+(?:\.\d+)?\s*(?:ms|h|m|s))+)\b/i.exec(message);
+  if (openai) return goDurationMs(openai[1]!);
   const legacy = /retry.after[:\s]*(\d+)/i.exec(message);
   return legacy ? Number(legacy[1]) * 1000 : undefined;
 }
 
-function nodeHasBillingCode(node: unknown): boolean {
-  if (!node || typeof node !== "object") return false;
-  const rec = node as Record<string, unknown>;
-  if (numericStatus(rec) === 402) return true;
-  for (const value of [rec.code, rec.type, nested(rec.error, "code"), nested(rec.error, "type")]) {
-    if (typeof value === "string" && BILLING_CODES.has(value)) return true;
+/**
+ * A Go-style duration as OpenAI words a wait: `350ms`, `1.2s`, `6m0s`, `1h2m3s`.
+ * `ms` is read before `m`, so `350ms` is never 350 minutes.
+ */
+function goDurationMs(text: string): number {
+  const unitMs: Readonly<Record<string, number>> = { h: 3_600_000, m: 60_000, s: 1_000, ms: 1 };
+  let total = 0;
+  for (const [, amount, unit] of text.matchAll(/(\d+(?:\.\d+)?)\s*(ms|h|m|s)/gi)) {
+    total += Number(amount) * unitMs[unit!.toLowerCase()]!;
   }
-  return false;
-}
-
-function messageLooksLikeCreditExhaustion(message: string): boolean {
-  return CREDIT_MESSAGE.test(message) || HTTP_402_MESSAGE.test(message);
+  return Math.round(total);
 }
 
 function someInCauseChain(err: unknown, test: (node: unknown) => boolean): boolean {
@@ -212,13 +198,6 @@ function someInCauseChain(err: unknown, test: (node: unknown) => boolean): boole
     current = typeof current === "object" ? (current as { cause?: unknown }).cause : undefined;
   }
   return false;
-}
-
-function numericStatus(rec: Record<string, unknown>): number | undefined {
-  for (const value of [rec.status, rec.statusCode, nested(rec.error, "status")]) {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return undefined;
 }
 
 function nested(value: unknown, key: string): unknown {

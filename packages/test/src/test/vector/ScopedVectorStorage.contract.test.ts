@@ -119,4 +119,29 @@ describe("ScopedVectorStorage scoping", () => {
     // With no topK, the backends' default of 10.
     expect(await big.similaritySearch(EAST)).toHaveLength(10);
   });
+
+  // The widening must stop: a scope with fewer than topK rows of its own in a
+  // table too big to exhaust would otherwise double the request until it asked
+  // for the whole table, on every query.
+  it("bounds the widened inner search for a scope smaller than topK", async () => {
+    const requested: number[] = [];
+    const endlessTable = {
+      primaryKeyNames: ["kb_id", "id"],
+      getVectorDimensions: () => VECTOR_DIMENSIONS,
+      similaritySearch: async (_query: unknown, options: { topK: number }) => {
+        requested.push(options.topK);
+        // Always full, and never this scope's: a table larger than any request.
+        return Array.from({ length: options.topK }, (_, i) => ({
+          id: `o${i}`,
+          kb_id: "other",
+          score: 1,
+        }));
+      },
+    } as unknown as AnyVectorStorage;
+    const tiny = new ScopedVectorStorage(endlessTable, "tiny") as unknown as AnyVectorStorage;
+
+    expect(await tiny.similaritySearch(EAST, { topK: 10 })).toEqual([]);
+    expect(Math.max(...requested)).toBe(10_000);
+    expect(requested.length).toBeLessThan(20);
+  });
 });

@@ -46,6 +46,12 @@ import { StreamReassembler } from "./StreamReassembler";
 const STREAM_FINISH_GRACE_MS = 30_000;
 
 /**
+ * How often a job abandoned by a local worker after losing its lease is re-read
+ * from storage while a caller still waits on it.
+ */
+const LEASE_LOST_POLL_MS = 500;
+
+/**
  * Handle returned when submitting a job, providing methods to interact with the job
  */
 export interface JobHandle<Output> {
@@ -161,6 +167,11 @@ export class JobQueueClient<Input, Output> {
    * terminal event lands (early teardown) or the timer fires.
    */
   private readonly jobStreamGraceTimers: Map<unknown, ReturnType<typeof setTimeout>> = new Map();
+  /**
+   * Jobs whose local execution was abandoned after losing its lease, read from
+   * storage until they settle (see {@link handleJobLeaseLost}).
+   */
+  private readonly leaseLostWatches: Map<unknown, ReturnType<typeof setTimeout>> = new Map();
 
   /**
    * Last known progress state for each job
@@ -813,6 +824,46 @@ export class JobQueueClient<Input, Output> {
   }
 
   /**
+   * Called by server when a local worker abandoned a job after losing its
+   * lease. Another claim, possibly in another process, now owns the job and
+   * reports its outcome there, and an attached client hears only its own
+   * server, so a `waitFor` on the job is settled from storage instead: it is
+   * re-read every {@link LEASE_LOST_POLL_MS} until it is terminal or nobody is
+   * waiting on it any more.
+   * @internal
+   */
+  public handleJobLeaseLost(jobId: unknown): void {
+    if (this.leaseLostWatches.has(jobId)) return;
+    const poll = async (): Promise<void> => {
+      this.leaseLostWatches.delete(jobId);
+      if (!this.activeJobPromises.has(jobId)) return;
+      let job: Job<Input, Output> | undefined;
+      try {
+        job = await this.getJob(jobId);
+      } catch {
+        job = undefined;
+      }
+      if (!this.activeJobPromises.has(jobId)) return;
+      if (job?.status === JobStatus.COMPLETED) {
+        this.handleJobComplete(jobId, job.output as Output);
+      } else if (job?.status === JobStatus.FAILED) {
+        this.handleJobError(jobId, job.error || "Job failed", job.errorCode ?? undefined);
+      } else if (job?.status === JobStatus.DISABLED) {
+        this.handleJobDisabled(jobId);
+      } else {
+        this.armLeaseLostWatch(jobId, poll);
+      }
+    };
+    this.armLeaseLostWatch(jobId, poll);
+  }
+
+  private armLeaseLostWatch(jobId: unknown, poll: () => Promise<void>): void {
+    const timer = setTimeout(() => void poll(), LEASE_LOST_POLL_MS);
+    (timer as { unref?: () => void }).unref?.();
+    this.leaseLostWatches.set(jobId, timer);
+  }
+
+  /**
    * Called by server when a job is retried
    * @internal
    */
@@ -937,6 +988,11 @@ export class JobQueueClient<Input, Output> {
   }
 
   private cleanupJob(jobId: unknown): void {
+    const leaseLostWatch = this.leaseLostWatches.get(jobId);
+    if (leaseLostWatch !== undefined) {
+      clearTimeout(leaseLostWatch);
+      this.leaseLostWatches.delete(jobId);
+    }
     this.activeJobPromises.delete(jobId);
     this.lastKnownProgress.delete(jobId);
     this.jobProgressListeners.delete(jobId);

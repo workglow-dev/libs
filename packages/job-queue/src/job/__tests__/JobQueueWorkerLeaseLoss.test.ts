@@ -9,6 +9,8 @@ import {
   InMemoryQueueStorage,
   isLeaseLostError,
   Job,
+  JobQueueClient,
+  JobQueueServer,
   JobQueueWorker,
   JobStatus,
   wrapQueueStorage,
@@ -170,5 +172,107 @@ describe("JobQueueWorker on a lost lease", () => {
     expect(row?.output).toEqual({ done: true });
     // The reclaims did happen — each charged an attempt.
     expect(row?.attempts ?? 0).toBeGreaterThan(0);
+  });
+
+  it("re-issues its result through a reclaim its own poll made while the write was in flight", async () => {
+    // The terminal write stalls past the lease, so this worker's poll reclaims
+    // the row (bumping attempts) before the write lands. The write is refused
+    // against the old claim; the job must still complete once, through the
+    // reclaimed claim, not run a second time.
+    const queueName = `lease-loss-${uuid4()}`;
+    class SlowSettleStorage extends InMemoryQueueStorage<LeaseInput, LeaseOutput> {
+      private stalled = false;
+      public override async finalizeClaim(
+        ...args: Parameters<InMemoryQueueStorage<LeaseInput, LeaseOutput>["finalizeClaim"]>
+      ): Promise<boolean> {
+        if (args[2].status === JobStatus.COMPLETED && !this.stalled) {
+          this.stalled = true;
+          await sleep(120);
+        }
+        return super.finalizeClaim(...args);
+      }
+    }
+    const storage = new SlowSettleStorage(queueName);
+    await storage.migrate();
+    const { messageQueue, jobStore } = wrapQueueStorage(storage);
+    const worker = new JobQueueWorker<LeaseInput, LeaseOutput>(LeaseJob as any, {
+      messageQueue,
+      jobStore,
+      queueName,
+      pollIntervalMs: 1,
+      stopTimeoutMs: 0,
+      workerId: "worker-a",
+      leaseMs: 30,
+      extendLeaseWhileRunning: false,
+    });
+    const events: string[] = [];
+    worker.on("job_complete", () => events.push("job_complete"));
+    worker.on("job_error", () => events.push("job_error"));
+    worker.on("job_lease_lost", () => events.push("job_lease_lost"));
+    const id = await messageQueue.send({
+      queue: queueName,
+      input: { mode: "sleep", ms: 10 },
+      status: JobStatus.PENDING,
+    } as any);
+    try {
+      await worker.start();
+      await waitFor(() => events.length > 0);
+      await sleep(150);
+      expect(LeaseJob.executions).toBe(1);
+      expect(events).toEqual(["job_complete"]);
+      const row = await storage.get(id);
+      expect(row?.status).toBe(JobStatus.COMPLETED);
+      expect(row?.output).toEqual({ done: true });
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it("settles an attached client's waitFor from storage once the lease moved elsewhere", async () => {
+    // An attached client hears only its own server. When the local execution
+    // is abandoned and another process's claim completes the job, nothing
+    // reaches the client through the server, so it must read storage.
+    const queueName = `lease-loss-client-${uuid4()}`;
+    const storage = new InMemoryQueueStorage<LeaseInput, LeaseOutput>(queueName);
+    await storage.migrate();
+    const { messageQueue, jobStore } = wrapQueueStorage(storage);
+    const server = new JobQueueServer<LeaseInput, LeaseOutput>(LeaseJob as any, {
+      messageQueue,
+      jobStore,
+      queueName,
+      pollIntervalMs: 1,
+      stopTimeoutMs: 0,
+      leaseMs: 5_000,
+      extendLeaseWhileRunning: false,
+    });
+    const client = new JobQueueClient<LeaseInput, LeaseOutput>({
+      messageQueue,
+      jobStore,
+      queueName,
+    });
+    client.attach(server);
+    const leaseLost: unknown[] = [];
+    server.on("job_lease_lost", (_queue, jobId) => leaseLost.push(jobId));
+    try {
+      await server.start();
+      const handle = await client.send({ mode: "sleep", ms: 100 });
+      const settled = handle.waitFor();
+      await waitFor(() => LeaseJob.executions === 1);
+
+      // A worker in another process takes the row over...
+      await storage.finalize(handle.id, { lease_owner: "remote-worker" });
+      await storage.extendLease(handle.id, "remote-worker", 30_000);
+      await waitFor(() => leaseLost.length === 1);
+      // ...and completes it there.
+      await storage.finalize(handle.id, {
+        status: JobStatus.COMPLETED,
+        output: { done: true, by: "remote" },
+        completed_at: new Date().toISOString(),
+      });
+
+      await expect(settled).resolves.toEqual({ done: true, by: "remote" });
+    } finally {
+      await server.stop();
+    }
   });
 });

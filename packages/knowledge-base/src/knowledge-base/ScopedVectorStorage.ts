@@ -16,6 +16,14 @@ import { ScopedTabularStorage } from "./ScopedTabularStorage";
 const DEFAULT_TOP_K = 10;
 
 /**
+ * The most rows one widened inner search asks for (unless `topK` times the
+ * multiplier already asks for more). Without a ceiling, a knowledge base
+ * holding fewer than `topK` rows widens until the request exceeds the shared
+ * table, which is a full-table search materialised on every query.
+ */
+const MAX_WIDENED_FETCH = 10_000;
+
+/**
  * Adds an `IVectorStorage` surface to {@link ScopedTabularStorage}.
  *
  * `IVectorStorage` filters on metadata only, not on columns, so the inner
@@ -24,7 +32,10 @@ const DEFAULT_TOP_K = 10;
  * than `topK` of this scope's rows survive and the inner store returned all it
  * was asked for (so it may hold more), the request doubles. A small knowledge
  * base sharing a table with a large one therefore still gets its `topK`, at the
- * cost of a deeper inner search, instead of an empty answer.
+ * cost of a deeper inner search, instead of an empty answer. The widening stops
+ * at {@link MAX_WIDENED_FETCH} rows, so a scope with fewer than `topK` rows of
+ * its own costs a bounded search rather than one over the whole table; past that
+ * depth it returns what it found.
  */
 export class ScopedVectorStorage<
   Metadata extends Record<string, unknown> | undefined,
@@ -56,6 +67,7 @@ export class ScopedVectorStorage<
   ): Promise<(Entity & { score: number })[]> {
     const topK = options?.topK ?? DEFAULT_TOP_K;
     let limit = Math.max(1, Math.ceil(topK * this.overFetchMultiplier));
+    const maxLimit = Math.max(limit, MAX_WIDENED_FETCH);
     let own: any[];
     for (;;) {
       const results = await this.inner.similaritySearch(query, {
@@ -64,8 +76,8 @@ export class ScopedVectorStorage<
       } as any);
       own = results.filter((r: any) => r.kb_id === this.kbId);
       // Fewer rows than asked for means the inner store has no more to give.
-      if (own.length >= topK || results.length < limit) break;
-      limit *= 2;
+      if (own.length >= topK || results.length < limit || limit >= maxLimit) break;
+      limit = Math.min(limit * 2, maxLimit);
     }
 
     const scoped = own.slice(0, Math.max(0, topK)).map((r: any) => {

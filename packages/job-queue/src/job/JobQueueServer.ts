@@ -533,9 +533,12 @@ export class JobQueueServer<
     });
 
     worker.on("job_lease_lost", (jobId, reason) => {
-      // Not forwarded to clients: the job is not settled, and the claim that
-      // now owns it reports its outcome. Only this worker's slot is free.
+      // The job is not settled: the claim that now owns it reports its outcome,
+      // possibly from another process, which an attached client never hears.
+      // Clients are told so that a caller waiting on the job reads storage for
+      // it instead of waiting on an event that will not come here.
       this.events.emit("job_lease_lost", this.queueName, jobId, reason);
+      this.forwardToClients("handleJobLeaseLost", jobId);
       this.notifyWorkers();
     });
 
@@ -590,6 +593,7 @@ export class JobQueueServer<
     errorCode?: string
   ): void;
   protected forwardToClients(method: "handleJobDisabled", jobId: unknown): void;
+  protected forwardToClients(method: "handleJobLeaseLost", jobId: unknown): void;
   protected forwardToClients(method: "handleJobRetry", jobId: unknown, visibleAt: Date): void;
   protected forwardToClients(
     method: "handleJobProgress",

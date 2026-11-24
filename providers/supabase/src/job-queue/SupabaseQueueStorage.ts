@@ -721,8 +721,13 @@ export class SupabaseQueueStorage<Input, Output> implements IQueueStorage<Input,
       .eq("id", id as never)
       .eq("queue", this.queueName)
       .eq("status", JobStatus.PROCESSING)
-      .eq("lease_owner", fence.leaseOwner)
-      .eq("attempts", fence.attempts);
+      .eq("lease_owner", fence.leaseOwner);
+    // `attempts` is nullable, and a NULL reads as 0 everywhere else, `extendLease`
+    // included, so a fence at 0 has to hold a NULL row too.
+    query =
+      fence.attempts === 0
+        ? query.or("attempts.eq.0,attempts.is.null")
+        : query.eq("attempts", fence.attempts);
     query = this.applyPrefixFilters(query);
     const { data, error } = await query.select("id").maybeSingle();
     if (error) throw error;

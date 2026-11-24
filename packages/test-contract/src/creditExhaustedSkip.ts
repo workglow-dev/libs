@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { isCreditExhaustedError } from "@workglow/ai";
+import { isCreditExhaustedError } from "@workglow/util";
 import { it as vitestIt } from "vitest";
 
 /**
@@ -24,7 +24,7 @@ import { it as vitestIt } from "vitest";
  * account up. `WORKGLOW_CREDIT_EXHAUSTED_SKIP=1` forces the skip locally
  * (and `=0` forces the failure on CI).
  *
- * The billing matcher is `@workglow/ai`'s, the same one `classifyProviderError`
+ * The billing matcher is `@workglow/util`'s, the same one `classifyProviderError`
  * uses to fail an out-of-credits call permanently instead of retrying it.
  */
 

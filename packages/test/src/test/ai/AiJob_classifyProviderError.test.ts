@@ -7,9 +7,11 @@
 import {
   AiProvider,
   classifyProviderError,
+  DEFAULT_RATE_LIMIT_RETRY_MS,
   ImageGenerationContentPolicyError,
   ImageGenerationProviderError,
   isCreditExhaustedError,
+  isRetryDateEstimated,
   ProviderUnsupportedFeatureError,
   retryDelayMs,
   statedRetryAfterMs,
@@ -241,12 +243,47 @@ describe("classifyProviderError for a 429", () => {
     expect(waitOf(classifyProviderError(err, "TextGenerationTask", "TEST"))).toBe(5000);
   });
 
-  it("states no retry date when the provider stated none, so backoff is exponential", () => {
+  it("spaces a 429 that stated no wait for a queue, but an agent backs off on its own", () => {
     const err = apiError("429 Too Many Requests", { status: 429 });
     const classified = classifyProviderError(err, "TextGenerationTask", "TEST");
-    expect(waitOf(classified)).toBeUndefined();
+    // A queue reschedules at its limiter's next slot, which is "now" for a
+    // concurrency limiter; the default is what keeps it from retrying at once.
+    expect(waitOf(classified)).toBe(DEFAULT_RATE_LIMIT_RETRY_MS);
+    expect(isRetryDateEstimated(classified)).toBe(true);
+    expect(statedRetryAfterMs(classified)).toBeUndefined();
     expect(retryDelayMs(classified, 1, NOW)).toBe(2000);
     expect(retryDelayMs(classified, 2, NOW)).toBe(4000);
+  });
+
+  it("reads OpenAI's compound durations", () => {
+    const daily = apiError(
+      "Rate limit reached for gpt-x on tokens per day. Please try again in 6m0s.",
+      { status: 429 }
+    );
+    expect(waitOf(classifyProviderError(daily, "TextGenerationTask", "OPENAI"))).toBe(360_000);
+    const mixed = apiError("Please try again in 1h2m3.5s.", { status: 429 });
+    expect(waitOf(classifyProviderError(mixed, "TextGenerationTask", "OPENAI"))).toBe(3_723_500);
+  });
+
+  it("retries a live 429 worded like billing but carrying no code or wait", () => {
+    // Gemini's per-minute quota without its RetryInfo detail: the wording is the
+    // same as exhausted credits, the 429 is a rate limit.
+    const err = apiError(
+      "You exceeded your current quota, please check your plan and billing details.",
+      { status: 429 }
+    );
+    const classified = classifyProviderError(err, "TextGenerationTask", "GOOGLE_GEMINI");
+    expect(classified).toBeInstanceOf(RetryableJobError);
+  });
+
+  it("keeps a stated wait on a server error", () => {
+    const overloaded = apiError("529 overloaded_error", {
+      status: 529,
+      headers: new Headers({ "retry-after": "20" }),
+    });
+    expect(waitOf(classifyProviderError(overloaded, "TextGenerationTask", "ANTHROPIC"))).toBe(
+      20_000
+    );
   });
 
   it("shares one billing matcher with the live-test credit skip", () => {
