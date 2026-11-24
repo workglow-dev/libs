@@ -170,7 +170,10 @@ function retryDelayFromDetails(details: unknown): number | undefined {
 function retryAfterFromMessage(message: string): number | undefined {
   const gemini = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(message);
   if (gemini) return Math.round(Number(gemini[1]) * 1000);
-  const openai = /try again in ((?:\d+(?:\.\d+)?\s*(?:ms|h|m|s))+)\b/i.exec(message);
+  // Digit runs and segments are bounded: the message is provider text, and an
+  // unbounded `\d+` inside a repeated group backtracks polynomially on a long
+  // run of digits.
+  const openai = /try again in ((?:\d{1,9}(?:\.\d{1,9})? ?(?:ms|h|m|s)){1,4})\b/i.exec(message);
   if (openai) return goDurationMs(openai[1]!);
   const legacy = /retry.after[:\s]*(\d+)/i.exec(message);
   return legacy ? Number(legacy[1]) * 1000 : undefined;
@@ -183,7 +186,7 @@ function retryAfterFromMessage(message: string): number | undefined {
 function goDurationMs(text: string): number {
   const unitMs: Readonly<Record<string, number>> = { h: 3_600_000, m: 60_000, s: 1_000, ms: 1 };
   let total = 0;
-  for (const [, amount, unit] of text.matchAll(/(\d+(?:\.\d+)?)\s*(ms|h|m|s)/gi)) {
+  for (const [, amount, unit] of text.matchAll(/(\d{1,9}(?:\.\d{1,9})?) ?(ms|h|m|s)/gi)) {
     total += Number(amount) * unitMs[unit!.toLowerCase()]!;
   }
   return Math.round(total);
