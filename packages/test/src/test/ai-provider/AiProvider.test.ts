@@ -328,9 +328,9 @@ describe("AiProvider", () => {
   });
 
   describe("registerOnWorkerServer", () => {
-    test("should register every run-fn under its workerKeyForServes key", () => {
-      const mockGenFn = makeFinishStreamFn({ text: "hello" });
-      const mockEmbedFn = makeFinishStreamFn({ vector: [] });
+    test("should register every run-fn under its workerKeyForServes key", async () => {
+      const mockGenFn = vi.fn(makeFinishStreamFn({ text: "hello" }));
+      const mockEmbedFn = vi.fn(makeFinishStreamFn({ vector: [] }));
       const provider = new TestProvider([
         { serves: TEXT_GENERATION, runFn: mockGenFn },
         { serves: TEXT_EMBEDDING, runFn: mockEmbedFn },
@@ -346,14 +346,19 @@ describe("AiProvider", () => {
       // workerKeyForServes(["text.generation"]) → "text.generation"
       // workerKeyForServes(["text.embedding"]) → "text.embedding"
       expect(mockWorkerServer.registerRunFunction).toHaveBeenCalledTimes(2);
-      expect(mockWorkerServer.registerRunFunction).toHaveBeenCalledWith(
-        "text.generation",
-        mockGenFn
+      // Each is wrapped (a throw keeps the provider's stated retry-after across
+      // the worker boundary), so the registration delegates rather than being
+      // the run-fn itself.
+      const registered = new Map<string, (...args: unknown[]) => Promise<void>>(
+        mockWorkerServer.registerRunFunction.mock.calls.map(
+          ([key, fn]) => [key, fn] as [string, (...args: unknown[]) => Promise<void>]
+        )
       );
-      expect(mockWorkerServer.registerRunFunction).toHaveBeenCalledWith(
-        "text.embedding",
-        mockEmbedFn
-      );
+      expect([...registered.keys()].sort()).toEqual(["text.embedding", "text.generation"]);
+      const signal = new AbortController().signal;
+      await registered.get("text.generation")!({ prompt: "p" }, {}, signal, () => {});
+      expect(mockGenFn).toHaveBeenCalledWith({ prompt: "p" }, {}, signal, expect.any(Function));
+      expect(mockEmbedFn).not.toHaveBeenCalled();
     });
 
     test("should throw when runFns not provided for worker server registration", () => {

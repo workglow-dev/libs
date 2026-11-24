@@ -10,6 +10,7 @@ export * from "./execution/DirectExecutionStrategy";
 export * from "./execution/IAiExecutionStrategy";
 export * from "./execution/QueuedExecutionStrategy";
 export * from "./job/AiJob";
+export * from "./job/ProviderErrorSignals";
 export * from "./model/InMemoryModelRepository";
 export * from "./model/ModelRegistry";
 export * from "./model/ModelRepository";

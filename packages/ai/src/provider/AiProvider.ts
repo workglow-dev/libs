@@ -14,6 +14,7 @@ import type {
   AiProviderRunFnRegistration,
   SessionDisposalResult,
 } from "./AiProviderRegistry";
+import { withStatedRetryAfter } from "../job/ProviderErrorSignals";
 import { getAiProviderRegistry, workerKeyForServes } from "./AiProviderRegistry";
 
 /**
@@ -77,6 +78,24 @@ export interface AiProviderRegisterOptions {
  */
 export interface AiProviderRegisterContext extends AiProviderRegisterOptions {
   readonly isInline: boolean;
+}
+
+/**
+ * Wraps a worker-side run-fn so a failure leaves the worker still saying how
+ * long the provider asked to wait. The worker sends an error back as a few
+ * plain fields, and the response headers, `retryDate` and cause chain that
+ * hold the wait are not among them; `retryAfterMs` is.
+ */
+function withRetryAfterOnThrow(
+  runFn: (...args: any[]) => Promise<unknown>
+): (...args: any[]) => Promise<void> {
+  return async (...args: any[]): Promise<void> => {
+    try {
+      await runFn(...args);
+    } catch (err) {
+      throw withStatedRetryAfter(err);
+    }
+  };
 }
 
 /**
@@ -329,7 +348,7 @@ export abstract class AiProvider<TModelConfig extends ModelConfig = ModelConfig>
     if (this.promiseRunFns) {
       for (const reg of this.promiseRunFns) {
         const key = workerKeyForServes(reg.serves);
-        workerServer.registerRunFunction(key, reg.runFn as (...args: any[]) => Promise<void>);
+        workerServer.registerRunFunction(key, withRetryAfterOnThrow(reg.runFn));
       }
     }
     if (this.previewTasks) {

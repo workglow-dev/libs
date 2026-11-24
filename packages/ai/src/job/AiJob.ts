@@ -20,6 +20,7 @@ import type { Capability } from "../capability/Capabilities";
 import type { ModelConfig } from "../model/ModelSchema";
 import type { AiSessionContext } from "../provider/AiProviderRegistry";
 import { getAiProviderRegistry } from "../provider/AiProviderRegistry";
+import { hasBillingCode, isCreditExhaustedError, statedRetryAfterMs } from "./ProviderErrorSignals";
 
 /** Default timeout for provider API calls (60 minutes). */
 const DEFAULT_AI_TIMEOUT_MS = 60 * 60 * 1000;
@@ -155,9 +156,11 @@ export function classifyProviderError(err: unknown, taskType: string, provider: 
   // different question from a retry, and a stated answer beats a guess made
   // from the message.
   const declared = declaredRetryability(err);
+  const retryAfterMs = statedRetryAfterMs(err);
+  const retryDate = retryAfterMs === undefined ? undefined : new Date(Date.now() + retryAfterMs);
   if (declared !== undefined) {
     return declared
-      ? new RetryableJobError(withJobErrorDiagnostics(message, err))
+      ? new RetryableJobError(withJobErrorDiagnostics(message, err), retryDate)
       : new PermanentJobError(withJobErrorDiagnostics(message, err));
   }
 
@@ -169,12 +172,25 @@ export function classifyProviderError(err: unknown, taskType: string, provider: 
     return new RetryableJobError(withJobErrorDiagnostics(message, err));
   }
 
-  if (status === 429) {
-    const retryAfterMatch = message.match(/retry.after[:\s]*(\d+)/i);
-    const retryMs = retryAfterMatch ? parseInt(retryAfterMatch[1], 10) * 1000 : 30_000;
+  // An account out of credits answers 429 too (OpenAI's `insufficient_quota`),
+  // and no wait fixes it. A billing code is taken at its word; billing wording
+  // alone is not, because Gemini words a per-minute quota the same way and
+  // states the wait that clears it.
+  if (hasBillingCode(err) || (retryAfterMs === undefined && isCreditExhaustedError(err))) {
+    return new PermanentJobError(
+      withJobErrorDiagnostics(`Out of credits with ${provider} for ${taskType}: ${message}`, err)
+    );
+  }
+
+  // Only a wait the provider stated becomes a retry date. Without one the
+  // caller backs off on its own schedule; a date invented here would read to it
+  // as the provider's word. A stated wait with no status left (an error
+  // flattened across a worker keeps its message and the wait, not its status)
+  // is the provider asking to be called again, so it is a rate limit too.
+  if (status === 429 || (status === undefined && retryAfterMs !== undefined)) {
     return new RetryableJobError(
       withJobErrorDiagnostics(`Rate limited by ${provider} for ${taskType}: ${message}`, err),
-      new Date(Date.now() + retryMs)
+      retryDate
     );
   }
 
