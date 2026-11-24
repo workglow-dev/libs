@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { FsFolderTabularStorage } from "@workglow/storage";
+import { atomicWriteFile, FsFolderTabularStorage } from "@workglow/storage";
 import { makeFingerprint } from "@workglow/util";
 import { createReadStream, openSync } from "node:fs";
-import { mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { CacheRef } from "../cache/CacheRef";
 import { makeCacheRef, makeRefPattern, mintRefKey } from "../cache/CacheRef";
@@ -267,59 +267,15 @@ export class FsFolderTaskOutputRepository extends TaskOutputTabularRepository {
 
   /**
    * Stream `chunks` to a uniquely-named sidecar under `blobsDir`, returning the
-   * byte count. Bytes go to a `.tmp` file, are fsync'd, then atomically renamed
-   * to `name` — a crash mid-write never publishes a readable partial blob. The
-   * directory entry is fsync'd best-effort so the rename itself survives a crash
-   * (FS-dependent); platforms that reject directory fsync fall through silently.
+   * byte count. {@link atomicWriteFile} publishes it by rename after an fsync, so
+   * a crash mid-write never leaves a readable partial blob.
    * Callers compute `name` (the prefix keeps names greppable and prefix-
    * deletable; a per-write UUID suffix makes every path unique so two concurrent
    * writers with the same `(taskType, inputs)` cannot race on one file).
    */
   private async writeSidecar(name: string, chunks: AsyncIterable<Uint8Array>): Promise<number> {
     await mkdir(this.blobsDir, { recursive: true });
-    const tmpPath = join(this.blobsDir, `${name}.tmp`);
-    const handle = await open(tmpPath, "w");
-    let size = 0;
-    try {
-      try {
-        for await (const chunk of chunks) {
-          // write(2) may write fewer bytes than requested (quota/NFS/FUSE
-          // edges); loop until the whole chunk is on disk so the returned
-          // size — stamped into the CacheRef — never overstates the file.
-          let offset = 0;
-          while (offset < chunk.byteLength) {
-            const { bytesWritten } = await handle.write(chunk, offset, chunk.byteLength - offset);
-            if (bytesWritten <= 0) {
-              throw new Error(`Short write persisting blob ${name} (0 bytes accepted)`);
-            }
-            offset += bytesWritten;
-          }
-          size += chunk.byteLength;
-        }
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await rename(tmpPath, join(this.blobsDir, name));
-      try {
-        const dir = await open(this.blobsDir, "r");
-        try {
-          await dir.sync();
-        } finally {
-          await dir.close();
-        }
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code !== "EPERM" && code !== "EINVAL" && code !== "ENOTSUP" && code !== "EISDIR") {
-          throw err;
-        }
-      }
-    } catch (err) {
-      // A failed write or rename must not leave a stray .tmp behind.
-      await rm(tmpPath, { force: true });
-      throw err;
-    }
-    return size;
+    return await atomicWriteFile(join(this.blobsDir, name), chunks);
   }
 
   private blobPath(ref: CacheRef): string | undefined {
