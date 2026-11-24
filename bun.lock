@@ -1126,7 +1126,7 @@
     "@aws-sdk/client-sqs": "^3.1176.0",
     "@cloudflare/workers-types": "^5.20261124.1",
     "@duckdb/node-api": "^1.5.6-r.2",
-    "@electric-sql/pglite": "^0.5.17",
+    "@electric-sql/pglite": "^0.6.0",
     "@electric-sql/pglite-pgvector": "^0.1.0",
     "@google/genai": "^3.6.1",
     "@huggingface/inference": "^4.13.33",
@@ -1268,7 +1268,7 @@
 
     "@duckdb/node-bindings-win32-x64": ["@duckdb/node-bindings-win32-x64@1.5.6-r.2", "", { "os": "win32", "cpu": "x64" }, "sha512-iFPP94+k8ODB0k0FnELFO5vFB3IkI203RiaPa/9gfymE3AaugLFiN/2oOLhKqvowXWzRLuDBF4dJXRAWJDJ0KA=="],
 
-    "@electric-sql/pglite": ["@electric-sql/pglite@0.5.17", "", {}, "sha512-8SvKjiUjaU+0O0dbxjOfN+jXz14TEqDWbwDkYOW1aQ11y/ph2JvFVI27ABBo5nfw+ZfSqy4hKCNlbnbB1TDE+g=="],
+    "@electric-sql/pglite": ["@electric-sql/pglite@0.6.0", "", {}, "sha512-g3tAPFjRLEdN1g5FvawTl4ETo9LtmVwBRUJYnH6Erl6mhlKFRGB2mYhPABffIuXMYxki64mX0Al8U4UFUhuYDQ=="],
 
     "@electric-sql/pglite-pgvector": ["@electric-sql/pglite-pgvector@0.1.0", "", { "peerDependencies": { "@electric-sql/pglite": "0.6.0" } }, "sha512-2iSQwI8av+BI8rnsq6NUT6coXX/Yrc6Qu5unfS9Z4znkUQjk3KS31DsCoU+uQKsb73YUPQ60e8+ZsFAcTecX/A=="],
 
