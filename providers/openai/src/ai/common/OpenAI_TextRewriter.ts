@@ -12,6 +12,7 @@ import {
 } from "@workglow/ai/provider-utils";
 import { finalizeResponsesRequest, getClient, getModelName } from "./OpenAI_Client";
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
+import { createResponsesEventStream } from "./OpenAI_ResponsesCall";
 
 /**
  * Streaming run-fn for `["text.rewriter"]`. Emits `text-delta` events on
@@ -35,10 +36,7 @@ export const OpenAI_TextRewriter_Stream: AiProviderRunFn<
   const promptText = promptTextForResponsesUsageEstimate(params);
   createEstimatedOutputUsageReporter(emit).onPrompt(promptText);
 
-  const stream = await client.responses.create(
-    { ...params, stream: true } as Parameters<typeof client.responses.create>[0],
-    { signal }
-  );
+  const stream = await createResponsesEventStream(client, params, model, signal);
 
   const usage = await accumulateOpenAIResponsesStream(stream as AsyncIterable<unknown>, emit, {
     promptText,

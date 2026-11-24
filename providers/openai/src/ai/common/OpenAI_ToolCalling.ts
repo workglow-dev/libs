@@ -27,6 +27,7 @@ import {
   requestReasoningSummary,
 } from "./OpenAI_Client";
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
+import { createResponsesEventStream } from "./OpenAI_ResponsesCall";
 
 /**
  * Streaming run-fn for `["text.generation", "tool-use"]`. Calls the OpenAI
@@ -100,10 +101,7 @@ export const OpenAI_ToolCalling_Stream: AiProviderRunFn<
   const promptText = promptTextForResponsesUsageEstimate(params);
   createEstimatedOutputUsageReporter(emit).onPrompt(promptText);
 
-  const stream = await client.responses.create(
-    { ...params, stream: true } as Parameters<typeof client.responses.create>[0],
-    { signal }
-  );
+  const stream = await createResponsesEventStream(client, params, model, signal);
 
   const usage = await accumulateOpenAIResponsesStream<ToolCallingTaskOutput>(
     stream as AsyncIterable<unknown>,

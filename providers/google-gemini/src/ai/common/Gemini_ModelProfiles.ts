@@ -25,6 +25,12 @@ export interface GeminiChatProfile {
   /** Serves `cachedContents` and `countTokens`, which the legacy 1.0 ids predate. */
   readonly cachedContent: boolean;
   /**
+   * Takes an explicit `cachedContents` cache, which is what a cache checkpoint
+   * is built on. Gemini 4 caches implicitly only and refuses an explicit
+   * cache, so it serves `countTokens` but no checkpoint.
+   */
+  readonly explicitCaching: boolean;
+  /**
    * The `thinkingLevel` values the model accepts, lowest first. Gemini 3 and
    * later take a level rather than a token budget, but not every model takes
    * every level — Gemini 4 Argon and Carbon have no `minimal` or `xhigh` — so
@@ -64,6 +70,7 @@ const chat = (overrides: Partial<Omit<GeminiChatProfile, "kind">> = {}): GeminiC
   thinks: true,
   multimodalFunctionResponses: false,
   cachedContent: true,
+  explicitCaching: true,
   thinkingLevels: [],
   ...overrides,
 });
@@ -85,11 +92,13 @@ const FLASH_LITE_3_5 = chat({
  */
 const GENERATION_4 = chat({
   multimodalFunctionResponses: true,
+  explicitCaching: false,
   thinkingLevels: ["low", "medium", "high"],
 });
 /** Gemini 4 Hydrogen and Neon add `xhigh`, and still have no `minimal`. */
 const GENERATION_4_HYDROGEN = chat({
   multimodalFunctionResponses: true,
+  explicitCaching: false,
   thinkingLevels: ["low", "medium", "high", "xhigh"],
 });
 /** Gemini 2.5 and the `-latest` aliases: thinking, images beside a tool result. */
@@ -97,7 +106,7 @@ const THINKING = chat();
 /** Gemini 1.5 and 2.0: the modern API surface, no thinking. */
 const PRE_THINKING = chat({ thinks: false });
 /** The 1.0 text models: no image input, no thinking, no cached content or token counting. */
-const LEGACY = chat({ vision: false, thinks: false, cachedContent: false });
+const LEGACY = chat({ vision: false, thinks: false, cachedContent: false, explicitCaching: false });
 const EMBEDDING: GeminiEmbeddingProfile = { kind: "embedding" };
 const GEMINI_IMAGE: GeminiImageProfile = { kind: "image", editing: true };
 const IMAGEN: GeminiImageProfile = { kind: "image", editing: false };
@@ -133,7 +142,7 @@ export const GEMINI_MODEL_PROFILES: Readonly<Record<string, GeminiModelProfile>>
   "imagen-4.0-generate-001": IMAGEN,
   // The legacy ids carry no version, so no family can place them.
   "gemini-pro": LEGACY,
-  "gemini-pro-vision": chat({ thinks: false, cachedContent: false }),
+  "gemini-pro-vision": chat({ thinks: false, cachedContent: false, explicitCaching: false }),
 };
 
 /** Rows for models `GEMINI_PRICING` has no card for; the contract test allows exactly these. */
@@ -168,6 +177,7 @@ const UNKNOWN: GeminiModelProfile = chat({
   vision: false,
   thinks: false,
   cachedContent: false,
+  explicitCaching: false,
 });
 
 /**
@@ -220,9 +230,10 @@ export function geminiProfileCapabilities(profile: GeminiModelProfile): readonly
         "tool-use",
         "json-mode",
         ...(profile.vision ? (["vision-input"] as const) : []),
-        ...(profile.cachedContent
-          ? (["cache.checkpoint", "session.dispose", "model.count-tokens"] as const)
+        ...(profile.cachedContent && profile.explicitCaching
+          ? (["cache.checkpoint", "session.dispose"] as const)
           : []),
+        ...(profile.cachedContent ? (["model.count-tokens"] as const) : []),
         "model.info",
         "model.search",
       ];

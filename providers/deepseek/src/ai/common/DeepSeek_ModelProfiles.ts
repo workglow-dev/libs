@@ -8,10 +8,10 @@ import type { Capability, ModelProfileFamily, ResolvedModelProfile } from "@work
 import { makeModelProfileResolver } from "@workglow/ai/worker";
 
 /**
- * What differs per DeepSeek model. Every DeepSeek chat model is text-only, so
- * the one decision left is whether it reasons — which DeepSeek splits by id
- * rather than by parameter. Capability inference, the effort policy, the
- * thinking switch, the reasoning allowance and model search all read it here.
+ * What differs per DeepSeek model: whether it reasons — which DeepSeek splits by
+ * id rather than by parameter — and whether it reads images. Capability
+ * inference, the effort policy, the thinking switch, the reasoning allowance,
+ * tool-result images and model search all read it here.
  */
 export interface DeepSeekModelProfile {
   /**
@@ -19,10 +19,16 @@ export interface DeepSeekModelProfile {
    * tokens against `max_tokens`.
    */
   readonly reasoning: boolean;
+  /**
+   * Reads images, in user and tool messages alike. DeepSeek Flash does since
+   * V4.1; V4 Pro and the retired chat/reasoner ids read text only.
+   */
+  readonly vision: boolean;
 }
 
-const REASONING: DeepSeekModelProfile = { reasoning: true };
-const CHAT: DeepSeekModelProfile = { reasoning: false };
+const REASONING: DeepSeekModelProfile = { reasoning: true, vision: false };
+const REASONING_VISION: DeepSeekModelProfile = { reasoning: true, vision: true };
+const CHAT: DeepSeekModelProfile = { reasoning: false, vision: false };
 
 /**
  * One row per canonical id (see {@link normalizeDeepSeekModelId}): adding a
@@ -31,8 +37,9 @@ const CHAT: DeepSeekModelProfile = { reasoning: false };
  * {@link DEEPSEEK_MODEL_FAMILIES}.
  */
 export const DEEPSEEK_MODEL_PROFILES: Readonly<Record<string, DeepSeekModelProfile>> = {
-  "deepseek-flash": REASONING,
-  "deepseek-v4-flash": REASONING,
+  "deepseek-flash": REASONING_VISION,
+  // Retired, and served by DeepSeek Flash (V4.1) at its price.
+  "deepseek-v4-flash": REASONING_VISION,
   "deepseek-v4-pro": REASONING,
   // `deepseek-reasoner` is the thinking mode of the weights `deepseek-chat`
   // serves without it.
@@ -54,8 +61,9 @@ function isReasoningDeepSeekFamily(id: string): boolean {
  * chat model that does not reason (`deepseek-v3`, `deepseek-coder`).
  */
 export const DEEPSEEK_MODEL_FAMILIES: readonly ModelProfileFamily<DeepSeekModelProfile>[] = [
+  { when: /^deepseek-flash/, profile: REASONING_VISION },
   {
-    when: [isReasoningDeepSeekFamily, /^deepseek-flash/, /^deepseek-reasoner/, /^deepseek-r\d/],
+    when: [isReasoningDeepSeekFamily, /^deepseek-reasoner/, /^deepseek-r\d/],
     profile: REASONING,
   },
   { when: /^deepseek/, profile: CHAT },
@@ -85,7 +93,7 @@ export const resolveDeepSeekProfile: (modelName: string | undefined) => DeepSeek
   });
 
 /** The task capabilities a profile serves: the same text set whether or not it reasons. */
-export function deepSeekProfileCapabilities(_profile: DeepSeekModelProfile): readonly Capability[] {
+export function deepSeekProfileCapabilities(profile: DeepSeekModelProfile): readonly Capability[] {
   return [
     "text.generation",
     "text.rewriter",
@@ -95,5 +103,6 @@ export function deepSeekProfileCapabilities(_profile: DeepSeekModelProfile): rea
     "model.count-tokens",
     "model.info",
     "model.search",
+    ...(profile.vision ? (["vision-input"] as const) : []),
   ];
 }

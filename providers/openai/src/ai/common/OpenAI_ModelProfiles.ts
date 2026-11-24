@@ -12,8 +12,9 @@ import { makeModelProfileResolver } from "@workglow/ai/worker";
  * - `none` — it does not, and answers one with a 400.
  * - `optional` — every effort, `none` included.
  * - `always` — it always reasons, and answers `effort: "none"` with a 400.
+ * - `pro` — it always reasons, and takes only `medium`, `high` and `xhigh`.
  */
-export type OpenAiReasoning = "none" | "optional" | "always";
+export type OpenAiReasoning = "none" | "optional" | "always" | "pro";
 
 export interface OpenAiChatProfile {
   readonly kind: "chat";
@@ -27,6 +28,11 @@ export interface OpenAiChatProfile {
    * `true` sends a temperature the model may 400 on.
    */
   readonly acceptsTemperatureWithReasoning: boolean;
+  /**
+   * Answers `stream: true` on the Responses API. A model that does not
+   * (gpt-5.5-pro) is sent one ordinary request instead.
+   */
+  readonly streams: boolean;
 }
 
 export interface OpenAiEmbeddingProfile {
@@ -56,6 +62,7 @@ const chat = (
   vision: true,
   reasoning,
   acceptsTemperatureWithReasoning: false,
+  streams: true,
   ...overrides,
 });
 
@@ -90,10 +97,9 @@ export const OPENAI_MODEL_PROFILES: Readonly<Record<string, OpenAiModelProfile>>
   "gpt-5.6-terra": REASONING_WITH_TEMPERATURE,
   "gpt-5.6-luna": REASONING_WITH_TEMPERATURE,
   "gpt-5.5": REASONING,
-  // The pro models only reason, and take no `effort: "none"`.
-  "gpt-5.5-pro": ALWAYS_REASONING,
-  "gpt-5.4-pro": ALWAYS_REASONING,
-  "gpt-5.2-pro": ALWAYS_REASONING,
+  "gpt-5.5-pro": chat("pro", { streams: false }),
+  "gpt-5.4-pro": chat("pro"),
+  "gpt-5.2-pro": chat("pro"),
   "gpt-5.4-mini": REASONING,
   "gpt-5.4-nano": REASONING,
   "gpt-5.4": REASONING,

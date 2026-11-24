@@ -22,6 +22,7 @@ import { mergeOpenAICheckpointPrefix } from "./OpenAI_CacheCheckpoint";
 import { finalizeResponsesRequest, getClient, getModelName } from "./OpenAI_Client";
 import type { OpenAiModelConfig } from "./OpenAI_ModelSchema";
 import { warnPenaltyDroppedOnce } from "./OpenAI_ResponsesWarnings";
+import { createResponsesEventStream } from "./OpenAI_ResponsesCall";
 
 /**
  * Inputs that the unified `["text.generation"]` runFn handles. Both
@@ -132,10 +133,7 @@ export const OpenAI_TextGeneration_Stream: AiProviderRunFn<
     const promptText = promptTextForResponsesUsageEstimate(params);
     createEstimatedOutputUsageReporter(emit).onPrompt(promptText);
 
-    const stream = await client.responses.create(
-      { ...params, stream: true } as Parameters<typeof client.responses.create>[0],
-      { signal }
-    );
+    const stream = await createResponsesEventStream(client, params, model, signal);
 
     const usage = await accumulateOpenAIResponsesStream(stream as AsyncIterable<unknown>, emit, {
       promptText,

@@ -111,7 +111,10 @@ describeModelProfileContract({
       expect(caps.includes("image.generation")).toBe(profile.kind === "image");
       expect(caps.includes("image.editing")).toBe(profile.kind === "image" && profile.editing);
       expect(caps.includes("vision-input")).toBe(chat?.vision === true);
-      expect(caps.includes("cache.checkpoint")).toBe(chat?.cachedContent === true);
+      expect(caps.includes("cache.checkpoint")).toBe(
+        chat?.cachedContent === true && chat.explicitCaching
+      );
+      expect(caps.includes("model.count-tokens")).toBe(chat?.cachedContent === true);
     } else {
       expect(caps).toEqual(["model.search", "model.info"]);
     }
@@ -146,5 +149,29 @@ describe("Gemini profile invariants", () => {
         geminiProfileCapabilities(resolveGeminiProfile(result.id).profile)
       );
     }
+  });
+});
+
+describe("Gemini 4 caching", () => {
+  it.each([
+    "gemini-4-neon",
+    "gemini-4-carbon",
+    "gemini-4-argon",
+    "gemini-4-hydrogen",
+    "gemini-4-pro",
+  ])(
+    "advertises no cache checkpoint on %s, which caches implicitly only, but still counts tokens",
+    (name) => {
+      const caps = inferGeminiCapabilities({ model_id: name } as never);
+      expect(caps).not.toContain("cache.checkpoint");
+      expect(caps).not.toContain("session.dispose");
+      expect(caps).toContain("model.count-tokens");
+    }
+  );
+
+  it("still advertises cache checkpoints on Gemini 3", () => {
+    expect(inferGeminiCapabilities({ model_id: "gemini-3.8-flash" } as never)).toContain(
+      "cache.checkpoint"
+    );
   });
 });
