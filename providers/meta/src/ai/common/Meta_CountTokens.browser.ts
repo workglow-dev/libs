@@ -16,7 +16,7 @@ import type { MetaModelConfig } from "./Meta_ModelSchema";
 
 let _tiktoken: typeof import("js-tiktoken") | undefined;
 
-async function loadTiktoken() {
+async function loadTiktoken(): Promise<typeof import("js-tiktoken")> {
   if (!_tiktoken) {
     try {
       _tiktoken = await import("js-tiktoken");
@@ -35,7 +35,7 @@ const _encoderCache = new Map<string, Tiktoken>();
 // Responses-API endpoint), so token counts are approximated with tiktoken's
 // cl100k_base encoding (Muse model ids are unknown to
 // `encodingForModel`, so the fallback path is the normal case here).
-async function getEncoder(modelName: string) {
+async function getEncoder(modelName: string): Promise<Tiktoken> {
   const tiktoken = await loadTiktoken();
   if (!_encoderCache.has(modelName)) {
     try {

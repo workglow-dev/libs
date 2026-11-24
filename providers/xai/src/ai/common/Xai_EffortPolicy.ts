@@ -4,13 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {
-  EFFORT_POLICY_NONE,
-  makeProfileEffortPolicy,
-  type ModelEffort,
-  type ModelEffortPolicy,
-  type ModelEffortPolicyFn,
-} from "@workglow/ai/worker";
+import type { ModelEffort, ModelEffortPolicy, ModelEffortPolicyFn } from "@workglow/ai/worker";
+import { EFFORT_POLICY_NONE, makeProfileEffortPolicy } from "@workglow/ai/worker";
 import type { XaiChatProfile, XaiReasoningEffort } from "./Xai_ModelProfiles";
 import { resolveXaiProfile } from "./Xai_ModelProfiles";
 

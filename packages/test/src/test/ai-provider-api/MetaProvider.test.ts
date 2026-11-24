@@ -227,6 +227,21 @@ describe("Meta reasoning effort", () => {
     expect(getMetaReasoningEffort(cfg("muse-spark-1.3", { effort: "none" }))).toBeUndefined();
   });
 
+  it("never passes a native none through, falling back to the dial", () => {
+    const model = {
+      provider: META,
+      provider_config: { model_name: "muse-spark-1.3", reasoning_effort: "none" },
+      effort: "high",
+    } as MetaModelConfig;
+    expect(getMetaReasoningEffort(model)).toBe("high");
+  });
+
+  it("shows Spark 1.3's default as high and Wonder's as ultra, as Meta runs them", () => {
+    expect(metaEffortPolicy(cfg("muse-spark-1.3")).default).toBe("high");
+    expect(metaEffortPolicy(cfg("muse-wonder-1.0")).default).toBe("ultra");
+    expect(metaEffortPolicy(cfg("muse-ember-1.0")).default).toBe("ultra");
+  });
+
   it("passes a native reasoning_effort through, minimal included", () => {
     const model = {
       provider: META,

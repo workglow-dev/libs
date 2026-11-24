@@ -36,9 +36,19 @@ export async function createResponsesEventStream(
       { signal }
     )) as AsyncIterable<unknown>;
   }
-  const response = await client.responses.create({ ...params, stream: false }, { signal });
+  // The SDK's 10-minute default timeout covers a non-streaming call until the
+  // whole response is ready, and it retries a timeout: a pro run that thinks
+  // past it would be abandoned and billed again up to twice. The run's signal
+  // still bounds the call.
+  const response = await client.responses.create(
+    { ...params, stream: false },
+    { signal, timeout: NON_STREAMING_TIMEOUT_MS }
+  );
   return responseAsEvents(response);
 }
+
+/** How long a non-streaming Responses call may take before the SDK gives up on it. */
+const NON_STREAMING_TIMEOUT_MS = 60 * 60_000;
 
 /**
  * The stream events a finished Responses `response` stands for: each output

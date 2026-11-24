@@ -22,6 +22,11 @@ export interface MetaChatProfile {
    * contributor variant, which reject it.
    */
   readonly maxEffort: boolean;
+  /**
+   * Reasons at `max` when `reasoning_effort` is omitted, as Muse Wonder and
+   * Ember do; every Muse Spark version, 1.3 included, reasons at `high`.
+   */
+  readonly defaultsToMax: boolean;
 }
 
 /**
@@ -39,15 +44,17 @@ export interface MetaOtherProfile {
  */
 export type MetaModelProfile = MetaChatProfile | MetaOtherProfile;
 
-const chat = (maxEffort: boolean): MetaChatProfile => ({
+const chat = (maxEffort: boolean, defaultsToMax: boolean): MetaChatProfile => ({
   kind: "chat",
   vision: true,
   reasoning: true,
   maxEffort,
+  defaultsToMax,
 });
 
-const MUSE_MAX = chat(true);
-const MUSE = chat(false);
+const MUSE_MAX = chat(true, true);
+const MUSE_SPARK_MAX = chat(true, false);
+const MUSE = chat(false, false);
 const OTHER: MetaOtherProfile = { kind: "other" };
 
 /**
@@ -58,7 +65,7 @@ const OTHER: MetaOtherProfile = { kind: "other" };
 export const META_MODEL_PROFILES: Readonly<Record<string, MetaModelProfile>> = {
   "muse-wonder-1.0": MUSE_MAX,
   "muse-ember-1.0": MUSE_MAX,
-  "muse-spark-1.3": MUSE_MAX,
+  "muse-spark-1.3": MUSE_SPARK_MAX,
   "muse-spark-1.2": MUSE,
   "muse-spark-1.1": MUSE,
   "muse-spark-1.3-contributor": MUSE,
@@ -91,6 +98,7 @@ const UNKNOWN: MetaModelProfile = {
   vision: false,
   reasoning: false,
   maxEffort: false,
+  defaultsToMax: false,
 };
 
 /**

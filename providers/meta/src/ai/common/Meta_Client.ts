@@ -10,7 +10,8 @@ import {
   resolveApiKey,
   validateProviderBaseUrl,
 } from "@workglow/ai/provider-utils";
-import { resolveEnabledEffort, type ModelEffort } from "@workglow/ai/worker";
+import type { ModelEffort } from "@workglow/ai/worker";
+import { resolveEnabledEffort } from "@workglow/ai/worker";
 import { metaEffortPolicy } from "./Meta_EffortPolicy";
 import type { MetaModelConfig } from "./Meta_ModelSchema";
 
@@ -89,7 +90,9 @@ export const _testOnly = {
   resetMetaStreamUsageSupportForTests,
 } as const;
 
-export async function getClient(model: MetaModelConfig | undefined) {
+export async function getClient(
+  model: MetaModelConfig | undefined
+): Promise<InstanceType<OpenAIClientClass>> {
   if (_testClient) return _testClient as InstanceType<OpenAIClientClass>;
   const OpenAI = await loadOpenAISDK();
   const config = model?.provider_config as ResolvedProviderConfig | undefined;
@@ -141,19 +144,16 @@ const EFFORT_TO_META: Record<Exclude<ModelEffort, "none">, string> = {
   ultra: "max",
 };
 
-const META_REASONING_EFFORTS = new Set([
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
+/**
+ * The native values passed through. `none` is left out for the same reason the
+ * dial leaves it out: every Muse model answers it with a 400, so a record
+ * naming it falls back to the coarse dial instead of failing every call.
+ */
+const META_REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /**
  * Native `provider_config.reasoning_effort` wins over coarse `model.effort`
- * and is passed through for any value Meta documents, `minimal` included.
+ * and is passed through for any value a Muse model accepts, `minimal` included.
  * Undefined leaves the field off, so the model reasons at its own default
  * (`max` for Wonder and Ember, `high` for Spark).
  */

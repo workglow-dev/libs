@@ -4,12 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {
-  EFFORT_POLICY_NONE,
-  makeProfileEffortPolicy,
-  type ModelEffortPolicy,
-  type ModelEffortPolicyFn,
-} from "@workglow/ai/worker";
+import type { ModelEffortPolicy, ModelEffortPolicyFn } from "@workglow/ai/worker";
+import { EFFORT_POLICY_NONE, makeProfileEffortPolicy } from "@workglow/ai/worker";
 import { resolveMetaProfile } from "./Meta_ModelProfiles";
 
 /**
@@ -21,6 +17,12 @@ import { resolveMetaProfile } from "./Meta_ModelProfiles";
 const REASONING_MAX = {
   supported: ["low", "medium", "high", "extra", "ultra"],
   default: "ultra",
+} as const satisfies ModelEffortPolicy;
+
+/** Takes `max`, but reasons at `high` when the field is omitted (Muse Spark 1.3). */
+const REASONING_MAX_DEFAULT_HIGH = {
+  supported: ["low", "medium", "high", "extra", "ultra"],
+  default: "high",
 } as const satisfies ModelEffortPolicy;
 
 const REASONING = {
@@ -37,6 +39,7 @@ export const metaEffortPolicy: ModelEffortPolicyFn = makeProfileEffortPolicy(
   resolveMetaProfile,
   (profile) => {
     if (profile.kind !== "chat" || !profile.reasoning) return EFFORT_POLICY_NONE;
-    return profile.maxEffort ? REASONING_MAX : REASONING;
+    if (!profile.maxEffort) return REASONING;
+    return profile.defaultsToMax ? REASONING_MAX : REASONING_MAX_DEFAULT_HIGH;
   }
 );
