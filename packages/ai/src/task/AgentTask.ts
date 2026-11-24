@@ -32,7 +32,7 @@ import { AgentTurnPolicy, MAX_SUBMISSION_REJECTIONS } from "./AgentTurnPolicy";
 import type { AgentStep, AgentSubmissionCheck } from "./AgentTurnRecord";
 import { AGENT_SUBMIT_TOOL_NAME, agentModelPricing } from "./AgentTurnRecord";
 import { promptToUserMessage } from "./base/CheckpointPorts";
-import { DEFAULT_MAX_HISTORY_CHARS } from "./ChatHistory";
+import { DEFAULT_MAX_HISTORY_CHARS, IMAGE_BLOCK_CHARS } from "./ChatHistory";
 import type { ChatMessage } from "./ChatMessage";
 import { ChatMessageSchema } from "./ChatMessage";
 import { collectToolUseIds, uniquifyToolCallIds } from "./ToolCallIds";
@@ -93,8 +93,7 @@ export const AgentInputSchema = {
     maxHistoryChars: {
       type: "integer",
       title: "Max History Characters",
-      description:
-        "Character budget for the history sent to the model; older turns are dropped whole",
+      description: `Character budget for the history sent to the model; older turns are dropped whole. An image counts a fixed ${IMAGE_BLOCK_CHARS} characters, not its base64 length`,
       minimum: 1,
       "x-ui-group": "Configuration",
     },

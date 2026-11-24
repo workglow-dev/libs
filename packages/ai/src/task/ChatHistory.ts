@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ChatMessage } from "./ChatMessage";
+import type { ChatMessage, ContentBlock } from "./ChatMessage";
 
 /** Concatenates the text blocks of a message, ignoring every other block kind. */
 function messageText(message: ChatMessage): string {
@@ -63,18 +63,51 @@ export function normalizeHistoryForModel(history: readonly ChatMessage[]): ChatM
 export const DEFAULT_MAX_HISTORY_CHARS = 120_000;
 
 /**
+ * What one image block counts for against a history budget, in place of its
+ * base64 `data`. A vision model bills an image at roughly 1–2K tokens whatever
+ * its byte size, while its base64 runs to a character per byte: measured that
+ * way, one 100 KB screenshot is over {@link DEFAULT_MAX_HISTORY_CHARS} alone and
+ * every earlier turn would be cut on every round. About 1.5K tokens at four
+ * characters a token.
+ */
+export const IMAGE_BLOCK_CHARS = 6_000;
+
+type MeasuredBlock = Record<string, unknown>;
+
+/** `block` as it is measured: an image without its data, a reasoning block without its payload. */
+function measuredBlock(block: ContentBlock, images: { count: number }): MeasuredBlock {
+  switch (block.type) {
+    case "image":
+      images.count++;
+      return { type: block.type, mimeType: block.mimeType };
+    case "reasoning": {
+      if (block.payload === undefined) return block;
+      const { payload: _payload, ...rest } = block;
+      return rest;
+    }
+    case "tool_result":
+      return {
+        ...block,
+        content: Array.isArray(block.content)
+          ? block.content.map((inner) => measuredBlock(inner, images))
+          : block.content,
+      };
+    default:
+      return block;
+  }
+}
+
+/**
  * A message's size as the model reads it. A reasoning block's `payload` is a
  * provider's own turn kept for replay, not text this budget is protecting the
- * context window from, so it is measured without it.
+ * context window from, so it is measured without it. An image, top-level or in
+ * a `tool_result`, counts {@link IMAGE_BLOCK_CHARS} rather than its base64.
  */
 function messageChars(message: ChatMessage): number {
   try {
-    const content = message.content.map((block) => {
-      if (block.type !== "reasoning" || block.payload === undefined) return block;
-      const { payload: _payload, ...rest } = block;
-      return rest;
-    });
-    return JSON.stringify({ ...message, content }).length;
+    const images = { count: 0 };
+    const content = message.content.map((block) => measuredBlock(block, images));
+    return JSON.stringify({ ...message, content }).length + images.count * IMAGE_BLOCK_CHARS;
   } catch {
     return 0;
   }
@@ -109,7 +142,9 @@ export function measureHistoryForModel(history: readonly ChatMessage[]): number 
  *
  * A reasoning block's `payload` is not counted, so a provider replaying its own
  * turns (encrypted reasoning, signed thinking) sends more than `max`. The budget
- * caps the conversation's text, not those opaque payloads.
+ * caps the conversation's text, not those opaque payloads. An image counts
+ * {@link IMAGE_BLOCK_CHARS}, an estimate of what the model bills for it, not its
+ * base64 length, so the bytes sent can also exceed `max`.
  */
 export function trimHistoryForModel(
   history: readonly ChatMessage[],
