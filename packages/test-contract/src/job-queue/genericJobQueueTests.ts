@@ -5,6 +5,7 @@
  */
 
 import type {
+  IClaim,
   IJobExecuteContext,
   ILimiter,
   IQueueStorage,
@@ -13,6 +14,7 @@ import type {
 } from "@workglow/job-queue";
 import {
   AbortSignalJobError,
+  isLeaseLostError,
   Job,
   JobError,
   JobQueueClient,
@@ -1527,6 +1529,117 @@ export function runGenericJobQueueTests(
       expect(after?.abort_requested_at).toBeTruthy();
       expect(after?.completed_at).toBeTruthy();
       expect(after?.attempts ?? 0).toBe(0);
+    });
+  });
+
+  describe("a stale claim's writes are fenced by lease ownership", () => {
+    type Claim = IClaim<JobStorageFormat<TInput, TOutput>>;
+
+    /**
+     * Claim with worker A on a lease that lapses at once, then reclaim with
+     * `reclaimer` — the state a slow worker is in when its result is ready
+     * after another claim took the job over.
+     */
+    async function staleAndFresh(
+      reclaimer: string
+    ): Promise<{ id: unknown; stale: Claim; fresh: Claim }> {
+      const { messageQueue } = wrapQueueStorage(storage);
+      const handle = await client.send({ taskType: "task1", data: "stale-claim" });
+      const [stale] = await messageQueue.receive({ workerId: "worker-a", leaseMs: 1 });
+      expect(stale?.id).toBe(handle.id);
+      await sleep(20);
+      const [fresh] = await messageQueue.receive({ workerId: reclaimer, leaseMs: 30_000 });
+      expect(fresh?.id).toBe(handle.id);
+      return { id: handle.id, stale: stale!, fresh: fresh! };
+    }
+
+    async function expectLeaseLost(write: Promise<void>): Promise<void> {
+      let caught: unknown;
+      try {
+        await write;
+      } catch (err) {
+        caught = err;
+      }
+      expect(isLeaseLostError(caught)).toBe(true);
+    }
+
+    async function expectHeldBy(id: unknown, owner: string, attempts: number): Promise<void> {
+      const row = await storage.get(id);
+      expect(row?.status).toBe(JobStatus.PROCESSING);
+      expect(row?.lease_owner).toBe(owner);
+      expect(row?.attempts ?? 0).toBe(attempts);
+      expect(row?.output ?? null).toBeNull();
+      expect(row?.error ?? null).toBeNull();
+    }
+
+    const staleWrites: ReadonlyArray<readonly [string, (claim: Claim) => Promise<void>]> = [
+      ["ack", (claim) => claim.ack({ result: "stale" })],
+      ["fail", (claim) => claim.fail({ error: "stale", errorCode: "STALE" })],
+      ["retry", (claim) => claim.retry({ delaySeconds: 0 })],
+      ["disable", (claim) => claim.disable()],
+    ];
+
+    for (const [name, write] of staleWrites) {
+      it(`refuses ${name} from a claim another worker reclaimed, leaving its row intact`, async () => {
+        const { id, stale, fresh } = await staleAndFresh("worker-b");
+        await expectLeaseLost(write(stale));
+        await expectHeldBy(id, "worker-b", fresh.attempts);
+
+        // The owner's own write still lands.
+        await fresh.ack({ result: "fresh" });
+        const row = await storage.get(id);
+        expect(row?.status).toBe(JobStatus.COMPLETED);
+        expect(row?.output).toEqual({ result: "fresh" });
+      });
+    }
+
+    it("refuses a stale claim when the reclaim came from the same worker id", async () => {
+      // A worker's own poll loop reclaiming a job it is still running: the
+      // lease owner is the same, so only the attempt the reclaim charged
+      // tells the two claims apart.
+      const { id, stale, fresh } = await staleAndFresh("worker-a");
+      expect(fresh.attempts).toBe(stale.attempts + 1);
+      await expectLeaseLost(stale.ack({ result: "stale" }));
+      await expectLeaseLost(stale.extendLease(30_000));
+      await expectHeldBy(id, "worker-a", fresh.attempts);
+    });
+
+    it("refuses a stale claim's lease renewal", async () => {
+      const { id, stale, fresh } = await staleAndFresh("worker-b");
+      await expectLeaseLost(stale.extendLease(30_000));
+      await expectHeldBy(id, "worker-b", fresh.attempts);
+      await fresh.extendLease(30_000);
+    });
+
+    it("cannot overwrite or resurrect a job the new owner already finished", async () => {
+      const { id, stale, fresh } = await staleAndFresh("worker-b");
+      await fresh.ack({ result: "fresh" });
+
+      await expectLeaseLost(stale.fail({ error: "stale" }));
+      await expectLeaseLost(stale.retry({ delaySeconds: 0 }));
+      await expectLeaseLost(stale.ack({ result: "stale" }));
+
+      const row = await storage.get(id);
+      expect(row?.status).toBe(JobStatus.COMPLETED);
+      expect(row?.output).toEqual({ result: "fresh" });
+      expect(row?.error ?? null).toBeNull();
+    });
+
+    it("a live claim's retry hands the job back to PENDING and charges one attempt", async () => {
+      const { messageQueue } = wrapQueueStorage(storage);
+      const handle = await client.send({ taskType: "task1", data: "live-retry" });
+      const [claim] = await messageQueue.receive({ workerId: "worker-a", leaseMs: 30_000 });
+      expect(claim?.id).toBe(handle.id);
+      const before = claim!.attempts;
+
+      await claim!.retry({ delaySeconds: 60 });
+
+      const row = await storage.get(handle.id);
+      expect(row?.status).toBe(JobStatus.PENDING);
+      expect(row?.attempts ?? 0).toBe(before + 1);
+      expect(row?.lease_owner ?? null).toBeNull();
+      // The requested delay holds the job back.
+      expect(await messageQueue.receive({ workerId: "worker-b", leaseMs: 30_000 })).toHaveLength(0);
     });
   });
 }

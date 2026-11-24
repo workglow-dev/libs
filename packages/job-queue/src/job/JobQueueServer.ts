@@ -59,6 +59,8 @@ export type JobQueueServerEventListeners<Input, Output> = {
     details: Record<string, unknown> | null
   ) => void;
   job_stream: (queueName: string, jobId: unknown, event: StreamEventLike) => void;
+  /** See the worker's `job_lease_lost`: an execution abandoned after losing its lease. */
+  job_lease_lost: (queueName: string, jobId: unknown, reason: string) => void;
 };
 
 export type JobQueueServerEvents = keyof JobQueueServerEventListeners<unknown, unknown>;
@@ -528,6 +530,13 @@ export class JobQueueServer<
       this.stats = { ...this.stats, retriedJobs: this.stats.retriedJobs + 1 };
       this.events.emit("job_retry", this.queueName, jobId, visibleAt);
       this.forwardToClients("handleJobRetry", jobId, visibleAt);
+    });
+
+    worker.on("job_lease_lost", (jobId, reason) => {
+      // Not forwarded to clients: the job is not settled, and the claim that
+      // now owns it reports its outcome. Only this worker's slot is free.
+      this.events.emit("job_lease_lost", this.queueName, jobId, reason);
+      this.notifyWorkers();
     });
 
     worker.on("job_progress", (jobId, progress, message, details) => {

@@ -5,14 +5,17 @@
  */
 
 import type {
+  ClaimFence,
+  ClaimFinalizeFields,
   IQueueStorage,
   JobStorageFormat,
   PrefixColumn,
   QueueChangePayload,
+  QueueFinalizeFields,
   QueueStorageOptions,
   QueueSubscribeOptions,
 } from "@workglow/job-queue";
-import { JobStatus, validateLeaseMs } from "@workglow/job-queue";
+import { JobStatus, LeaseLostError, validateLeaseMs } from "@workglow/job-queue";
 import type { Pool } from "@workglow/postgres/storage";
 import {
   assertPrefixesSafe,
@@ -320,17 +323,29 @@ export class PostgresQueueStorage<Input, Output> implements IQueueStorage<Input,
    * @param workerId - Worker ID that must match the current lease owner (lease_owner)
    * @param ms - Number of milliseconds to extend the lease by
    */
-  public async extendLease(id: unknown, workerId: string, ms: number): Promise<void> {
+  public async extendLease(
+    id: unknown,
+    workerId: string,
+    ms: number,
+    attempts?: number
+  ): Promise<void> {
     validateLeaseMs(ms, "ms");
-    const { conditions: prefixConditions, params: prefixParams } = this.buildPrefixWhereClause(5);
+    const fenceAttempts = attempts !== undefined;
+    const { conditions: prefixConditions, params: prefixParams } = this.buildPrefixWhereClause(
+      fenceAttempts ? 6 : 5
+    );
     const result = await this.db.query(
       `UPDATE ${this.tableName}
          SET lease_expires_at = NOW() AT TIME ZONE 'UTC' + ($1 * INTERVAL '1 millisecond')
-         WHERE id = $2 AND queue = $3 AND lease_owner = $4 AND status = 'PROCESSING'${prefixConditions}`,
-      [ms, id, this.queueName, workerId, ...prefixParams]
+         WHERE id = $2 AND queue = $3 AND lease_owner = $4 AND status = 'PROCESSING'${
+           fenceAttempts ? " AND COALESCE(attempts, 0) = $5" : ""
+         }${prefixConditions}`,
+      fenceAttempts
+        ? [ms, id, this.queueName, workerId, attempts, ...prefixParams]
+        : [ms, id, this.queueName, workerId, ...prefixParams]
     );
     if (!result || result.rowCount === 0) {
-      throw new Error(
+      throw new LeaseLostError(
         `extendLease failed: job ${String(id)} is not PROCESSING or lease is not owned by worker ${workerId}`
       );
     }
@@ -442,32 +457,42 @@ export class PostgresQueueStorage<Input, Output> implements IQueueStorage<Input,
    * for the rationale (avoids double-counting on ack/fail because the lease
    * reclaim path already charged the attempt at next() time).
    */
-  public async finalize(
+  public async finalize(id: unknown, fields: QueueFinalizeFields<Output>): Promise<void> {
+    await this.writeFinalize(id, fields, undefined);
+  }
+
+  /**
+   * {@link finalize} fenced to one claim: the ownership predicate is part of
+   * the UPDATE's WHERE clause, so a reclaim can never interleave between the
+   * check and the write.
+   */
+  public async finalizeClaim(
     id: unknown,
-    fields: {
-      output?: Output | null;
-      error?: string | null;
-      error_code?: string | null;
-      status?: JobStatus;
-      completed_at?: string | null;
-      abort_requested_at?: string | null;
-      lease_owner?: string | null;
-      progress?: number;
-      progress_message?: string;
-      progress_details?: Record<string, any> | null;
-      visible_at?: string | null;
-    }
-  ): Promise<void> {
-    // Build a dynamic SET clause covering only the fields the caller supplied —
-    // a partial overwrite. Everything else (in particular `attempts`,
-    // `visible_at`, `lease_expires_at`) is untouched.
+    fence: ClaimFence,
+    fields: ClaimFinalizeFields<Output>
+  ): Promise<boolean> {
+    return (await this.writeFinalize(id, fields, fence)) > 0;
+  }
+
+  /**
+   * One partial-overwrite UPDATE covering only the fields the caller supplied.
+   * Everything else (in particular `attempts`, `visible_at`,
+   * `lease_expires_at`) is untouched unless `fields` names it. Resolves the
+   * number of rows written.
+   */
+  private async writeFinalize(
+    id: unknown,
+    fields: ClaimFinalizeFields<Output>,
+    fence: ClaimFence | undefined
+  ): Promise<number> {
     const sets: string[] = [];
     const params: Array<unknown> = [];
-    let nextParam = 1;
-    const push = (col: string, value: unknown): void => {
-      sets.push(`${col} = $${nextParam}`);
+    const param = (value: unknown): string => {
       params.push(value);
-      nextParam += 1;
+      return `$${params.length}`;
+    };
+    const push = (col: string, value: unknown): void => {
+      sets.push(`${col} = ${param(value)}`);
     };
     if ("output" in fields) {
       push("output", fields.output != null ? JSON.stringify(fields.output) : null);
@@ -489,19 +514,31 @@ export class PostgresQueueStorage<Input, Output> implements IQueueStorage<Input,
       );
     }
     if ("visible_at" in fields) push("visible_at", fields.visible_at ?? null);
-    if (sets.length === 0) return; // nothing to write
-    const idParam = nextParam;
-    nextParam += 1;
-    const queueParam = nextParam;
-    nextParam += 1;
-    const { conditions: prefixConditions, params: prefixParams } =
-      this.buildPrefixWhereClause(nextParam);
-    await this.db.query(
+    if (fence) {
+      if ("lease_expires_at" in fields) push("lease_expires_at", fields.lease_expires_at ?? null);
+      if (fields.incrementAttempts === true) sets.push("attempts = COALESCE(attempts, 0) + 1");
+      // An empty write still has to answer whether the claim holds the row.
+      if (sets.length === 0) sets.push("id = id");
+    }
+    if (sets.length === 0) return 0; // nothing to write
+    const where = [`id = ${param(id)}`, `queue = ${param(this.queueName)}`];
+    if (fence) {
+      where.push(
+        `status = 'PROCESSING'`,
+        `lease_owner = ${param(fence.leaseOwner)}`,
+        `COALESCE(attempts, 0) = ${param(fence.attempts)}`
+      );
+    }
+    const { conditions: prefixConditions, params: prefixParams } = this.buildPrefixWhereClause(
+      params.length + 1
+    );
+    const result = await this.db.query(
       `UPDATE ${this.tableName}
          SET ${sets.join(", ")}
-         WHERE id = $${idParam} AND queue = $${queueParam}${prefixConditions}`,
-      [...params, id, this.queueName, ...prefixParams]
+         WHERE ${where.join(" AND ")}${prefixConditions}`,
+      [...params, ...prefixParams]
     );
+    return result?.rowCount ?? 0;
   }
 
   /**

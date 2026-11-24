@@ -6,15 +6,18 @@
 
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import type {
+  ClaimFence,
+  ClaimFinalizeFields,
   IQueueStorage,
   JobStorageFormat,
   PrefixColumn,
   QueueChangePayload,
   QueueChangeType,
+  QueueFinalizeFields,
   QueueStorageOptions,
   QueueSubscribeOptions,
 } from "@workglow/job-queue";
-import { JobStatus, validateLeaseMs } from "@workglow/job-queue";
+import { JobStatus, LeaseLostError, validateLeaseMs } from "@workglow/job-queue";
 import {
   buildPrefixColumnsSql,
   getPrefixIndexPrefix,
@@ -435,7 +438,12 @@ export class SupabaseQueueStorage<Input, Output> implements IQueueStorage<Input,
    * @param workerId - Worker ID that must match the current lease owner (lease_owner)
    * @param ms - Number of milliseconds to extend the lease by
    */
-  public async extendLease(id: unknown, workerId: string, ms: number): Promise<void> {
+  public async extendLease(
+    id: unknown,
+    workerId: string,
+    ms: number,
+    attempts?: number
+  ): Promise<void> {
     // Validate lease arg FIRST so callers get a consistent RangeError across
     // backends regardless of whether the id happens to be invalid too.
     validateLeaseMs(ms, "ms");
@@ -447,6 +455,11 @@ export class SupabaseQueueStorage<Input, Output> implements IQueueStorage<Input,
     }
 
     const prefixConditions = this.buildPrefixWhereSql();
+    if (attempts !== undefined && !Number.isSafeInteger(attempts)) {
+      throw new Error(`Invalid attempts: ${String(attempts)}`);
+    }
+    const attemptsCondition =
+      attempts === undefined ? "" : `AND COALESCE(attempts, 0) = ${Number(attempts)}`;
 
     const sql = `
       UPDATE ${this.tableName}
@@ -455,6 +468,7 @@ export class SupabaseQueueStorage<Input, Output> implements IQueueStorage<Input,
           AND queue = '${this.escapeSqlString(this.validateSqlValue(this.queueName, "queueName"))}'
           AND lease_owner = '${escapedWorkerId}'
           AND status = '${JobStatus.PROCESSING}'
+          ${attemptsCondition}
           ${prefixConditions}
         RETURNING id`;
 
@@ -463,7 +477,7 @@ export class SupabaseQueueStorage<Input, Output> implements IQueueStorage<Input,
 
     // exec_sql returns affected rows; if empty, the lease was lost
     if (!data || !Array.isArray(data) || data.length === 0) {
-      throw new Error(
+      throw new LeaseLostError(
         `extendLease failed: job ${String(id)} is not PROCESSING or lease is not owned by worker ${workerId}`
       );
     }
@@ -670,24 +684,52 @@ export class SupabaseQueueStorage<Input, Output> implements IQueueStorage<Input,
    * for the rationale (avoids double-counting on ack/fail because the lease
    * reclaim path already charged the attempt at next() time).
    */
-  public async finalize(
-    id: unknown,
-    fields: {
-      output?: Output | null;
-      error?: string | null;
-      error_code?: string | null;
-      status?: JobStatus;
-      completed_at?: string | null;
-      abort_requested_at?: string | null;
-      lease_owner?: string | null;
-      progress?: number;
-      progress_message?: string;
-      progress_details?: Record<string, any> | null;
-      visible_at?: string | null;
-    }
-  ): Promise<void> {
+  public async finalize(id: unknown, fields: QueueFinalizeFields<Output>): Promise<void> {
     // Partial update — Supabase's PostgREST `update()` only writes the
     // properties present on the object passed in.
+    const patch = this.finalizePatch(fields);
+    if (Object.keys(patch).length === 0) return;
+    let query = this.client
+      .from(this.tableName)
+      .update(patch)
+      .eq("id", id as never)
+      .eq("queue", this.queueName);
+    query = this.applyPrefixFilters(query);
+    const { error } = await query;
+    if (error) throw error;
+  }
+
+  /**
+   * {@link finalize} fenced to one claim: the ownership predicate rides on the
+   * UPDATE's filters, so a reclaim can never interleave between the check and
+   * the write. `attempts` is matched by the same filters, which is what makes
+   * writing `fence.attempts + 1` an atomic increment.
+   */
+  public async finalizeClaim(
+    id: unknown,
+    fence: ClaimFence,
+    fields: ClaimFinalizeFields<Output>
+  ): Promise<boolean> {
+    const patch = this.finalizePatch(fields);
+    if ("lease_expires_at" in fields) patch.lease_expires_at = fields.lease_expires_at ?? null;
+    if (fields.incrementAttempts === true) patch.attempts = fence.attempts + 1;
+    // An empty write still has to answer whether the claim holds the row.
+    if (Object.keys(patch).length === 0) patch.lease_owner = fence.leaseOwner;
+    let query = this.client
+      .from(this.tableName)
+      .update(patch)
+      .eq("id", id as never)
+      .eq("queue", this.queueName)
+      .eq("status", JobStatus.PROCESSING)
+      .eq("lease_owner", fence.leaseOwner)
+      .eq("attempts", fence.attempts);
+    query = this.applyPrefixFilters(query);
+    const { data, error } = await query.select("id").maybeSingle();
+    if (error) throw error;
+    return data != null;
+  }
+
+  private finalizePatch(fields: QueueFinalizeFields<Output>): Record<string, unknown> {
     const patch: Record<string, unknown> = {};
     if ("output" in fields) patch.output = fields.output ?? null;
     if ("error" in fields) patch.error = fields.error ?? null;
@@ -702,15 +744,7 @@ export class SupabaseQueueStorage<Input, Output> implements IQueueStorage<Input,
     if ("progress_message" in fields) patch.progress_message = fields.progress_message ?? "";
     if ("progress_details" in fields) patch.progress_details = fields.progress_details ?? null;
     if ("visible_at" in fields) patch.visible_at = fields.visible_at ?? null;
-    if (Object.keys(patch).length === 0) return;
-    let query = this.client
-      .from(this.tableName)
-      .update(patch)
-      .eq("id", id as never)
-      .eq("queue", this.queueName);
-    query = this.applyPrefixFilters(query);
-    const { error } = await query;
-    if (error) throw error;
+    return patch;
   }
 
   /**

@@ -244,7 +244,7 @@ describe("a server passes its lease options to its workers", () => {
   async function executionsWhileParked(options: {
     readonly leaseMs: number;
     readonly extendLeaseWhileRunning?: boolean;
-  }): Promise<number> {
+  }): Promise<{ executions: number; attempts: number }> {
     ParkedBeforeFirstEventJob.executions = 0;
     const { promise: gate, resolve: release } = Promise.withResolvers<void>();
     ParkedBeforeFirstEventJob.gate = gate;
@@ -261,7 +261,11 @@ describe("a server passes its lease options to its workers", () => {
     try {
       // Several lease periods' worth of running.
       await new Promise((r) => setTimeout(r, 400));
-      return ParkedBeforeFirstEventJob.executions;
+      const row = (storage as unknown as { jobQueue: Array<Record<string, unknown>> }).jobQueue[0];
+      return {
+        executions: ParkedBeforeFirstEventJob.executions,
+        attempts: (row?.attempts as number | undefined) ?? 0,
+      };
     } finally {
       release();
       await server.stop();
@@ -270,12 +274,21 @@ describe("a server passes its lease options to its workers", () => {
 
   it("reaches the worker's lease: a short one is reclaimed while the job still runs", async () => {
     // The control. The default lease is 30s, so a reclaim inside 400ms proves
-    // the server's `leaseMs` reached the worker — and shows the hazard the
-    // stream heartbeat cannot cover, since this job has emitted nothing.
-    expect(await executionsWhileParked({ leaseMs: 60 })).toBeGreaterThan(1);
+    // the server's `leaseMs` reached the worker — each reclaim charges an
+    // attempt. The worker's own poll loop is the reclaimer, and it hands the
+    // new claim to the execution still running rather than starting a second
+    // one, so the job still runs once.
+    const { executions, attempts } = await executionsWhileParked({ leaseMs: 60 });
+    expect(attempts).toBeGreaterThan(0);
+    expect(executions).toBe(1);
   });
 
   it("reaches extendLeaseWhileRunning: the running job keeps its claim", async () => {
-    expect(await executionsWhileParked({ leaseMs: 60, extendLeaseWhileRunning: true })).toBe(1);
+    const { executions, attempts } = await executionsWhileParked({
+      leaseMs: 60,
+      extendLeaseWhileRunning: true,
+    });
+    expect(executions).toBe(1);
+    expect(attempts).toBe(0);
   });
 });

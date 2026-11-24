@@ -5,14 +5,17 @@
  */
 
 import type {
+  ClaimFence,
+  ClaimFinalizeFields,
   IQueueStorage,
   JobStorageFormat,
   PrefixColumn,
   QueueChangePayload,
+  QueueFinalizeFields,
   QueueStorageOptions,
   QueueSubscribeOptions,
 } from "@workglow/job-queue";
-import { JobStatus, validateLeaseMs } from "@workglow/job-queue";
+import { JobStatus, LeaseLostError, validateLeaseMs } from "@workglow/job-queue";
 import { HybridSubscriptionManager } from "@workglow/storage";
 import { createServiceToken, deepEqual, getLogger, makeFingerprint, uuid4 } from "@workglow/util";
 import { IndexedDbMigrationRunner } from "../migrations/IndexedDbMigrationRunner";
@@ -381,16 +384,29 @@ export class IndexedDbQueueStorage<Input, Output> implements IQueueStorage<Input
    * @param workerId - Worker ID that must match the current lease owner (lease_owner)
    * @param ms - Number of milliseconds to extend the lease by
    */
-  public async extendLease(id: unknown, workerId: string, ms: number): Promise<void> {
+  public async extendLease(
+    id: unknown,
+    workerId: string,
+    ms: number,
+    attempts?: number
+  ): Promise<void> {
     validateLeaseMs(ms, "ms");
-    const job = await this.get(id);
-    if (!job || job.status !== JobStatus.PROCESSING || job.lease_owner !== workerId) {
-      throw new Error(
+    const extended = await this.updateIf(id, (job) => {
+      if (
+        job.status !== JobStatus.PROCESSING ||
+        job.lease_owner !== workerId ||
+        (attempts !== undefined && (job.attempts ?? 0) !== attempts)
+      ) {
+        return false;
+      }
+      job.lease_expires_at = new Date(Date.now() + ms).toISOString();
+      return true;
+    });
+    if (!extended) {
+      throw new LeaseLostError(
         `extendLease failed: job ${String(id)} is not PROCESSING or lease is not owned by worker ${workerId}`
       );
     }
-    job.lease_expires_at = new Date(Date.now() + ms).toISOString();
-    await this.put(job);
   }
 
   public async size(status = JobStatus.PENDING): Promise<number> {
@@ -542,25 +558,44 @@ export class IndexedDbQueueStorage<Input, Output> implements IQueueStorage<Input
    * Terminal write that does NOT bump `attempts`. See IQueueStorage.finalize
    * for the rationale (avoids double-counting on ack/fail).
    */
-  public async finalize(
-    id: unknown,
-    fields: {
-      output?: Output | null;
-      error?: string | null;
-      error_code?: string | null;
-      status?: JobStatus;
-      completed_at?: string | null;
-      abort_requested_at?: string | null;
-      lease_owner?: string | null;
-      progress?: number;
-      progress_message?: string;
-      progress_details?: Record<string, any> | null;
-      visible_at?: string | null;
-    }
-  ): Promise<void> {
+  public async finalize(id: unknown, fields: QueueFinalizeFields<Output>): Promise<void> {
     const existing = await this.get(id);
     if (!existing) return;
-    const updated = existing as JobStorageFormat<Input, Output> & Record<string, unknown>;
+    this.applyFinalizeFields(existing, fields);
+    await this.put(existing);
+  }
+
+  /**
+   * {@link finalize} fenced to one claim. The ownership check and the write
+   * share one readwrite transaction, which IndexedDB serializes against every
+   * other readwrite transaction on the store, so no reclaim can land between
+   * them — even from another tab.
+   */
+  public async finalizeClaim(
+    id: unknown,
+    fence: ClaimFence,
+    fields: ClaimFinalizeFields<Output>
+  ): Promise<boolean> {
+    return this.updateIf(id, (job) => {
+      if (
+        job.status !== JobStatus.PROCESSING ||
+        job.lease_owner !== fence.leaseOwner ||
+        (job.attempts ?? 0) !== fence.attempts
+      ) {
+        return false;
+      }
+      this.applyFinalizeFields(job, fields);
+      if ("lease_expires_at" in fields) job.lease_expires_at = fields.lease_expires_at ?? null;
+      if (fields.incrementAttempts === true) job.attempts = (job.attempts ?? 0) + 1;
+      return true;
+    });
+  }
+
+  private applyFinalizeFields(
+    job: JobStorageFormat<Input, Output>,
+    fields: QueueFinalizeFields<Output>
+  ): void {
+    const updated = job as JobStorageFormat<Input, Output> & Record<string, unknown>;
     if ("output" in fields) updated.output = fields.output ?? null;
     if ("error" in fields) updated.error = fields.error ?? null;
     if ("error_code" in fields) updated.error_code = fields.error_code ?? null;
@@ -574,7 +609,45 @@ export class IndexedDbQueueStorage<Input, Output> implements IQueueStorage<Input
     if ("progress_message" in fields) updated.progress_message = fields.progress_message ?? "";
     if ("progress_details" in fields) updated.progress_details = fields.progress_details ?? null;
     if ("visible_at" in fields) updated.visible_at = fields.visible_at ?? null;
-    await this.put(updated);
+  }
+
+  /**
+   * Read a row and write it back in ONE readwrite transaction, only when
+   * `mutate` (which edits the row in place) returns true. Resolves whether a
+   * write happened; a missing row, or one of another queue or prefix, is not
+   * written.
+   */
+  private async updateIf(
+    id: unknown,
+    mutate: (job: JobStorageFormat<Input, Output> & Record<string, unknown>) => boolean
+  ): Promise<boolean> {
+    const db = await this.getDb();
+    const tx = db.transaction(this.tableName, "readwrite");
+    const store = tx.objectStore(this.tableName);
+    return new Promise((resolve, reject) => {
+      let written = false;
+      const getReq = store.get(id as string);
+      getReq.onsuccess = () => {
+        const existing = getReq.result as
+          | (JobStorageFormat<Input, Output> & Record<string, unknown>)
+          | undefined;
+        if (!existing || existing.queue !== this.queueName || !this.matchesPrefixes(existing)) {
+          return;
+        }
+        if (!mutate(existing)) return;
+        const putReq = store.put(existing);
+        putReq.onsuccess = () => {
+          written = true;
+        };
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+      tx.oncomplete = () => {
+        if (written) this.hybridManager?.notifyLocalChange();
+        resolve(written);
+      };
+      tx.onerror = () => reject(tx.error);
+    });
   }
 
   /**

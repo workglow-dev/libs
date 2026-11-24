@@ -5,13 +5,16 @@
  */
 
 import { DEFAULT_LIMITS, getLogger } from "@workglow/util";
+import { LeaseLostError } from "../job/JobError";
 import type { StreamChunkRow, StreamEventLike } from "../job/JobQueueEventListeners";
 import type { IClaim } from "./IClaim";
 import type { IJobStore, JobRecord } from "./IJobStore";
 import type { IMessageQueue, MessageId, SendOptions } from "./IMessageQueue";
+import { JobStatus } from "./IQueueStorage";
 import type {
+  ClaimFence,
+  ClaimFinalizeFields,
   IQueueStorage,
-  JobStatus,
   JobStorageFormat,
   QueueChangePayload,
   QueueSubscribeOptions,
@@ -27,40 +30,52 @@ class WrappedClaim<Input, Output> implements IClaim<JobStorageFormat<Input, Outp
   ) {}
 
   async ack(result?: unknown): Promise<void> {
-    const current = (await this.storage.get(this.id)) ?? this.body;
     // Do not fall back to current.output — that's the prior attempt's value
-    // and finalize() must overwrite it on every ack (the pending-write buffer
-    // that used to source this fallback was removed alongside saveResult).
+    // and the write must overwrite it on every ack.
     const output = result !== undefined ? result : null;
-    await this.storage.finalize(this.id, {
-      // `output` cast — finalize is typed against Output but receives the
+    await this.settle("ack", (current) => ({
+      // `output` cast — the write is typed against Output but receives the
       // result the worker passed in; the queue body's Output and the claim's
       // Output align by construction.
       output: output as never,
       error: null,
       error_code: null,
-      status: "COMPLETED",
+      status: JobStatus.COMPLETED,
       completed_at: current.completed_at ?? new Date().toISOString(),
-    });
+    }));
   }
 
   async retry(opts?: { delaySeconds?: number }): Promise<void> {
     const delay = opts?.delaySeconds ?? 0;
     const visibleAt = new Date(Date.now() + delay * 1000).toISOString();
-    const current = (await this.storage.get(this.id)) ?? this.body;
-    await this.storage.complete({
-      ...current,
-      status: "PENDING",
-      lease_owner: null,
-      lease_expires_at: null,
-      visible_at: visibleAt,
-      progress: 0,
-      progress_message: "",
-      progress_details: null,
-      // Clear abort_requested_at on retry — an abort flag set during the
-      // failed attempt must not survive into the next retry.
-      abort_requested_at: null,
-    });
+    await this.settle(
+      "retry",
+      () => ({
+        status: JobStatus.PENDING,
+        lease_owner: null,
+        lease_expires_at: null,
+        visible_at: visibleAt,
+        progress: 0,
+        progress_message: "",
+        progress_details: null,
+        // Clear abort_requested_at on retry — an abort flag set during the
+        // failed attempt must not survive into the next retry.
+        abort_requested_at: null,
+        incrementAttempts: true,
+      }),
+      (current) =>
+        this.storage.complete({
+          ...current,
+          status: JobStatus.PENDING,
+          lease_owner: null,
+          lease_expires_at: null,
+          visible_at: visibleAt,
+          progress: 0,
+          progress_message: "",
+          progress_details: null,
+          abort_requested_at: null,
+        })
+    );
   }
 
   async fail(opts?: {
@@ -70,40 +85,91 @@ class WrappedClaim<Input, Output> implements IClaim<JobStorageFormat<Input, Outp
     permanent?: boolean;
   }): Promise<void> {
     void opts?.permanent; // hint — worker owns retry-vs-fail decision
-    const current = (await this.storage.get(this.id)) ?? this.body;
     // Do not fall back to current.error / current.error_code — those are the
-    // prior attempt's values and finalize() must overwrite them on every fail
-    // (the pending-write buffer that used to source these fallbacks was
-    // removed alongside saveError).
+    // prior attempt's values and the write must overwrite them on every fail.
     const error = opts?.error !== undefined ? opts.error : null;
     const errorCode = opts?.errorCode !== undefined ? opts.errorCode : null;
     const abortRequested = opts?.abortRequested === true;
-    await this.storage.finalize(this.id, {
+    await this.settle("fail", (current) => ({
       error,
       error_code: errorCode,
       abort_requested_at: abortRequested
         ? (current.abort_requested_at ?? new Date().toISOString())
         : (current.abort_requested_at ?? null),
-      status: "FAILED",
+      status: JobStatus.FAILED,
       completed_at: current.completed_at ?? new Date().toISOString(),
-    });
+    }));
   }
 
   async extendLease(ms: number): Promise<void> {
-    await this.storage.extendLease(this.id, this.workerId, ms);
+    await this.storage.extendLease(this.id, this.workerId, ms, this.attempts);
   }
 
   async disable(): Promise<void> {
-    const current = await this.storage.get(this.id);
-    const completedAt = current?.completed_at ?? new Date().toISOString();
-    await this.storage.finalize(this.id, {
-      status: "DISABLED",
-      completed_at: completedAt,
+    await this.settle("disable", (current) => ({
+      status: JobStatus.DISABLED,
+      completed_at: current.completed_at ?? new Date().toISOString(),
       lease_owner: null,
       progress: 0,
       progress_message: "",
       progress_details: null,
-    });
+    }));
+  }
+
+  /**
+   * Whether `row` is still held by this claim: PROCESSING, leased to this
+   * worker, and not re-claimed since (a lease-expiry reclaim bumps
+   * `attempts`, so this catches a reclaim by this same worker id too).
+   */
+  private holds(row: JobStorageFormat<Input, Output> | undefined): boolean {
+    return (
+      row !== undefined &&
+      row.status === JobStatus.PROCESSING &&
+      row.lease_owner === this.workerId &&
+      (row.attempts ?? 0) === this.attempts
+    );
+  }
+
+  /**
+   * Write a terminal transition only while this claim still holds the row.
+   *
+   * Reads the row first only for the fields the write preserves
+   * (`completed_at`, `abort_requested_at`). A storage with
+   * {@link IQueueStorage.finalizeClaim} then checks ownership in the write
+   * itself; one without it gets a read-check-write, which still refuses
+   * every claim that was reclaimed before the read. `fallback` overrides the
+   * unfenced write (retry keeps going through `complete()`, which charges
+   * the attempt there).
+   */
+  private async settle(
+    op: string,
+    build: (current: JobStorageFormat<Input, Output>) => ClaimFinalizeFields<Output>,
+    fallback?: (current: JobStorageFormat<Input, Output>) => Promise<void>
+  ): Promise<void> {
+    const current = await this.storage.get(this.id);
+    const fields = build(current ?? this.body);
+    const fence: ClaimFence = { leaseOwner: this.workerId, attempts: this.attempts };
+    if (typeof this.storage.finalizeClaim === "function") {
+      if (await this.storage.finalizeClaim(this.id, fence, fields)) return;
+      throw this.leaseLost(op);
+    }
+    if (!this.holds(current)) throw this.leaseLost(op);
+    if (fallback) {
+      await fallback(current!);
+      return;
+    }
+    const {
+      incrementAttempts: _ignored,
+      lease_expires_at: _alsoIgnored,
+      ...finalizeFields
+    } = fields;
+    await this.storage.finalize(this.id, finalizeFields);
+  }
+
+  private leaseLost(op: string): LeaseLostError {
+    return new LeaseLostError(
+      `${op} refused: job ${String(this.id)} is no longer held by this claim (worker ${this.workerId}, attempt ${this.attempts})`
+    );
   }
 }
 

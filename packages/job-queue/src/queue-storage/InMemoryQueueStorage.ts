@@ -12,11 +12,15 @@ import {
   sleep,
   uuid4,
 } from "@workglow/util";
+import { LeaseLostError } from "../job/JobError";
 import type { StreamChunkRow, StreamEventLike } from "../job/JobQueueEventListeners";
 import type {
+  ClaimFence,
+  ClaimFinalizeFields,
   IQueueStorage,
   JobStorageFormat,
   QueueChangePayload,
+  QueueFinalizeFields,
   QueueStorageOptions,
   QueueSubscribeOptions,
 } from "./IQueueStorage";
@@ -337,13 +341,24 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
    * @param id - The ID of the job to extend the lease for
    * @param workerId - Worker ID that must match the current lease owner (lease_owner)
    * @param ms - Number of milliseconds to extend the lease by
+   * @param attempts - When given, the row's attempts must equal it too
    */
-  public async extendLease(id: unknown, workerId: string, ms: number): Promise<void> {
+  public async extendLease(
+    id: unknown,
+    workerId: string,
+    ms: number,
+    attempts?: number
+  ): Promise<void> {
     validateLeaseMs(ms, "ms");
     await sleep(0);
     const job = this.jobQueue.find((j) => j.id === id && this.matchesPrefixes(j));
-    if (!job || job.status !== JobStatus.PROCESSING || job.lease_owner !== workerId) {
-      throw new Error(
+    if (
+      !job ||
+      job.status !== JobStatus.PROCESSING ||
+      job.lease_owner !== workerId ||
+      (attempts !== undefined && (job.attempts ?? 0) !== attempts)
+    ) {
+      throw new LeaseLostError(
         `extendLease failed: job ${String(id)} is not PROCESSING or lease is not owned by worker ${workerId}`
       );
     }
@@ -508,6 +523,41 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
     const job = this.jobQueue.find((j) => j.id === id && this.matchesPrefixes(j));
     if (!job) return;
     const oldJob = { ...job };
+    this.applyFinalizeFields(job, fields);
+    this.events.emit("change", { type: "UPDATE", old: oldJob, new: job });
+  }
+
+  /**
+   * {@link finalize} fenced to one claim: the ownership check and the write
+   * run in the same synchronous section, so no other call can interleave.
+   */
+  public async finalizeClaim(
+    id: unknown,
+    fence: ClaimFence,
+    fields: ClaimFinalizeFields<Output>
+  ): Promise<boolean> {
+    await sleep(0);
+    const job = this.jobQueue.find((j) => j.id === id && this.matchesPrefixes(j));
+    if (
+      !job ||
+      job.status !== JobStatus.PROCESSING ||
+      job.lease_owner !== fence.leaseOwner ||
+      (job.attempts ?? 0) !== fence.attempts
+    ) {
+      return false;
+    }
+    const oldJob = { ...job };
+    this.applyFinalizeFields(job, fields);
+    if ("lease_expires_at" in fields) job.lease_expires_at = fields.lease_expires_at ?? null;
+    if (fields.incrementAttempts === true) job.attempts = (job.attempts ?? 0) + 1;
+    this.events.emit("change", { type: "UPDATE", old: oldJob, new: job });
+    return true;
+  }
+
+  private applyFinalizeFields(
+    job: JobStorageFormat<Input, Output>,
+    fields: QueueFinalizeFields<Output>
+  ): void {
     const target = job as JobStorageFormat<Input, Output> & Record<string, unknown>;
     if ("output" in fields) target.output = (fields.output ?? null) as Output | null;
     if ("error" in fields) target.error = fields.error ?? null;
@@ -521,7 +571,6 @@ export class InMemoryQueueStorage<Input, Output> implements IQueueStorage<Input,
     if ("progress_message" in fields) target.progress_message = fields.progress_message ?? "";
     if ("progress_details" in fields) target.progress_details = fields.progress_details ?? null;
     if ("visible_at" in fields) target.visible_at = fields.visible_at ?? null;
-    this.events.emit("change", { type: "UPDATE", old: oldJob, new: job });
   }
 
   /**
