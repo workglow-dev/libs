@@ -11,7 +11,7 @@ import type { DataPortSchemaObject } from "@workglow/util/schema";
 import { TypedArraySchema } from "@workglow/util/schema";
 import { describe, expect, it } from "vitest";
 import { runVectorStorageContract } from "@workglow/test-contract/vector-storage";
-import { EAST, NORTH, VECTOR_DIMENSIONS } from "@workglow/test-contract/vector-storage";
+import { EAST, NORTH, NORTHEAST, VECTOR_DIMENSIONS } from "@workglow/test-contract/vector-storage";
 
 /**
  * The inner schema, which carries the `kb_id` this class injects on write and
@@ -90,5 +90,33 @@ describe("ScopedVectorStorage scoping", () => {
     expect(fromA[0]!.metadata).toEqual({ owner: "a" });
     expect(fromB).toHaveLength(1);
     expect(fromB[0]!.metadata).toEqual({ owner: "b" });
+  });
+
+  // The wrapper post-filters the inner search by `kb_id`. A fixed over-fetch
+  // starved a small knowledge base sharing a table with a big one: every slot
+  // went to the big scope's nearer rows and the small one got nothing.
+  it("returns topK of a small scope's rows from a large shared table", async () => {
+    const inner = new InMemoryVectorStorage(
+      ScopedInnerSchema,
+      ScopedInnerPrimaryKey,
+      [],
+      VECTOR_DIMENSIONS
+    ) as unknown as AnyVectorStorage;
+    const big = new ScopedVectorStorage(inner, "big") as unknown as AnyVectorStorage;
+    const small = new ScopedVectorStorage(inner, "small") as unknown as AnyVectorStorage;
+    for (let i = 0; i < 100; i++) {
+      await big.put({ id: `b${i}`, vector: EAST, metadata: {} });
+    }
+    for (let i = 0; i < 5; i++) {
+      await small.put({ id: `s${i}`, vector: NORTHEAST, metadata: {} });
+    }
+
+    const results = (await small.similaritySearch(EAST, { topK: 3 })) as { id: string }[];
+    expect(results).toHaveLength(3);
+    expect(results.every((r) => r.id.startsWith("s"))).toBe(true);
+    // Asking for more than the scope holds returns all of it, then stops.
+    expect(await small.similaritySearch(EAST, { topK: 50 })).toHaveLength(5);
+    // With no topK, the backends' default of 10.
+    expect(await big.similaritySearch(EAST)).toHaveLength(10);
   });
 });

@@ -50,6 +50,8 @@ export class ScopedTabularStorage<
   protected readonly inner: AnyTabularStorage;
   protected readonly kbId: string;
   protected readonly events = new EventEmitter<TabularEventListeners<PrimaryKey, Entity>>();
+  /** The inner primary key minus `kb_id`, when the inner store exposes it. */
+  private readonly scopedPrimaryKeyNames: ReadonlyArray<string> | undefined;
 
   constructor(inner: AnyTabularStorage, kbId: string) {
     this.inner = inner;
@@ -71,6 +73,9 @@ export class ScopedTabularStorage<
     // get a logged warning instead of a throw, so legitimate custom
     // backends keep working.
     const innerPkNames = (inner as { primaryKeyNames?: ReadonlyArray<unknown> }).primaryKeyNames;
+    this.scopedPrimaryKeyNames = Array.isArray(innerPkNames)
+      ? innerPkNames.map(String).filter((name) => name !== "kb_id")
+      : undefined;
     if (Array.isArray(innerPkNames)) {
       if (!innerPkNames.includes("kb_id")) {
         throw new Error(
@@ -143,9 +148,34 @@ export class ScopedTabularStorage<
     return stripped;
   }
 
+  /**
+   * Deletes by primary key, as every concrete backend does: only the key
+   * columns of `key` (plus this scope's `kb_id`) select the row. Matching on
+   * every field of a passed entity made a stale one, read before a later
+   * update, delete nothing. A key missing one of those columns is refused,
+   * since dropping the column would widen the delete to every row sharing the
+   * rest. An inner store that does not expose its key gets the value whole,
+   * and reduces it to its key itself.
+   */
   async delete(key: PrimaryKey | Entity): Promise<void> {
-    await this.inner.deleteSearch({ ...(key as any), kb_id: this.kbId } as any);
-    this.events.emit("delete", key as Partial<Entity>);
+    const source = key as Record<string, unknown>;
+    let identity: Record<string, unknown>;
+    if (this.scopedPrimaryKeyNames) {
+      identity = {};
+      for (const name of this.scopedPrimaryKeyNames) {
+        if (source[name] === undefined) {
+          throw new StorageValidationError(
+            `ScopedTabularStorage.delete: primary-key column "${name}" is missing from the key`
+          );
+        }
+        identity[name] = source[name];
+      }
+    } else {
+      identity = { ...source };
+      delete identity.kb_id;
+    }
+    await this.inner.delete({ ...identity, kb_id: this.kbId } as any);
+    this.events.emit("delete", identity as Partial<Entity>);
   }
 
   async getAll(options?: QueryOptions<Entity>): Promise<Entity[] | undefined> {
