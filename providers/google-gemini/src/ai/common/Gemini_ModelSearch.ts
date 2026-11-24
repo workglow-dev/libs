@@ -38,7 +38,6 @@ export const GEMINI_FALLBACK_MODELS: readonly GeminiModelEntry[] = [
   { label: "gemini-3.1-flash-image", value: "gemini-3.1-flash-image" },
   { label: "gemini-3.1-flash-lite-image", value: "gemini-3.1-flash-lite-image" },
   { label: "gemini-3-pro-image", value: "gemini-3-pro-image" },
-  { label: "imagen-4.0-generate-001", value: "imagen-4.0-generate-001" },
 ];
 
 interface GeminiApiModel {

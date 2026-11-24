@@ -44,7 +44,6 @@ export const ANTHROPIC_FALLBACK: ReadonlyArray<{ readonly label: string; readonl
     { label: "claude-haiku-4-5", value: "claude-haiku-4-5" },
     { label: "claude-sonnet-4-6", value: "claude-sonnet-4-6" },
     { label: "claude-opus-4-6", value: "claude-opus-4-6" },
-    { label: "claude-sonnet-4-5-20250929", value: "claude-sonnet-4-5-20250929" },
   ];
 
 async function listAnthropicModels(credentialKey: string): Promise<AnthropicModelListItem[]> {

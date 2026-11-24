@@ -84,14 +84,7 @@ export const GEMINI_PRICING: Record<string, ModelPricing> = {
       { minInputTokens: 200_000, pricing: { input: 4, output: 18, cached: 0.4 } },
     ],
   },
-  "gemini-3.1-pro": {
-    currency: "USD",
-    input: 2,
-    output: 12,
-    cached: 0.5,
-    cacheStoragePerHour: 4.5,
-  },
-  "gemini-3-flash": {
+  "gemini-3-flash-preview": {
     currency: "USD",
     input: 0.5,
     output: 3,

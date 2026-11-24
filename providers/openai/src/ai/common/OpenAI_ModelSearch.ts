@@ -49,9 +49,7 @@ const OPENAI_FALLBACK: Array<{ label: string; value: string }> = [
   { label: "gpt-4o-mini", value: "gpt-4o-mini" },
   { label: "gpt-4-turbo", value: "gpt-4-turbo" },
   { label: "o3", value: "o3" },
-  { label: "o3-mini", value: "o3-mini" },
   { label: "o1", value: "o1" },
-  { label: "o1-mini", value: "o1-mini" },
 ];
 
 /** Chat models sort first: they are what a model picker is usually opened for. */

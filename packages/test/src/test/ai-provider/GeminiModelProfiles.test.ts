@@ -64,7 +64,7 @@ describeModelProfileContract({
     ["gemini-1.5-pro", "family", true],
     ["gemini-2.0-flash", "family", true],
     ["gemini-2.5-flash-preview-05-20", "family", true],
-    ["gemini-3-flash-preview", "family", true],
+    ["gemini-3.2-flash-preview", "family", true],
     ["gemini-3.5-pro", "family", true],
     ["gemini-4-pro", "family", true],
     ["gemini-4-krypton", "family", true],
