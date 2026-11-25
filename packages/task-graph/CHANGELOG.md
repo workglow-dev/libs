@@ -1,5 +1,17 @@
 # @workglow/task-graph
 
+## 0.6.18
+
+### Bug Fixes
+
+#### job-queue
+
+- fence a claim's terminal writes by lease ownership
+
+#### storage
+
+- FsFolder writes atomically and refuses to hide corrupt rows
+
 ## 0.6.17
 
 _No changes in this package._

@@ -1,5 +1,14 @@
 # @workglow/storage
 
+## 0.6.18
+
+### Bug Fixes
+
+#### storage
+
+- FsFolder writes atomically and refuses to hide corrupt rows
+- FsFolder getAll honours orderBy, offset and limit
+
 ## 0.6.17
 
 _No changes in this package._

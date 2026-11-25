@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.18
+
+### Features
+
+#### providers
+
+- per-model reasoning levels, non-streaming pro, Gemini 4 caching, DeepSeek Flash images
+- bring the Anthropic, xAI and Gemini model tables up to date
+
+### Chores
+
+#### providers
+
+- drop retired models from search fallbacks, fix Gemini preview ids
+
 ## 0.6.17
 
 ### Features

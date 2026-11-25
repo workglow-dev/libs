@@ -1,5 +1,19 @@
 # @workglow/cli
 
+## 0.6.18
+
+### Features
+
+#### meta
+
+- add Meta Model API provider (@workglow/meta)
+
+### Refactors
+
+#### useRunClock
+
+- simplify state management by replacing useRef with useState for start time tracking
+
 ## 0.6.17
 
 ### Chores

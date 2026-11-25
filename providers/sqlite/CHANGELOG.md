@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.18
+
+### Bug Fixes
+
+#### job-queue
+
+- fence a claim's terminal writes by lease ownership
+
 ## 0.6.17
 
 _No changes in this package._

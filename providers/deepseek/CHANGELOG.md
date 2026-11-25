@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.18
+
+### Features
+
+#### providers
+
+- per-model reasoning levels, non-streaming pro, Gemini 4 caching, DeepSeek Flash images
+
 ## 0.6.17
 
 _No changes in this package._

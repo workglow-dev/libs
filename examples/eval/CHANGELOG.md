@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.18
+
+### Features
+
+#### meta
+
+- add Meta Model API provider (@workglow/meta)
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `hyparquet`: ^1.33.1
+
 ## 0.6.17
 
 ### Chores

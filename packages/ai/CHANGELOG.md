@@ -1,5 +1,23 @@
 # @workglow/ai
 
+## 0.6.18
+
+### Features
+
+#### meta
+
+- add Meta Model API provider (@workglow/meta)
+
+### Bug Fixes
+
+- address review findings on lease fencing, retry classification and scoped search
+
+#### ai
+
+- bound the retry-wait duration regex so provider text cannot make it backtrack
+- retry a 429 at the wait the provider stated, and fail exhausted credits
+- measure an image at a fixed size in the history trim
+
 ## 0.6.17
 
 _No changes in this package._

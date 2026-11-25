@@ -1,5 +1,15 @@
 # @workglow/knowledge-base
 
+## 0.6.18
+
+### Bug Fixes
+
+- address review findings on lease fencing, retry classification and scoped search
+
+#### knowledge-base
+
+- scoped search fills topK and delete keys on the primary key
+
 ## 0.6.17
 
 _No changes in this package._

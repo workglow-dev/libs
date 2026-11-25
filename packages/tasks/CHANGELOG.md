@@ -1,5 +1,15 @@
 # @workglow/tasks
 
+## 0.6.18
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `undici`: ^8.13.1
+
 ## 0.6.17
 
 ### Chores

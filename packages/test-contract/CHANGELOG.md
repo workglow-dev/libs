@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.18
+
+### Features
+
+#### providers
+
+- per-model reasoning levels, non-streaming pro, Gemini 4 caching, DeepSeek Flash images
+
+#### meta
+
+- add Meta Model API provider (@workglow/meta)
+
+### Bug Fixes
+
+- address review findings on lease fencing, retry classification and scoped search
+
+#### ai
+
+- retry a 429 at the wait the provider stated, and fail exhausted credits
+
+#### job-queue
+
+- fence a claim's terminal writes by lease ownership
+
 ## 0.6.17
 
 _No changes in this package._

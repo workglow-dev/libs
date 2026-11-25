@@ -1,5 +1,18 @@
 # @workglow/web
 
+## 0.6.18
+
+### Chores
+
+- update deps
+
+### Updated Dependencies
+
+- `@lezer/common`: 1.5.6
+- `react-resizable-panels`: ^4.24.1
+- `tailwind-merge`: ^3.7.1
+- `jsdom`: ^31.0.1
+
 ## 0.6.17
 
 ### Chores

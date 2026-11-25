@@ -1,5 +1,13 @@
 # workglow
 
+## 0.6.18
+
+### Features
+
+#### meta
+
+- add Meta Model API provider (@workglow/meta)
+
 ## 0.6.17
 
 ### Chores

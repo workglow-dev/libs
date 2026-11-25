@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.18
+
+### Features
+
+#### providers
+
+- per-model reasoning levels, non-streaming pro, Gemini 4 caching, DeepSeek Flash images
+
+#### openai
+
+- add gpt-6.2-astra, gpt-6.2-sol and the pro models
+
+### Bug Fixes
+
+#### providers
+
+- review fixes for Meta, the OpenAI non-streaming path and xAI
+
+### Chores
+
+#### providers
+
+- drop retired models from search fallbacks, fix Gemini preview ids
+
 ## 0.6.17
 
 ### Features

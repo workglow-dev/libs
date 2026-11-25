@@ -1,5 +1,15 @@
 # @workglow/util
 
+## 0.6.18
+
+### Bug Fixes
+
+- address review findings on lease fencing, retry classification and scoped search
+
+#### ai
+
+- retry a 429 at the wait the provider stated, and fail exhausted credits
+
 ## 0.6.17
 
 _No changes in this package._

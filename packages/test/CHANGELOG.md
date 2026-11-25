@@ -1,5 +1,50 @@
 # @workglow/test
 
+## 0.6.18
+
+### Features
+
+#### providers
+
+- per-model reasoning levels, non-streaming pro, Gemini 4 caching, DeepSeek Flash images
+- bring the Anthropic, xAI and Gemini model tables up to date
+
+#### meta
+
+- add Meta Model API provider (@workglow/meta)
+
+### Bug Fixes
+
+- address review findings on lease fencing, retry classification and scoped search
+
+#### knowledge-base
+
+- scoped search fills topK and delete keys on the primary key
+
+#### ai
+
+- retry a 429 at the wait the provider stated, and fail exhausted credits
+
+#### storage
+
+- FsFolder writes atomically and refuses to hide corrupt rows
+- FsFolder getAll honours orderBy, offset and limit
+
+#### providers
+
+- review fixes for Meta, the OpenAI non-streaming path and xAI
+
+### Refactors
+
+- reorder steps in publish-all for improved CI handling
+- update publish-all script to use waitfor-green-ci and enhance require-green-ci functionality
+
+### Chores
+
+#### providers
+
+- drop retired models from search fallbacks, fix Gemini preview ids
+
 ## 0.6.17
 
 ### Features
