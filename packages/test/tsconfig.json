@@ -24,6 +24,7 @@
     { "path": "../browser-control" },
     { "path": "../test-contract" },
     { "path": "../web-search" },
+    { "path": "../bootstrap" },
     { "path": "../../providers/anthropic" },
     { "path": "../../providers/bun-webview" },
     { "path": "../../providers/cactus" },

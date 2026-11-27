@@ -21,6 +21,7 @@
     { "path": "../javascript" },
     { "path": "../mcp" },
     { "path": "../a2a" },
+    { "path": "../bootstrap" },
     { "path": "../browser-control" },
     { "path": "../../providers/anthropic" },
     { "path": "../../providers/chrome-ai" },

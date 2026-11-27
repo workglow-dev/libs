@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": ["src/common.ts", "src/*/**/*"],
+  "files": ["./src/browser.ts", "./src/node.ts"],
+  "exclude": ["dist", "node_modules"],
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "references": [
+    { "path": "../util" },
+    { "path": "../storage" },
+    { "path": "../task-graph" },
+    { "path": "../knowledge-base" },
+    { "path": "../ai" },
+    { "path": "../mcp" }
+  ]
+}
